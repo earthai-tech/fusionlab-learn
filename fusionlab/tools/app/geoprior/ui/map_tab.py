@@ -59,6 +59,12 @@ from .map.sampling import (
     sample_points,
 )
 
+from .view.prop_panel import PropagationPanel
+from .view.prop_utils import ( 
+    extrapolate_scenarios, 
+    compute_propagation_vectors
+)
+
 _MAP_DEFAULTS = {
     "map.engine": "leaflet",
     "map.coord_mode": "lonlat",
@@ -116,6 +122,7 @@ class MapTab(QWidget):
 
         self._last_hs_payload = []
         self._last_hs_ctx = {}
+        self._sim_df = pd.DataFrame() # Store for simulated data
         
         self._engine_applied = ""
         self._google_key_applied = ""
@@ -159,8 +166,26 @@ class MapTab(QWidget):
 
         self._split_main.setChildrenCollapsible(False)
         self._split_main.addWidget(self.nav_a)
-        self._split_main.addWidget(self.canvas)
+        
+        # -- WRAP CANVAS AND PROPAGATION PANEL --
+        center_container = QWidget()
+        center_lay = QVBoxLayout(center_container)
+        center_lay.setContentsMargins(0, 0, 0, 0)
+        center_lay.setSpacing(0)
+        
+        center_lay.addWidget(self.canvas, 1) # Canvas takes all space
+        
+        # Initialize Propagation Panel
+        self.prop_panel = PropagationPanel(store=self.store, parent=self)
+        self.prop_panel.setVisible(False) # Hidden by default
+        center_lay.addWidget(self.prop_panel, 0) # Fixed height at bottom
+        
+        self._split_main.addWidget(center_container) # Add container instead of just canvas
         self._split_main.addWidget(self.nav_c)
+        
+        
+        # self._split_main.addWidget(self.canvas)
+        # self._split_main.addWidget(self.nav_c)
 
         self._split_main.setStretchFactor(0, 0)
         self._split_main.setStretchFactor(1, 1)
@@ -303,6 +328,189 @@ class MapTab(QWidget):
             self._on_clear_map_requested
         )
 
+        # Propagation connections
+        self.prop_panel.simulation_requested.connect(
+            self._on_run_simulation
+            )
+        self.prop_panel.frame_changed.connect(
+            self._on_sim_frame_changed
+        )
+        
+        # Listen to store to show/hide the panel
+        self.store.config_changed.connect(
+            self._check_prop_visibility
+        )
+
+    def _check_prop_visibility(self, keys):
+        if "view.prop.enabled" in keys:
+            enabled = bool(self.store.get("view.prop.enabled", False))
+            self.prop_panel.setVisible(enabled)
+            # If disabled, restore original data view
+            if not enabled:
+                self._refresh_points() 
+                self.canvas.set_vectors([])
+
+    def _on_run_simulation(self, years_to_add: int):
+        """
+        1. Get current active dataframe (clean)
+        2. Run extrapolation
+        3. Update UI timeline
+        """
+        # (Simplified logic to get df - reuse _refresh_points logic or extract it)
+        df_clean = self._get_current_clean_df() 
+        if df_clean.empty:
+            return
+
+        self.head.set_active_dataset(
+            "Running simulation...", tooltip="Please wait"
+            )
+        QTimer.singleShot(100, lambda: self._process_simulation(
+            df_clean, years_to_add))
+
+    def _process_simulation(self, df, years):
+        # Run Math
+        self._sim_df = extrapolate_scenarios(
+            df, 
+            years_to_add=years,
+            time_col=self.store.get("map.time_col"),
+            value_col=self.store.get("map.value_col")
+        )
+        
+        # Update Timeline
+        unique_years = sorted(
+            self._sim_df[self.store.get("map.time_col")].unique().astype(int))
+        self.prop_panel.set_timeline(unique_years)
+        
+        self.head.set_active_dataset(
+            f"Simulated (+{years} yrs)", 
+            tooltip="Simulation active")
+
+    def _on_sim_frame_changed(self, year: int):
+        """Render specific year from simulation"""
+        if self._sim_df.empty:
+            return
+
+        t_col = self.store.get("map.time_col")
+        frame = self._sim_df[self._sim_df[t_col] == year]
+        
+        if frame.empty:
+            return
+
+        # 1. Update Points (Standard)
+        # Reuse existing logic but pass the specific frame
+        self._render_frame_points(frame) 
+
+        # 2. Update Vectors (New)
+        if self.store.get("view.prop.show_vectors", True):
+            vecs = compute_propagation_vectors(
+                frame, 
+                value_col=self.store.get("map.value_col")
+            )
+            self.canvas.set_vectors(vecs)
+        else:
+            self.canvas.set_vectors([])
+
+    def _get_current_clean_df(self) -> pd.DataFrame:
+        """Helper to get current data without UI rendering side effects"""
+        # 1. Get Active File
+        p = str(self.store.get("map.active_file", "")).strip()
+        if not p:
+            return pd.DataFrame()
+        fp = Path(p)
+        if not fp.exists():
+            return pd.DataFrame()
+
+        # 2. Get Column Mapping
+        x = str(self.store.get("map.x_col", "")).strip()
+        y = str(self.store.get("map.y_col", "")).strip()
+        z0 = str(self.store.get("map.z_col", "")).strip()
+        v0 = str(self.store.get("map.value_col", "")).strip()
+        v = v0 or z0
+        t = str(self.store.get("map.time_col", "")).strip()
+
+        if not x or not y or not v:
+            return pd.DataFrame()
+
+        # 3. Read Data (Full history, no time filtering)
+        use = [c for c in (x, y, v, t) if c]
+        use = list(dict.fromkeys(use))
+
+        try:
+            df = pd.read_csv(fp, usecols=use)
+        except Exception:
+            try:
+                df = pd.read_csv(fp)
+            except Exception:
+                return pd.DataFrame()
+
+        # 4. Standardize to canonical columns [lon, lat, v, t]
+        # build_points handles numeric conversion and renaming
+        out = build_points(df, x=x, y=y, v=v, t=t)
+        if out.empty:
+            return pd.DataFrame()
+
+        # 5. Ensure Coordinates are WGS84 (lon/lat)
+        # This matches the logic in _refresh_points to ensure visual consistency
+        mode = str(self.store.get("map.coord_mode", "lonlat")).strip().lower()
+        
+        utm_epsg = parse_epsg(self.store.get("map.utm_epsg", None))
+        if utm_epsg is None:
+            utm_epsg = parse_epsg(self.store.get("utm_epsg", None))
+
+        src_epsg = parse_epsg(self.store.get("map.coord_epsg", None))
+        if src_epsg is None:
+            src_epsg = parse_epsg(self.store.get("map.src_epsg", None))
+        if src_epsg is None:
+            src_epsg = parse_epsg(self.store.get("coord_src_epsg", None))
+
+        try:
+            out, ok, _ = ensure_lonlat(
+                out,
+                mode=mode,
+                utm_epsg=utm_epsg,
+                src_epsg=src_epsg,
+            )
+            if not ok:
+                # Fallback to simple conversion if ensure_lonlat strict checks fail
+                raise ValueError("Strict reprojection failed")
+        except Exception:
+            out = df_to_lonlat(
+                out,
+                x="lon",
+                y="lat",
+                mode=mode,
+                utm_epsg=utm_epsg,
+                src_epsg=src_epsg,
+            )
+
+        if out.empty:
+            return pd.DataFrame()
+
+        # 6. Alias columns for Propagation Engine
+        # The propagation utils might query 'coord_t' or 'subsidence' based on config.
+        # We ensure those columns exist by mirroring the standardized 't' and 'v'.
+        if t and "t" in out.columns:
+            out[t] = out["t"]
+        
+        if v and "v" in out.columns:
+            out[v] = out["v"]
+            
+        # Map standardized coords back to config keys if needed for ID grouping
+        if x and "lon" in out.columns:
+            out[x] = out["lon"]
+        if y and "lat" in out.columns:
+            out[y] = out["lat"]
+
+        return out
+
+    def _render_frame_points(self, df: pd.DataFrame):
+        """Render a specific DF frame to canvas"""
+        # Convert to dict and call canvas.set_points
+        # Check defaults for cmap, vmin, vmax to keep consistency during animation
+        pts = df.to_dict("records")
+        snap = self._view_snapshot()
+        self.canvas.set_points(pts, **snap) # Pass view settings
+        
     def _on_clear_map_requested(self) -> None:
         try:
             self.canvas.clear_points()
@@ -354,9 +562,6 @@ class MapTab(QWidget):
         }
         self.store.set("map.view.basemap", alias.get(k, k))
 
-
-    # def _on_basemap_changed(self, key: str) -> None:
-    #     self.store.set("map.view.basemap", str(key))
 
     def _on_grid_toggled(self, on: bool) -> None:
         self.store.set("map.view.show_grid", bool(on))

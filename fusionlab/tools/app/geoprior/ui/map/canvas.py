@@ -133,6 +133,20 @@ class ForecastMapView(QFrame):
     # -----------------------------
     # Engine API
     # -----------------------------
+    def set_vectors(self, vectors: List[Dict[str, float]]) -> None:
+        """
+        Draw direction arrows.
+        vectors = [{lat, lon, angle, mag}, ...]
+        """
+        import json
+        js_data = json.dumps(vectors)
+        js = (
+            "if (window.__GeoPriorMap && window.__GeoPriorMap.setVectors) {"
+            f"  window.__GeoPriorMap.setVectors({js_data});"
+            "}"
+        )
+        self._run_js(js)
+        
     def set_engine(
         self,
         engine: str,

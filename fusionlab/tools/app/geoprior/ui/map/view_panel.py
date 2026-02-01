@@ -46,6 +46,15 @@ from ..icon_utils import try_icon
 from .keys import VIEW_DEFAULTS, VIEW_KEYS, get_engine
 from .data_panel import AutoHidePanel
 from .basemap.basemap import engine_providers, engine_styles
+from ..view.keys import ( 
+    # Propagation / Simulation Options
+    K_PROP_ENABLED, 
+    K_PROP_YEARS,
+    K_PROP_SPEED, 
+    K_PROP_MODE,
+    K_PROP_VECTORS,  
+    K_PROP_LOOP, 
+  )
 
 class AutoHideViewPanel(AutoHidePanel):
     """
@@ -194,6 +203,7 @@ class AutoHideViewPanel(AutoHidePanel):
         lay.addWidget(self._group_colors(host), 0)
         lay.addWidget(self._group_markers(host), 0)
         lay.addWidget(self._group_legend(host), 0)
+        lay.addWidget(self._group_propagation(host), 0)
         
         lay.addWidget(self._group_hotspots(host), 0)
         lay.addWidget(self._group_interpretation(host), 0)
@@ -201,7 +211,108 @@ class AutoHideViewPanel(AutoHidePanel):
         lay.addStretch(1)
 
         root.addWidget(self.scroll, 1)
+        
+    def _group_propagation(self, parent: QWidget) -> QFrame:
+        box, body, chip = self._make_card(
+            parent,
+            title="Propagation",
+            sp=QStyle.SP_MediaPlay,
+        )
+        self._chip_prop = chip
 
+        form = QFormLayout(body)
+        form.setContentsMargins(10, 10, 10, 10)
+        form.setVerticalSpacing(8)
+
+        self.chk_prop_enable = QCheckBox(
+            "Enable simulation", box
+        )
+        self.chk_prop_vectors = QCheckBox(
+            "Show flow vectors", box
+        )
+        self.chk_prop_loop = QCheckBox("Loop animation", box)
+
+        # Added: Horizon (Years)
+        self.sp_prop_years = QSpinBox(box)
+        self.sp_prop_years.setRange(1, 50)
+        self.sp_prop_years.setSuffix(" yrs")
+        self.sp_prop_years.setToolTip(
+            "Future years to extrapolate"
+        )
+
+        # Added: Simulation Mode
+        self.cmb_prop_mode = QComboBox(box)
+        self.cmb_prop_mode.addItems([
+            "absolute",
+            "differential",
+            "risk_mask",
+        ])
+        self.cmb_prop_mode.setToolTip(
+            "Visualisation mode for future data"
+        )
+
+        # Added: Speed (Interval ms)
+        self.sl_prop_speed = QSlider(Qt.Horizontal, box)
+        self.sl_prop_speed.setRange(100, 2000)
+        self.sl_prop_speed.setSingleStep(100)
+        self.sl_prop_speed.setToolTip(
+            "Animation interval (ms)"
+        )
+        
+        self.lb_prop_speed = QLabel("800ms", box)
+        self.lb_prop_speed.setMinimumWidth(44)
+        self.lb_prop_speed.setAlignment(
+            Qt.AlignRight | Qt.AlignVCenter
+        )
+
+        s_row = QWidget(box)
+        sl = QHBoxLayout(s_row)
+        sl.setContentsMargins(0, 0, 0, 0)
+        sl.setSpacing(8)
+        sl.addWidget(self.sl_prop_speed, 1)
+        sl.addWidget(self.lb_prop_speed, 0)
+
+        # --- Connections ---
+        self.chk_prop_enable.toggled.connect(
+            lambda b: self.store.set(
+                K_PROP_ENABLED, bool(b)
+            )
+        )
+        self.chk_prop_vectors.toggled.connect(
+            lambda b: self.store.set(
+                K_PROP_VECTORS, bool(b)
+            )
+        )
+        self.chk_prop_loop.toggled.connect(
+            lambda b: self.store.set(K_PROP_LOOP, bool(b))
+        )
+        
+        self.sp_prop_years.valueChanged.connect(
+            lambda v: self.store.set(
+                K_PROP_YEARS, int(v)
+            )
+        )
+        
+        self.cmb_prop_mode.currentTextChanged.connect(
+            lambda v: self.store.set(K_PROP_MODE, str(v))
+        )
+
+        def _on_speed(v: int) -> None:
+            self.lb_prop_speed.setText(f"{v}ms")
+            self.store.set(K_PROP_SPEED, int(v))
+
+        self.sl_prop_speed.valueChanged.connect(_on_speed)
+
+        # --- Layout ---
+        form.addRow("", self.chk_prop_enable)
+        form.addRow("Mode", self.cmb_prop_mode)
+        form.addRow("Horizon", self.sp_prop_years)
+        form.addRow("Interval", s_row)
+        form.addRow("", self.chk_prop_vectors)
+        form.addRow("", self.chk_prop_loop)
+
+        return box
+    
     def _refresh_basemap_choices(self) -> None:
         eng = get_engine(self.store, "leaflet")
     
@@ -973,6 +1084,30 @@ class AutoHideViewPanel(AutoHidePanel):
             )),
         )
 
+        self.chk_prop_enable.setChecked(
+            bool(self.store.get(K_PROP_ENABLED, False))
+        )
+        self.chk_prop_vectors.setChecked(
+            bool(self.store.get(K_PROP_VECTORS, True))
+        )
+        self.chk_prop_loop.setChecked(
+            bool(self.store.get(K_PROP_LOOP, False))
+        )
+        
+        self.sp_prop_years.setValue(
+            int(self.store.get(K_PROP_YEARS, 5) or 5)
+        )
+        
+        mode = str(
+            self.store.get(K_PROP_MODE, "absolute")
+        )
+        self._set_combo(self.cmb_prop_mode, mode)
+        
+        speed = int(self.store.get(K_PROP_SPEED, 800) or 800)
+        
+        self.sl_prop_speed.setValue(speed)
+        self.lb_prop_speed.setText(f"{speed}ms")
+                
         self._update_interp_ui_enabled()
         self._update_interp_summary()
 
