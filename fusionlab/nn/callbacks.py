@@ -11,15 +11,37 @@ from __future__ import annotations
 from typing import ( 
     Iterable, Optional, Set, Any, 
     Callable, Mapping, Sequence, 
-    Union
+    Union, Dict, Tuple 
 )
 import numpy as np
 
 from . import KERAS_DEPS
+from ._shapes import canonicalize_to_BHQO_using_ytrue
+from .keras_metrics import (
+    MAEQ50,
+    MSEQ50,
+)
+
 
 Callback = KERAS_DEPS.Callback
+Tensor = KERAS_DEPS.Tensor 
 
-
+tf_nest = KERAS_DEPS.nest 
+tf_convert_to_tensor = KERAS_DEPS.convert_to_tensor
+tf_reshape = KERAS_DEPS.reshape 
+tf_shape = KERAS_DEPS.shape 
+tf_transpose = KERAS_DEPS.transpose 
+tf_reduce_mean = KERAS_DEPS.reduce_mean 
+tf_cast = KERAS_DEPS.cast 
+tf_float32 = KERAS_DEPS.float32 
+tf_minimum = KERAS_DEPS.minimum 
+tf_maximum = KERAS_DEPS.maximum 
+tf_abs = KERAS_DEPS.abs 
+tf_square = KERAS_DEPS.square 
+tf_identity = KERAS_DEPS.identity 
+tf_expand_dims = KERAS_DEPS.expand_dims 
+tf_broadcast_to = KERAS_DEPS.broadcast_to
+tf_logical_and = KERAS_DEPS.logical_and
 
 ScheduleType = Union[
     Callable[[Optional[int], int, float], float],
@@ -27,6 +49,21 @@ ScheduleType = Union[
     Sequence[float],
     None,
 ]
+
+
+__all__ = [
+    # "ResetOptimizerStats",
+    # "make_lr_scheduler",
+    # "summarize_lr_schedule",
+    "NaNGuard",
+    "FrozenValQuantileMonitor",
+    "FrozenValQuantilePrinter",
+    "FrozenValQuantileLogger",
+    "LambdaOffsetScheduler", 
+    "LambdaOffsetStepScheduler"
+    
+]
+
 
 def _linear_warmup_value(
     idx: int,
@@ -489,4 +526,792 @@ class NaNGuard(Callback):
             f"verbose={self.verbose})"
         )
 
+class FrozenValQuantileMonitor(Callback):
+    """
+   Print the same diagnostics every epoch on a frozen val batch.
 
+   This callback freezes the *first* batch of the provided
+   validation data (dataset / sequence / tuple) at train start,
+   then re-evaluates that exact batch at every epoch end.
+
+   It is designed to catch:
+   - quantile crossings (e.g., q10 > q90)
+   - when crossings begin and whether they recover
+   - fixed-batch coverage/sharpness/MAE/MSE for q50
+
+   Parameters
+   ----------
+   val_data : Any
+        Validation source. One of:
+        - tf.data.Dataset yielding (x, y) or (x, y, sw)
+        - Keras Sequence / iterable yielding batches
+        - Tuple (x, y) or (x, y, sw)
+
+   outputs : Sequence[str] | None, optional
+        Output names to monitor. If None, monitors all keys
+        when y is a dict; otherwise monitors a single output.
+
+   quantiles : Sequence[float] | None, optional
+        Quantiles expected in predictions (e.g. (0.1,0.5,0.9)).
+        If None, the callback treats predictions as point
+        forecasts and skips band diagnostics.
+
+   alpha : float, optional
+        Central interval mass for coverage/sharpness.
+        Default is 0.8 (i.e., 80% interval).
+
+   every : int, optional
+        Print every `every` epochs. Default is 1.
+
+   prefix : str, optional
+        Prefix for printed blocks.
+
+   print_fn : Callable[[str], None] | None, optional
+        Custom printer. Default uses builtin print().
+    """
+
+    def __init__(
+        self,
+        val_data: Any,
+        *,
+        outputs: Sequence[str] | None = None,
+        quantiles: Sequence[float] | None = (0.1, 0.5, 0.9),
+        alpha: float = 0.8,
+        every: int = 1,
+        prefix: str = "[frozen-val]",
+        print_fn: Callable[[str], None] | None = None,
+    ) -> None:
+        super().__init__()
+        self._val_data = val_data
+        self._outputs = None if outputs is None else list(outputs)
+        self._qs = None if quantiles is None else list(quantiles)
+        self._alpha = float(alpha)
+        self._every = max(1, int(every))
+        self._prefix = str(prefix)
+        self._print = print if print_fn is None else print_fn
+
+        self._xb = None
+        self._yb = None
+        self._sw = None
+
+        self._q50 = None
+        self._qlo = None
+        self._qhi = None
+
+    # ------------------------------
+    # Helpers
+    # ------------------------------
+    def _take_one_batch(self) -> tuple[Any, Any, Any]:
+        vd = self._val_data
+
+        if isinstance(vd, (tuple, list)):
+            if len(vd) == 2:
+                return vd[0], vd[1], None
+            if len(vd) == 3:
+                return vd[0], vd[1], vd[2]
+            raise ValueError(
+                "val_data tuple must be (x,y) or (x,y,sw)."
+            )
+
+        # tf.data.Dataset or general iterable / Sequence
+        it = iter(vd)
+        batch = next(it)
+
+        if isinstance(batch, (tuple, list)):
+            if len(batch) == 2:
+                return batch[0], batch[1], None
+            if len(batch) == 3:
+                return batch[0], batch[1], batch[2]
+
+        raise ValueError(
+            "val_data must yield (x,y) or (x,y,sw)."
+        )
+
+
+    def _to_tensor_tree(self, obj: Any) -> Any:
+        return tf_nest.map_structure(tf_convert_to_tensor, obj)
+
+    def _as_dict(
+        self,
+        y: Any,
+        *,
+        names: Sequence[str] | None,
+    ) -> dict[str, Any]:
+        if isinstance(y, Mapping):
+            return dict(y)
+
+        if isinstance(y, (tuple, list)):
+            out: dict[str, Any] = {}
+            if names and len(names) == len(y):
+                for k, v in zip(names, y):
+                    out[str(k)] = v
+                return out
+            for i, v in enumerate(y):
+                out[f"y{i}"] = v
+            return out
+
+        if names and len(names) == 1:
+            return {str(names[0]): y}
+
+        return {"y": y}
+
+    def _nearest_idx(self, qs: Sequence[float], q: float) -> int:
+        q = float(q)
+        best = 0
+        best_d = float("inf")
+        for i, v in enumerate(qs):
+            d = abs(float(v) - q)
+            if d < best_d:
+                best = i
+                best_d = d
+        return int(best)
+
+    def _to_BHO(self, y_true: Tensor) -> Tensor:
+        y = tf_convert_to_tensor(y_true)
+        r = y.shape.rank
+
+        if r == 3:
+            return y
+        if r == 2:
+            return y[..., None]
+        if r == 1:
+            return y[:, None, None]
+
+        # fallback: keep last dim as O
+        y = tf_reshape(y, [tf_shape(y)[0], -1, 1])
+        return y
+
+    def _to_BHQO(
+        self,
+        y_pred: Tensor,
+        *,
+        n_q: int,
+        q_axis: int | None = None,
+    ) -> tuple[Tensor, bool]:
+        """
+        Return (B,H,Q,O), and whether Q>1 was detected.
+        """
+        y = tf_convert_to_tensor(y_pred)
+        r = y.shape.rank
+
+        if r == 4:
+            # assume (B,H,Q,O) unless q_axis says otherwise
+            if q_axis is None or q_axis == 2:
+                qn = y.shape[2]
+                has_q = (qn is not None and qn > 1)
+                return y, bool(has_q)
+
+            # move q_axis -> 2
+            axes = list(range(4))
+            src = int(q_axis)
+            axes.pop(src)
+            axes.insert(2, src)
+            y = tf_transpose(y, perm=axes)
+            qn = y.shape[2]
+            has_q = (qn is not None and qn > 1)
+            return y, bool(has_q)
+
+        if r == 3:
+            # common cases:
+            # (B,H,1) point -> (B,H,1,1)
+            # (B,H,Q) quant -> (B,H,Q,1)
+            # (B,H,O) point -> (B,H,1,O)
+            last = y.shape[-1]
+            if last == 1:
+                y = y[..., None]
+                return y, False
+            if last == n_q:
+                y = y[..., None]
+                return y, True
+            y = y[:, :, None, :]
+            return y, False
+
+        if r == 2:
+            # (B,H) -> (B,H,1,1)
+            y = y[:, :, None, None]
+            return y, False
+
+        if r == 1:
+            y = y[:, None, None, None]
+            return y, False
+
+        y = tf_reshape(y, [tf_shape(y)[0], -1, 1, 1])
+        return y, False
+
+    def _f(self, x: Any) -> float:
+        try:
+            return float(x.numpy())
+        except Exception:
+            try:
+                return float(x)
+            except Exception:
+                return float("nan")
+
+    def _fmt(self, x: float, n: int = 4) -> str:
+        if not (x == x):  # NaN
+            return "nan"
+        return f"{x:.{n}f}"
+
+    # ------------------------------
+    # Keras hooks
+    # ------------------------------
+    def on_train_begin(self, logs: dict | None = None) -> None:
+        xb, yb, sw = self._take_one_batch()
+
+        self._xb = self._to_tensor_tree(xb)
+        self._yb = self._to_tensor_tree(yb)
+        self._sw = self._to_tensor_tree(sw) if sw is not None else None
+
+        qs = self._qs
+        if qs is None or len(qs) == 0:
+            self._q50 = None
+            self._qlo = None
+            self._qhi = None
+            return
+
+        self._q50 = self._nearest_idx(qs, 0.5)
+
+        lo_q = 0.5 * (1.0 - float(self._alpha))
+        hi_q = 1.0 - lo_q
+        self._qlo = self._nearest_idx(qs, lo_q)
+        self._qhi = self._nearest_idx(qs, hi_q)
+
+    def on_epoch_end(
+        self,
+        epoch: int,
+        logs: dict | None = None,
+    ) -> None:
+        ep = int(epoch) + 1
+        if (ep % self._every) != 0:
+            return
+
+        if self._xb is None or self._yb is None:
+            return
+
+        logs = {} if logs is None else dict(logs)
+
+        yp = self.model(self._xb, training=False)
+
+        out_names = list(getattr(self.model, "output_names", []))
+
+        y_true_d = self._as_dict(self._yb, names=out_names)
+        y_pred_d = self._as_dict(yp, names=out_names)
+
+        keys = self._outputs
+        if keys is None:
+            keys = list(y_true_d.keys())
+
+        # header
+        loss = self._fmt(self._f(logs.get("loss", float("nan"))))
+        vloss = self._fmt(self._f(logs.get("val_loss", float("nan"))))
+
+        self._print(
+            f"{self._prefix} epoch={ep} "
+            f"loss={loss} val_loss={vloss}"
+        )
+
+        for k in keys:
+            if k not in y_true_d or k not in y_pred_d:
+                continue
+
+            yt_raw = y_true_d[k]
+            yp_raw = y_pred_d[k]
+
+            # metrics (reuse your exact metric logic)
+            m_mae = MAEQ50()
+            m_mse = MSEQ50()
+            
+            m_mae.update_state(yt_raw, yp_raw)
+            m_mse.update_state(yt_raw, yp_raw)
+            
+            mae = self._fmt(self._f(m_mae.result()))
+            mse = self._fmt(self._f(m_mse.result()))
+            
+            do_band = self._qs is not None and len(self._qs) >= 2
+            if do_band:
+                cov, shp = self._cov_shp_from_band(yt_raw, yp_raw)
+            else:
+                cov, shp = "na", "na"
+
+            # crossings (fixed-batch, epoch-by-epoch)
+            cross_1090 = "na"
+            cross_1050 = "na"
+            cross_5090 = "na"
+
+            if do_band and self._qlo is not None:
+                qs = self._qs or []
+                n_q = max(1, len(qs))
+
+                q, has_q = self._to_BHQO(
+                    yp_raw,
+                    n_q=n_q,
+                    q_axis=None,
+                )
+
+                if has_q and q.shape.rank == 4:
+                    lo = q[:, :, int(self._qlo), :]
+                    md = q[:, :, int(self._q50), :]
+                    hi = q[:, :, int(self._qhi), :]
+
+                    c1090 = tf_reduce_mean(
+                        tf_cast(lo > hi, tf_float32)
+                    )
+                    c1050 = tf_reduce_mean(
+                        tf_cast(lo > md, tf_float32)
+                    )
+                    c5090 = tf_reduce_mean(
+                        tf_cast(md > hi, tf_float32)
+                    )
+
+                    cross_1090 = self._fmt(self._f(c1090))
+                    cross_1050 = self._fmt(self._f(c1050))
+                    cross_5090 = self._fmt(self._f(c5090))
+
+            self._print(
+                f"  {k}: mae50={mae} mse50={mse} "
+                f"cov{int(self._alpha*100):d}={cov} "
+                f"shp{int(self._alpha*100):d}={shp}"
+            )
+            self._print(
+                f"    cross(q10>q90)={cross_1090} "
+                f"cross(q10>q50)={cross_1050} "
+                f"cross(q50>q90)={cross_5090}"
+            )
+
+    def _cov_shp_from_band(
+        self,
+        yt_raw: Any,
+        yp_raw: Any,
+    ) -> tuple[str, str]:
+        if self._qs is None or self._qlo is None:
+            return "na", "na"
+
+        qs = self._qs
+        n_q = max(1, len(qs))
+
+        y = self._to_BHO(yt_raw)
+
+        q, has_q = self._to_BHQO(
+            yp_raw,
+            n_q=n_q,
+            q_axis=None,
+        )
+        if not has_q or q.shape.rank != 4:
+            return "na", "na"
+
+        lo = q[:, :, int(self._qlo), :]
+        hi = q[:, :, int(self._qhi), :]
+
+        # crossing-safe band
+        lo2 = tf_minimum(lo, hi)
+        hi2 = tf_maximum(lo, hi)
+
+        lo2 = tf_broadcast_to(lo2, tf_shape(y))
+        hi2 = tf_broadcast_to(hi2, tf_shape(y))
+
+        inside = tf_cast(
+            tf_logical_and(y >= lo2, y <= hi2),
+            tf_float32,
+        )
+
+        cov = tf_reduce_mean(inside)
+        shp = tf_reduce_mean(tf_abs(hi2 - lo2))
+
+        return self._fmt(self._f(cov)), self._fmt(self._f(shp))
+
+
+class FrozenValQuantilePrinter(KERAS_DEPS.Callback):
+    """
+    Print quantile diagnostics on a frozen val batch.
+
+    This helps catch:
+      - quantile crossings that appear mid-training
+      - broken coverage due to layout/shape mistakes
+
+    Parameters
+    ----------
+    val_data : tf.data.Dataset | tuple
+        Either a dataset yielding (x,y) or a pre-fetched (xb,yb).
+        The first batch is frozen at init time.
+    y_key : str
+        Key in y dict (e.g. "subs_pred").
+    pred_key : str
+        Key in model outputs (e.g. "subs_pred").
+    q_values : tuple[float,...]
+        Quantile levels (default (0.1,0.5,0.9)).
+    every : int
+        Print every N epochs (default 1).
+    prefix : str
+        Print prefix.
+    """
+
+    def __init__(
+        self,
+        *,
+        val_data: Any,
+        y_key: str = "subs_pred",
+        pred_key: str = "subs_pred",
+        q_values: Tuple[float, ...] = (0.1, 0.5, 0.9),
+        every: int = 1,
+        prefix: str = "[val-qdiag]",
+    ) -> None:
+        super().__init__()
+
+
+        self._y_key = str(y_key)
+        self._p_key = str(pred_key)
+        self._qv = tuple(float(q) for q in q_values)
+        self._nq = int(len(self._qv))
+        self._every = max(int(every), 1)
+        self._prefix = str(prefix)
+
+        xb, yb = self._take_one(val_data)
+        self._xb = self._freeze(xb)
+        self._yb = self._freeze(yb)
+
+    def _take_one(self, val_data: Any) -> Tuple[Any, Any]:
+        if hasattr(val_data, "take"):
+            it = iter(val_data.take(1))
+            xb, yb = next(it)
+            return xb, yb
+
+        if isinstance(val_data, (tuple, list)) and len(val_data) == 2:
+            return val_data[0], val_data[1]
+
+        raise TypeError(
+            "val_data must be a Dataset or (xb,yb) tuple."
+        )
+
+    def _freeze(self, x: Any) -> Any:
+
+        if isinstance(x, dict):
+            out = {}
+            for k, v in x.items():
+                out[k] = tf_identity(tf_convert_to_tensor(v))
+            return out
+
+        if isinstance(x, (tuple, list)):
+            typ = type(x)
+            return typ(self._freeze(v) for v in x)
+
+        return tf_identity(tf_convert_to_tensor(x))
+
+    def _to_BHQO(self, y_pred: Any, y_true: Any) -> Any:
+        """
+        Canonicalize quantiles to (B,H,Q,O).
+
+        Uses your existing helper:
+          canonicalize_to_BHQO_using_ytrue
+        """
+
+        yp = tf_convert_to_tensor(y_pred)
+        r = yp.shape.rank
+
+        # Rank-4: try common layouts, else use MAE chooser.
+        if r == 4:
+            s = yp
+
+            if s.shape[2] == self._nq:
+                return s
+
+            if s.shape[1] == self._nq:
+                return tf_transpose(s, [0, 2, 1, 3])
+
+            if s.shape[3] == self._nq:
+                return tf_transpose(s, [0, 1, 3, 2])
+
+            yt = tf_convert_to_tensor(y_true)
+            return canonicalize_to_BHQO_using_ytrue(
+                s,
+                yt,
+                q_values=self._qv,
+            )
+
+        # Rank-3: (B,H,Q) -> (B,H,Q,1)
+        if r == 3 and yp.shape[-1] == self._nq:
+            return tf_expand_dims(yp, axis=-1)
+
+        # Otherwise treat as point forecast -> Q=1
+        if r == 3:
+            return tf_expand_dims(yp, axis=2)
+
+        if r == 2:
+            s = tf_expand_dims(yp, axis=-1)
+            return tf_expand_dims(s, axis=2)
+
+        return yp
+
+    def _mean(self, x: Any) -> float:
+
+        return float(
+            tf_reduce_mean(tf_cast(x, tf_float32)).numpy()
+        )
+
+    def on_epoch_end(
+        self,
+        epoch: int,
+        logs: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if (epoch % self._every) != 0:
+            return
+
+        xb = self._xb
+        yb = self._yb
+
+        y_true = yb[self._y_key]
+        yp_all = self.model(xb, training=False)
+
+        # model may return dict or list/tuple
+        if isinstance(yp_all, dict):
+            y_pred = yp_all[self._p_key]
+        else:
+            y_pred = yp_all
+
+        q = self._to_BHQO(y_pred, y_true)
+
+        # y_true is (B,H,1) in SM3 -> (B,H)
+        yt = tf_convert_to_tensor(y_true)[..., 0]
+
+        q10 = q[:, :, 0, 0]
+        q50 = q[:, :, 1, 0] if self._nq >= 2 else q[:, :, 0, 0]
+        q90 = q[:, :, -1, 0]
+
+        c10_50 = self._mean(q10 > q50)
+        c50_90 = self._mean(q50 > q90)
+        c10_90 = self._mean(q10 > q90)
+
+        lo = tf_minimum(q10, q90)
+        hi = tf_maximum(q10, q90)
+
+        cov80 = self._mean((yt >= lo) & (yt <= hi))
+        shp80 = self._mean(hi - lo)
+        mae50 = self._mean(tf_abs(yt - q50))
+        mse50 = self._mean(tf_square(yt - q50))
+
+        msg = (
+            f"{self._prefix} epoch={epoch + 1} "
+            f"qshape={tuple(q.shape)} "
+            f"yshape={tuple(y_true.shape)}\n"
+            f"{self._prefix} cross "
+            f"q10>q50={c10_50:.6f} "
+            f"q50>q90={c50_90:.6f} "
+            f"q10>q90={c10_90:.6f}\n"
+            f"{self._prefix} cov80={cov80:.6f} "
+            f"shp80={shp80:.6f} "
+            f"mae50={mae50:.6f} "
+            f"mse50={mse50:.6f}"
+        )
+        print(msg)
+
+class FrozenValQuantileLogger(Callback):
+    """
+    Frozen val quantile diagnostics that write into `logs`.
+
+    Parameters
+    ----------
+    val_data : tf.data.Dataset | tuple
+        Dataset or (xb,yb). First batch is frozen.
+    y_key, pred_key : str
+        Dict keys for targets and preds.
+    q_values : tuple[float,...]
+        Quantile levels.
+    every : int
+        Log every N epochs.
+    log_prefix : str
+        Prefix for log keys (e.g. "diag/").
+    also_print : bool
+        If True, print a short one-liner each epoch.
+    """
+
+    def __init__(
+        self,
+        *,
+        val_data: Any,
+        y_key: str = "subs_pred",
+        pred_key: str = "subs_pred",
+        q_values: Tuple[float, ...] = (0.1, 0.5, 0.9),
+        every: int = 1,
+        log_prefix: str = "diag/",
+        also_print: bool = False,
+    ) -> None:
+        super().__init__()
+
+        self._y_key = str(y_key)
+        self._p_key = str(pred_key)
+        self._qv = tuple(float(q) for q in q_values)
+        self._nq = int(len(self._qv))
+        self._every = max(int(every), 1)
+        self._lp = str(log_prefix)
+        self._also_print = bool(also_print)
+
+        xb, yb = self._take_one(val_data)
+        self._xb = self._freeze(xb)
+        self._yb = self._freeze(yb)
+
+    # same helpers as printer
+    def _take_one(self, val_data: Any) -> Tuple[Any, Any]:
+        if hasattr(val_data, "take"):
+            it = iter(val_data.take(1))
+            xb, yb = next(it)
+            return xb, yb
+
+        if isinstance(val_data, (tuple, list)) and len(val_data) == 2:
+            return val_data[0], val_data[1]
+
+        raise TypeError(
+            "val_data must be a Dataset or (xb,yb) tuple."
+        )
+
+    def _freeze(self, x: Any) -> Any:
+ 
+        if isinstance(x, dict):
+            out = {}
+            for k, v in x.items():
+                out[k] = tf_identity(tf_convert_to_tensor(v))
+            return out
+
+        if isinstance(x, (tuple, list)):
+            typ = type(x)
+            return typ(self._freeze(v) for v in x)
+
+        return tf_identity(tf_convert_to_tensor(x))
+
+    def _to_BHQO(self, y_pred: Any, y_true: Any) -> Any:
+
+        yp = tf_convert_to_tensor(y_pred)
+        r = yp.shape.rank
+
+        if r == 4:
+            s = yp
+
+            if s.shape[2] == self._nq:
+                return s
+
+            if s.shape[1] == self._nq:
+                return tf_transpose(s, [0, 2, 1, 3])
+
+            if s.shape[3] == self._nq:
+                return tf_transpose(s, [0, 1, 3, 2])
+
+            yt = tf_convert_to_tensor(y_true)
+            return canonicalize_to_BHQO_using_ytrue(
+                s,
+                yt,
+                q_values=self._qv,
+            )
+
+        if r == 3 and yp.shape[-1] == self._nq:
+            return tf_expand_dims(yp, axis=-1)
+
+        if r == 3:
+            return tf_expand_dims(yp, axis=2)
+
+        if r == 2:
+            s = tf_expand_dims(yp, axis=-1)
+            return tf_expand_dims(s, axis=2)
+
+        return yp
+
+    def _mean(self, x: Any) -> float:
+        return float(
+            tf_reduce_mean(tf_cast(x, tf_float32)).numpy()
+        )
+
+    def on_epoch_end(
+        self,
+        epoch: int,
+        logs: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if (epoch % self._every) != 0:
+            return
+
+
+        logs = logs if logs is not None else {}
+
+        xb = self._xb
+        yb = self._yb
+
+        y_true = yb[self._y_key]
+        yp_all = self.model(xb, training=False)
+
+        if isinstance(yp_all, dict):
+            y_pred = yp_all[self._p_key]
+        else:
+            y_pred = yp_all
+
+        q = self._to_BHQO(y_pred, y_true)
+        yt = tf_convert_to_tensor(y_true)[..., 0]
+
+        q10 = q[:, :, 0, 0]
+        q50 = q[:, :, 1, 0] if self._nq >= 2 else q[:, :, 0, 0]
+        q90 = q[:, :, -1, 0]
+
+        c10_50 = self._mean(q10 > q50)
+        c50_90 = self._mean(q50 > q90)
+        c10_90 = self._mean(q10 > q90)
+
+        lo = tf_minimum(q10, q90)
+        hi = tf_maximum(q10, q90)
+
+        cov80 = self._mean((yt >= lo) & (yt <= hi))
+        shp80 = self._mean(hi - lo)
+        mae50 = self._mean(tf_abs(yt - q50))
+        mse50 = self._mean(tf_square(yt - q50))
+
+        logs[self._lp + "cov80"] = cov80
+        logs[self._lp + "shp80"] = shp80
+        logs[self._lp + "mae50"] = mae50
+        logs[self._lp + "mse50"] = mse50
+        logs[self._lp + "cross10_50"] = c10_50
+        logs[self._lp + "cross50_90"] = c50_90
+        logs[self._lp + "cross10_90"] = c10_90
+
+        if self._also_print:
+            msg = (
+                f"[{self._lp}epoch={epoch + 1}] "
+                f"cov80={cov80:.4f} "
+                f"shp80={shp80:.4f} "
+                f"c10_90={c10_90:.4f}"
+            )
+            print(msg)
+            
+    def _cov_shp_from_band(
+        self,
+        yt_raw: Any,
+        yp_raw: Any,
+    ) -> tuple[str, str]:
+        if self._qs is None or self._qlo is None:
+            return "na", "na"
+
+        qs = self._qs
+        n_q = max(1, len(qs))
+
+        y = self._to_BHO(yt_raw)
+
+        q, has_q = self._to_BHQO(
+            yp_raw,
+            n_q=n_q,
+            q_axis=None,
+        )
+        if not has_q or q.shape.rank != 4:
+            return "na", "na"
+
+        lo = q[:, :, int(self._qlo), :]
+        hi = q[:, :, int(self._qhi), :]
+
+        # crossing-safe band
+        lo2 = tf_minimum(lo, hi)
+        hi2 = tf_maximum(lo, hi)
+
+        lo2 = tf_broadcast_to(lo2, tf_shape(y))
+        hi2 = tf_broadcast_to(hi2, tf_shape(y))
+
+        inside = tf_cast(
+            tf_logical_and(y >= lo2, y <= hi2),
+            tf_float32,
+        )
+
+        cov = tf_reduce_mean(inside)
+        shp = tf_reduce_mean(tf_abs(hi2 - lo2))
+
+        return self._fmt(self._f(cov)), self._fmt(self._f(shp))

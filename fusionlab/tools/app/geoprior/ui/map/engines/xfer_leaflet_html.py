@@ -20,6 +20,7 @@ _LEAFLET_HTML = r"""
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
 <script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="https://d3js.org/d3-hexbin.v0.2.min.js"></script>
 
 <style>
   html, body { height:100%; margin:0; }
@@ -119,6 +120,36 @@ _LEAFLET_HTML = r"""
     const a = stops[Math.max(0, Math.min(n, i))];
     const b = stops[Math.max(0, Math.min(n, i+1))];
     return `rgb(${Math.round(a[0]+(b[0]-a[0])*f)},${Math.round(a[1]+(b[1]-a[1])*f)},${Math.round(a[2]+(b[2]-a[2])*f)})`;
+  }
+  // --- 2b. Point / sampling helpers (used by hexbin) ---
+  function _ptLat(d) { return Array.isArray(d) ? d[0] : d.lat; }
+  function _ptLon(d) { return Array.isArray(d) ? d[1] : d.lon; }
+  function _ptVal(d) { return Array.isArray(d) ? d[2] : d.v; }
+
+  function _isFiniteNum(x) {
+    const n = Number(x);
+    return (Number.isFinite ? Number.isFinite(n) : isFinite(n));
+  }
+
+  function _colorFromDomain(v, vmin, vmax) {
+    const vv = Number(v);
+    const a = Number(vmin);
+    const b = Number(vmax);
+    if (!isFinite(vv) || !isFinite(a) || !isFinite(b) || Math.abs(b - a) < 1e-12) {
+      return _ramp(0.5);
+    }
+    return _ramp((vv - a) / (b - a));
+  }
+
+  function _sampleEven(arr, maxN) {
+    if (!arr) return [];
+    const n = arr.length;
+    const m = Math.max(1, parseInt(maxN || n, 10));
+    if (n <= m) return arr;
+    const step = Math.ceil(n / m);
+    const out = [];
+    for (let i = 0; i < n; i += step) out.push(arr[i]);
+    return out;
   }
 
   // --- 3. THE LAYER FACTORY ---
@@ -274,13 +305,150 @@ _LEAFLET_HTML = r"""
       return new ContourLayer();
     },
 
-    // --- C. Hexbin (Placeholder) ---
+    // --- C. Hexbin (D3-hexbin) ---
     _buildHexbin: function(data, opts) {
+      const o = opts || {};
+      const pad = 80;
+
+      if (!d3.hexbin) {
+        // Fail safe: if CDN blocked, fall back to scatter.
         return this._buildScatter(data, opts);
-    }
+      }
+
+      function _agg(bin, metric) {
+        const m = String(metric || "mean").toLowerCase();
+
+        if (m === "count") return bin.length;
+
+        let sum = 0.0;
+        let mn = Infinity;
+        let mx = -Infinity;
+
+        for (let i = 0; i < bin.length; i++) {
+          const v = Number(bin[i].v);
+          if (!isFinite(v)) continue;
+          sum += v;
+          if (v < mn) mn = v;
+          if (v > mx) mx = v;
+        }
+
+        if (m === "max") return mx;
+        if (m === "min") return mn;
+
+        // default mean
+        return (bin.length > 0) ? (sum / bin.length) : NaN;
+      }
+
+      const HexLayer = L.Layer.extend({
+        onAdd: function(map) {
+          this._map = map;
+          this._svg = L.svg();
+          map.addLayer(this._svg);
+          this._root = d3.select(this._svg._rootGroup)
+            .append("g")
+            .attr("class", "gp-hexbin");
+
+          this._update();
+          map.on("zoomend moveend resize", this._update, this);
+        },
+
+        onRemove: function(map) {
+          map.off("zoomend moveend resize", this._update, this);
+          this._root.remove();
+          map.removeLayer(this._svg);
+        },
+
+        _update: function() {
+          const sel = this._root;
+          sel.selectAll("*").remove();
+
+          if (!data || !data.length) return;
+
+          const w = map.getSize().x;
+          const h = map.getSize().y;
+
+          sel.attr("transform", `translate(${-pad},${-pad})`);
+
+          let pts = [];
+          for (let i = 0; i < data.length; i++) {
+            const d = data[i];
+            const lat = Number(_ptLat(d));
+            const lon = Number(_ptLon(d));
+            const vv  = Number(_ptVal(d));
+            if (!isFinite(lat) || !isFinite(lon) || !isFinite(vv)) continue;
+
+            const p = map.latLngToLayerPoint(L.latLng(lat, lon));
+            pts.push({ x: p.x + pad, y: p.y + pad, v: vv });
+          }
+
+          const maxPts = parseInt(o.max_pts || 4000, 10);
+          pts = _sampleEven(pts, Math.max(300, maxPts));
+          if (!pts.length) return;
+
+          const ww = w + 2 * pad;
+          const hh = h + 2 * pad;
+
+          const r = Math.max(4, parseInt(o.gridsize || 30, 10));
+          const metric = o.metric || "mean";
+          const opacity = (o.opacity != null) ? Number(o.opacity) : 0.7;
+
+          const hex = d3.hexbin()
+            .x(d => d.x)
+            .y(d => d.y)
+            .radius(r)
+            .extent([[0, 0], [ww, hh]]);
+
+          const bins = hex(pts);
+          if (!bins.length) return;
+
+          // Compute bin values
+          for (let i = 0; i < bins.length; i++) {
+            bins[i].gp_v = _agg(bins[i], metric);
+          }
+
+          // Use shared min/max if provided; else from bins.
+          let vmin = Infinity, vmax = -Infinity;
+          if (_isFiniteNum(o.vmin) && _isFiniteNum(o.vmax)) {
+            vmin = Number(o.vmin);
+            vmax = Number(o.vmax);
+          } else {
+            for (let i = 0; i < bins.length; i++) {
+              const v = bins[i].gp_v;
+              if (!isFinite(v)) continue;
+              if (v < vmin) vmin = v;
+              if (v > vmax) vmax = v;
+            }
+          }
+          if (!isFinite(vmin) || !isFinite(vmax)) return;
+
+          const stroke = o.stroke || "#111827";
+
+          sel.selectAll("path")
+            .data(bins)
+            .enter().append("path")
+            .attr("d", hex.hexagon())
+            .attr("transform", d => `translate(${d.x},${d.y})`)
+            .attr("fill", d => _colorFromDomain(d.gp_v, vmin, vmax))
+            .attr("stroke", stroke)
+            .attr("stroke-width", 1)
+            .attr("opacity", opacity)
+            .append("title")
+            .text(d => {
+              const vv = d.gp_v;
+              const lab = (metric === "count")
+                ? `count=${d.length}`
+                : `v=${vv.toFixed(3)}`;
+              return lab;
+            });
+        }
+      });
+
+      return new HexLayer();
+    },
   };
 
   // --- 4. Auxiliaries ---
+
   function _ensureLayerCtl() {
     if (layerCtl) return;
     layerCtl = L.control.layers(null, overlays, { collapsed:true }).addTo(map);

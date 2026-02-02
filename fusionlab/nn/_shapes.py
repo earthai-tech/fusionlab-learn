@@ -95,6 +95,35 @@ def _as_BHO(y_true: Tensor, y_pred: Tensor | None = None):
 
     return tf_cast(y, tf_float32)
 
+def _as_BHQO(y_pred: Any, n_q: int = 3) -> Any:
+    """
+    Canonicalize predictions to (B, H, Q, O) for debug.
+
+    Supports:
+      (B,H,Q,O), (B,Q,H,O), (B,H,O,Q)
+      (B,H,Q),   (B,Q,H)
+    """
+    y = tf_convert_to_tensor(y_pred)
+    r = int(y.shape.rank or 0)
+
+    if r == 4:
+        if y.shape[2] == n_q:
+            return y
+        if y.shape[1] == n_q:  # (B,Q,H,O)
+            return tf_transpose(y, (0, 2, 1, 3))
+        if y.shape[3] == n_q:  # (B,H,O,Q)
+            return tf_transpose(y, (0, 1, 3, 2))
+        return y
+
+    if r == 3:
+        if y.shape[2] == n_q:  # (B,H,Q)
+            return tf_expand_dims(y, axis=-1)
+        if y.shape[1] == n_q:  # (B,Q,H)
+            y = tf_transpose(y, (0, 2, 1))
+            return tf_expand_dims(y, axis=-1)
+        return tf_expand_dims(y, axis=-1)
+
+    return y
 
 def _as_BHO_like_pred(x: Tensor, dtype=tf_float32):
     """Normalize (B,H,*) to (B,H,1)/(B,H,O)."""

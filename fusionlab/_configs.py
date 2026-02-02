@@ -75,6 +75,7 @@ _STANDARD_ALONE_MAP = {
     'minimum': ('tensorflow.math', 'minimum'),
     'multiply': ('tensorflow', 'multiply'),
     'name_scope': ('tensorflow', 'name_scope'),
+    'nest': ('tensorflow', 'nest'), 
     'newaxis': ('tensorflow', 'newaxis'),
     'no_op': ('tensorflow', 'no_op'),
     'nn': ('tensorflow', 'nn'), 

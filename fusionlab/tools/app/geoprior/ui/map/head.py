@@ -201,6 +201,10 @@ class MapHeadBar(QWidget):
     
     reset_mapping_clicked = pyqtSignal()
     clear_map_clicked = pyqtSignal()
+    
+    data_toggled = pyqtSignal(bool)
+    view_toggled = pyqtSignal(bool)
+
 
     def __init__(
         self,
@@ -307,6 +311,34 @@ class MapHeadBar(QWidget):
             Qt.ToolButtonTextOnly
         )
         self.btn_analytics.setMinimumHeight(28)
+
+        self.btn_data = QToolButton(self.card)
+        self.btn_data.setObjectName("miniAction")
+        self.btn_data.setProperty("role", "mapHead")
+        self.btn_data.setCheckable(True)
+        self.btn_data.setAutoRaise(True)
+        self.btn_data.setToolTip("Data panel")
+        self.btn_data.setIcon(
+            self.style().standardIcon(
+                QStyle.SP_FileDialogContentsView
+            )
+        )
+        self.btn_data.setIconSize(QSize(16, 16))
+        self.btn_data.setFixedSize(30, 30)
+        
+        self.btn_view = QToolButton(self.card)
+        self.btn_view.setObjectName("miniAction")
+        self.btn_view.setProperty("role", "mapHead")
+        self.btn_view.setCheckable(True)
+        self.btn_view.setAutoRaise(True)
+        self.btn_view.setToolTip("View panel")
+        self.btn_view.setIcon(
+            self.style().standardIcon(
+                QStyle.SP_FileDialogDetailedView
+            )
+        )
+        self.btn_view.setIconSize(QSize(16, 16))
+        self.btn_view.setFixedSize(30, 30)
 
         self._bm_acts = {}
         self._ms_acts = {}
@@ -416,6 +448,8 @@ class MapHeadBar(QWidget):
         rv.setContentsMargins(0, 0, 0, 0)
         rv.setSpacing(8)
         rv.addWidget(self.lb_status, 0)
+        rv.addWidget(self.btn_data, 0)
+        rv.addWidget(self.btn_view, 0)
         rv.addWidget(self.btn_focus, 0)
         rv.addWidget(self.btn_analytics, 0)
         rv.addWidget(self.btn_more, 0)
@@ -515,6 +549,8 @@ class MapHeadBar(QWidget):
         self.btn_clear.clicked.connect(
             self.clear_map_clicked
         )
+        self.btn_data.toggled.connect(self.data_toggled)
+        self.btn_view.toggled.connect(self.view_toggled)
 
     # -----------------------------
     # External setters
@@ -576,6 +612,16 @@ class MapHeadBar(QWidget):
         self.btn_focus.blockSignals(True)
         self.btn_focus.setChecked(bool(checked))
         self.btn_focus.blockSignals(False)
+        
+    def set_data_checked(self, checked: bool) -> None:
+        self.btn_data.blockSignals(True)
+        self.btn_data.setChecked(bool(checked))
+        self.btn_data.blockSignals(False)
+    
+    def set_view_checked(self, checked: bool) -> None:
+        self.btn_view.blockSignals(True)
+        self.btn_view.setChecked(bool(checked))
+        self.btn_view.blockSignals(False)
 
     def set_analytics_checked(self, checked: bool) -> None:
         self.btn_analytics.blockSignals(True)

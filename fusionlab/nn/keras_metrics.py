@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from . import KERAS_DEPS, dependency_message
 from ._shapes import (
-    _as_BHO,
+    _as_BHO, _as_BHQO, 
     _as_BHO_like_pred,
     _weighted_sum_and_count,
 )
@@ -39,6 +39,9 @@ tf_abs = KERAS_DEPS.abs
 tf_debugging = KERAS_DEPS.debugging 
 tf_rank = KERAS_DEPS.rank 
 tf_print = KERAS_DEPS.print 
+tf_logical_and= KERAS_DEPS.logical_and
+tf_minimum = KERAS_DEPS.minimum 
+tf_maximum = KERAS_DEPS.maximum 
 
 register_keras_serializable=KERAS_DEPS.register_keras_serializable
 
@@ -1164,90 +1167,126 @@ def make_mae_for_quantile(q, quantiles, q_axis=None):
     fn.__name__ = f"mae_q{q:g}"
     return fn
 
+class Sharpness80Safe(Metric):
+    """
+    Mean width of the 80% interval, robust to crossing.
 
-# def _split_interval(y_pred_interval, *, q_axis=None, lo_index=0, hi_index=-1):
-#     r"""
-#     Return (lo, hi) for coverage/sharpness.
+    width = |max(q10,q90) - min(q10,q90)|
+    """
 
-#     - If y_pred_interval is (lo, hi) or has last-dim==2 → use that.
-#     - If q_axis is not None → treat that axis as quantile axis and select
-#       lo_index/hi_index (defaults 0 and -1 for [0.1,0.5,0.9]).
-#     """
-#     if isinstance(y_pred_interval, (list, tuple)):
-#         lo, hi = y_pred_interval[0], y_pred_interval[1]
-#         return lo, hi
+    def __init__(self, name="sharpness80_safe", **kw):
+        super().__init__(name=name, **kw)
+        self._sum = self.add_weight(
+            name="w_sum", initializer="zeros"
+        )
+        self._n = self.add_weight(
+            name="n_sum", initializer="zeros"
+        )
 
-#     t = y_pred_interval
-#     if q_axis is not None:
-#         qdim_static = t.shape[q_axis]
-#         qdim = qdim_static if qdim_static is not None else tf_shape(t)[q_axis]
-#         lo_idx = _normalize_index(lo_index, qdim)
-#         hi_idx = _normalize_index(hi_index, qdim)
-#         lo = tf_gather(t, lo_idx, axis=q_axis)
-#         hi = tf_gather(t, hi_idx, axis=q_axis)
-#         return lo, hi
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        yp = _as_BHQO(y_pred)
 
-#     # fallback: assume last dim packs (lo, hi)
-#     lo, hi = t[..., 0], t[..., 1]
-#     return lo, hi
+        q10 = yp[:, :, 0, :]
+        q90 = yp[:, :, 2, :]
 
-# def __infer_quantile_axis(t, n_q=3):
-#     """
-#     Infer quantile axis of length n_q.
+        lo = tf_minimum(q10, q90)
+        hi = tf_maximum(q10, q90)
 
-#     Conservative rules:
-#     - Rank-4: prefer axis 2 (B,H,Q,O), else axis 3 (B,H,O,Q)
-#     - Rank-3: only accept last axis (B,H,Q)
-#     - Never infer axis=1 (horizon) to avoid H==n_q false positives.
-#     """
-#     shape = getattr(t, "shape", None)
-#     if shape is None:
-#         return None
+        w = tf_abs(hi - lo)
 
-#     rank = shape.rank
-#     if rank is None:
-#         return None
+        if sample_weight is not None:
+            sw = tf_cast(sample_weight, tf_float32)
+            w = w * sw
 
-#     dims = list(shape)
+        self._sum.assign_add(tf_reduce_sum(w))
+        self._n.assign_add(tf_cast(tf_size(w), tf_float32))
 
-#     # Canonical layouts
-#     if rank == 4:
-#         if dims[2] == n_q:
-#             return 2
-#         if dims[3] == n_q:
-#             return 3
-#         return None
+    def result(self):
+        return tf_math.divide_no_nan(self._sum, self._n)
 
-#     if rank == 3:
-#         # Only accept (B,H,Q) to avoid H==n_q confusion in (B,H,O)
-#         return 2 if dims[2] == n_q else None
+    def reset_state(self):
+        self._sum.assign(0.0)
+        self._n.assign(0.0)
 
-#     # Fallback: only consider "non-batch, non-horizon" axes if they exist
-#     cand = [i for i, d in enumerate(dims) if d == n_q and i not in (0, 1)]
-#     if len(cand) == 1:
-#         return cand[0]
+class Coverage80Safe(Metric):
+    """
+    Coverage of the 80% interval, robust to crossing.
 
-#     return None
+    Uses:
+      lo = min(q10, q90)
+      hi = max(q10, q90)
 
-# def _split_interval(y_pred_interval, *, q_axis=None, lo_index=0, hi_index=-1):
-#     if isinstance(y_pred_interval, (list, tuple)):
-#         return y_pred_interval[0], y_pred_interval[1]
+    Also tracks crossing rate separately.
+    """
 
-#     t = y_pred_interval
-#     if q_axis is not None:
-#         qdim_static = t.shape[q_axis]
-#         qdim = qdim_static if qdim_static is not None else tf_shape(t)[q_axis]
-#         lo_idx = _normalize_index(lo_index, qdim)
-#         hi_idx = _normalize_index(hi_index, qdim)
-#         return tf_gather(t, lo_idx, axis=q_axis), tf_gather(t, hi_idx, axis=q_axis)
+    def __init__(self, name="coverage80_safe", **kw):
+        super().__init__(name=name, **kw)
+        self._cov = self.add_weight(
+            name="cov_sum", initializer="zeros"
+        )
+        self._n = self.add_weight(
+            name="n_sum", initializer="zeros"
+        )
 
-#     # packed interval MUST be (...,2)
-#     if t.shape.rank is not None and t.shape[-1] not in (2, None):
-#         raise ValueError(
-#             f"Packed interval requires last dim == 2. Got y_pred shape={t.shape}. "
-#             "If this is quantiles, pass q_axis."
-#         )
-#     if t.shape.rank is not None and t.shape[-1] is None:
-#         KERAS_DEPS.debugging.assert_equal(tf_shape(t)[-1], 2)
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        yt = _as_BHO(y_true)
+        yp = _as_BHQO(y_pred)
 
-#     return t[..., 0], t[..., 1]
+        q10 = yp[:, :, 0, :]
+        q90 = yp[:, :, 2, :]
+
+        lo = tf_minimum(q10, q90)
+        hi = tf_maximum(q10, q90)
+
+        inside = tf_logical_and(yt >= lo, yt <= hi)
+        inside = tf_cast(inside, tf_float32)
+
+        if sample_weight is not None:
+            w = tf_cast(sample_weight, tf_float32)
+            inside = inside * w
+
+        self._cov.assign_add(tf_reduce_sum(inside))
+        self._n.assign_add(tf_cast(tf_size(inside), tf_float32))
+
+    def result(self):
+        return tf_math.divide_no_nan(self._cov, self._n)
+
+    def reset_state(self):
+        self._cov.assign(0.0)
+        self._n.assign(0.0)
+
+
+class QuantileCrossRate80(Metric):
+    """
+    Fraction of samples where q10 > q90.
+    """
+
+    def __init__(self, name="qcross80", **kw):
+        super().__init__(name=name, **kw)
+        self._sum = self.add_weight(
+            name="x_sum", initializer="zeros"
+        )
+        self._n = self.add_weight(
+            name="n_sum", initializer="zeros"
+        )
+
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        yp = _as_BHQO(y_pred)
+        q10 = yp[:, :, 0, :]
+        q90 = yp[:, :, 2, :]
+
+        x = tf_cast(q10 > q90, tf_float32)
+
+        if sample_weight is not None:
+            w = tf_cast(sample_weight, tf_float32)
+            x = x * w
+
+        self._sum.assign_add(tf_reduce_sum(x))
+        self._n.assign_add(tf_cast(tf_size(x), tf_float32))
+
+    def result(self):
+        return tf_math.divide_no_nan(self._sum, self._n)
+
+    def reset_state(self):
+        self._sum.assign(0.0)
+        self._n.assign(0.0)

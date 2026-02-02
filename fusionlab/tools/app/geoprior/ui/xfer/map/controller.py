@@ -28,7 +28,6 @@ from PyQt5.QtCore import QObject
 from ....config.store import GeoConfigStore
 from ...map.coord_utils import ensure_lonlat
 from ...map.hotspots import HotspotCfg, compute_hotspots
-from ...map.keys import map_view_key
 from ...view.factory import ViewFactory
 
 from ...view.keys import (
@@ -219,10 +218,17 @@ class XferMapController(QObject):
         self._tb = toolbar
         self._v = view
 
+        # self._view_factory = ViewFactory(
+        #     store,
+        #     key_fn=map_view_key,
+        #     radius_key="map.view.marker_size"
+        # )
         self._view_factory = ViewFactory(
             store,
-            key_fn=map_view_key,
-            radius_key="map.view.marker_size"
+            # xfer uses view.* keys directly
+            key_fn=None,
+            # let factory read xfer slider size
+            radius_key=K_MAP_MARKER_SIZE,
         )
 
         self._root: Optional[Path] = None
@@ -805,7 +811,7 @@ class XferMapController(QObject):
                                 enable_tip=True,
                             ),
                         )
-                    except Exception:
+                    except:
                         pass
                     
         self._render_insight(pts_out=pts_out, overlay=overlay)
@@ -1302,7 +1308,7 @@ class XferMapController(QObject):
     def _map_keys(self) -> Set[str]:
         return set(map_keys())
 
-    # --- FIX 3: Helper for new keys ---
+    #  Helper for new keys ---
     def _view_keys(self) -> Set[str]:
 
         return {

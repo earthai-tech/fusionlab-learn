@@ -26,6 +26,7 @@ from PyQt5.QtWidgets import (
     QWidget,
     QFileDialog,
     QInputDialog,
+    QStackedLayout
 )
 
 from ...config.store import GeoConfigStore
@@ -68,37 +69,16 @@ from .prop_utils import (
     process_simulation, 
 )
 
-# from .keys import ( 
-#     _MAP_DEFAULTS,     
-#     K_PROP_ENABLED, 
-#     , 
-#     
-#     K_ALERT_TRIGGER,
-#     map_view_key
-# )
-
-from .keys import (
-    _MAP_DEFAULTS,
-    K_MAP_ENGINE,
-    K_MAP_BASEMAP,
-    K_MAP_VALUE,
-    K_MAP_YEAR,
-    K_MAP_STEP,
-    K_MAP_COORD_X,
-    K_MAP_COORD_Y,
-    K_MAP_CSV,
-    K_MAP_AUTOFIT,
-    K_PROP_ENABLED,
-    K_PROP_MODE,
-    K_PROP_SPEED,
-    K_PROP_VECTORS,
-    K_PROP_USE_Q50,
-    K_PROP_USE_Q80,
-    K_PROP_USE_Q95,
+from .keys import ( 
+    _MAP_DEFAULTS,     
+    K_PROP_ENABLED, 
     K_ALERT_TRIGGER,
+    K_PROP_VECTORS,
     K_ALERT_ENABLED,
-    map_view_key,
+    map_view_key
 )
+from .overlay_dock import SideDrawer, FloatingDockWindow
+
 
 class MapTab(QWidget):
     
@@ -129,26 +109,65 @@ class MapTab(QWidget):
         self._engine_applied = ""
         self._google_key_applied = ""
 
+
         self.head = MapHeadBar(parent=self)
+        
         self.nav_a = AutoHideDataPanel(
             store=self.store,
             parent=self,
+            embedded=True,
         )
+        
         self.canvas = ForecastMapView(parent=self)
+        
         self.nav_c = AutoHideViewPanel(
             store=self.store,
             parent=self,
+            embedded=True,
         )
-        # in MapTab.__init__:
+        
         self.panel_d = CollapsibleAnalyticsPanel(
             store=self.store,
             parent=self,
         )
-
-        self._split_main = QSplitter(Qt.Horizontal, self)
+        
         self._split_vert = QSplitter(Qt.Vertical, self)
-
-        self._sizes_main: Optional[list[int]] = None
+        
+        self._dock_a = SideDrawer(
+            title="Data",
+            side="left",
+            width=360,
+            parent=self,
+        )
+        self._dock_c = SideDrawer(
+            title="View",
+            side="right",
+            width=380,
+            parent=self,
+        )
+        
+        self._win_a = FloatingDockWindow(
+            title="Data panel",
+            parent=self,
+        )
+        self._win_c = FloatingDockWindow(
+            title="View panel",
+            parent=self,
+        )
+        
+        self._overlay_host = QWidget(self)
+        self._overlay_stack = QStackedLayout(self._overlay_host)
+        self._overlay_stack.setStackingMode(
+            QStackedLayout.StackAll
+        )
+        
+        self._overlay_stack.addWidget(self.canvas)
+        self._overlay_stack.addWidget(self._dock_a)
+        self._overlay_stack.addWidget(self._dock_c)
+        
+        self._dock_a.set_panel(self.nav_a)
+        self._dock_c.set_panel(self.nav_c)
+        
         self._sizes_vert: Optional[list[int]] = None
         self._hover_lock = False
 
@@ -159,48 +178,35 @@ class MapTab(QWidget):
     def set_available_columns(self, cols: Sequence[str]) -> None:
         self.head.set_available_columns(cols)
 
+
     def _build_ui(self) -> None:
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 10, 10, 10)
         lay.setSpacing(10)
-
+    
         lay.addWidget(self.head)
-
-        self._split_main.setChildrenCollapsible(False)
-        self._split_main.addWidget(self.nav_a)
-        
-        # -- WRAP CANVAS AND PROPAGATION PANEL --
+    
         center_container = QWidget()
         center_lay = QVBoxLayout(center_container)
         center_lay.setContentsMargins(0, 0, 0, 0)
         center_lay.setSpacing(0)
-        
-        center_lay.addWidget(self.canvas, 1) # Canvas takes all space
-        
-        # Initialize Propagation Panel
+    
+        center_lay.addWidget(self._overlay_host, 1)
+    
         self.prop_panel = PropagationPanel(
             store=self.store,
             parent=center_container,
         )
-        self.prop_panel.setVisible(False) # Hidden by default
-        center_lay.addWidget(self.prop_panel, 0) # Fixed height at bottom
-        
-        self._split_main.addWidget(center_container) 
-        self._split_main.addWidget(self.nav_c)
-        
-        self._split_main.setStretchFactor(0, 0)
-        self._split_main.setStretchFactor(1, 1)
-        self._split_main.setStretchFactor(2, 0)
-        self._split_main.setHandleWidth(2)
-
+        self.prop_panel.setVisible(False)
+        center_lay.addWidget(self.prop_panel, 0)
+    
         self._split_vert.setChildrenCollapsible(False)
-        self._split_vert.addWidget(self._split_main)
+        self._split_vert.addWidget(center_container)
         self._split_vert.addWidget(self.panel_d)
-
+    
         lay.addWidget(self._split_vert, 1)
-
+    
         self._set_analytics_visible(False)
-        self._split_main.setSizes([320, 1, 320])
         self._split_vert.setSizes([1, 0])
 
     def _apply_defaults(self) -> None:
@@ -263,19 +269,18 @@ class MapTab(QWidget):
             self._on_focus_toggled,
         )
         
-        self.nav_a.width_changed.connect(
-            self._on_left_width_changed,
-        )
-        self.nav_c.width_changed.connect(
-            self._on_right_width_changed,
-        )
+
+        self.head.data_toggled.connect(self._on_data_toggled)
+        self.head.view_toggled.connect(self._on_view_toggled)
         
-        self.nav_a.pinned_changed.connect(
-            self._on_left_pinned,
-        )
-        self.nav_c.pinned_changed.connect(
-            self._on_right_pinned,
-        )
+        self._dock_a.request_pin.connect(self._pin_data)
+        self._dock_a.request_close.connect(self._close_data)
+        self._win_a.request_unpin.connect(self._unpin_data)
+        
+        self._dock_c.request_pin.connect(self._pin_view)
+        self._dock_c.request_close.connect(self._close_view)
+        self._win_c.request_unpin.connect(self._unpin_view)
+
         self.nav_c.export_requested.connect(
             self._on_export_requested
         )
@@ -347,6 +352,66 @@ class MapTab(QWidget):
         ag = self.nav_c.alert_group
         ag.focus_requested.connect(self._on_focus_critical)
         ag.report_requested.connect(self._on_issue_warning)
+        
+    def _on_data_toggled(self, on: bool) -> None:
+        if self._win_a.isVisible():
+            self._win_a.raise_()
+            self._win_a.activateWindow()
+            self.head.set_data_checked(False)
+            return
+        self._dock_a.set_open(bool(on))
+    
+    def _on_view_toggled(self, on: bool) -> None:
+        if self._win_c.isVisible():
+            self._win_c.raise_()
+            self._win_c.activateWindow()
+            self.head.set_view_checked(False)
+            return
+        self._dock_c.set_open(bool(on))
+    
+    def _close_data(self) -> None:
+        self._dock_a.set_open(False)
+        self.head.set_data_checked(False)
+    
+    def _close_view(self) -> None:
+        self._dock_c.set_open(False)
+        self.head.set_view_checked(False)
+    
+    def _pin_data(self) -> None:
+        w = self._dock_a.take_panel()
+        if w is None:
+            return
+        self._dock_a.set_open(False)
+        self.head.set_data_checked(False)
+        self._win_a.set_panel(w)
+        self._win_a.show()
+        self._win_a.raise_()
+        self._win_a.activateWindow()
+    
+    def _unpin_data(self) -> None:
+        w = self._win_a.take_panel()
+        self._win_a.hide()
+        if w is None:
+            return
+        self._dock_a.set_panel(w)
+    
+    def _pin_view(self) -> None:
+        w = self._dock_c.take_panel()
+        if w is None:
+            return
+        self._dock_c.set_open(False)
+        self.head.set_view_checked(False)
+        self._win_c.set_panel(w)
+        self._win_c.show()
+        self._win_c.raise_()
+        self._win_c.activateWindow()
+    
+    def _unpin_view(self) -> None:
+        w = self._win_c.take_panel()
+        self._win_c.hide()
+        if w is None:
+            return
+        self._dock_c.set_panel(w)
 
     def _check_prop_visibility(self, keys):
         if K_PROP_ENABLED in keys:
@@ -618,26 +683,6 @@ class MapTab(QWidget):
         d0["v"] = pd.to_numeric(d0["v"], errors="coerce")
         d0 = d0.dropna(subset=["lat", "lon", "v"])
         
-        # pts = [
-        #     {
-        #         "lat": float(r["lat"]),
-        #         "lon": float(r["lon"]),
-        #         "v": float(r["v"]),
-        #     }
-        #     for r in d0.to_dict("records")
-        # ]
-        
-        # self.canvas.set_points(
-        #     pts,
-        #     vmin=vmin,
-        #     vmax=vmax,
-        #     radius=rad,
-        #     opacity=opa,
-        #     label=label,
-        #     show_legend=leg,
-        #     cmap=cmap,
-        #     invert=inv,
-        # )
         payload = self._vf.build_layer(d0, "sim")
         if payload is None:
             return
@@ -934,64 +979,6 @@ class MapTab(QWidget):
             tooltip=str(path),
         )
 
-    def _on_left_pinned(self, pinned: bool) -> None:
-        if self._hover_lock:
-            return
-
-        if bool(self.store.get("map.focus_mode", False)):
-            return
-    
-        if pinned:
-            self._apply_split_width(
-                left=self.nav_a.expanded_width(),
-                right=None,
-            )
-            return
-
-        self._apply_split_width(
-            left=self.nav_a.handle_width(),
-            right=None,
-        )
-
-    
-    def _on_right_pinned(self, pinned: bool) -> None:
-        if self._hover_lock:
-            return
-        
-        if bool(self.store.get("map.focus_mode", False)):
-            return
-    
-        if pinned:
-          self._apply_split_width(
-              left=None,
-              right=self.nav_c.expanded_width(),
-          )
-          return
-
-        # self._apply_split_width(
-        #     left=None,
-        #     right=int(self.nav_c._handle_w),  # or 22
-        # )
-        
-        self._apply_split_width(
-            left=None, 
-            right=self.nav_c.handle_width(),
-        )
-
-    def _on_left_width_changed(self, w: int) -> None:
-        if self._hover_lock:
-            return
-        if bool(self.store.get("map.focus_mode", False)):
-            return
-        self._apply_split_width(left=int(w), right=None)
-    
-    def _on_right_width_changed(self, w: int) -> None:
-        if self._hover_lock:
-            return
-        if bool(self.store.get("map.focus_mode", False)):
-            return
-        self._apply_split_width(left=None, right=int(w))
-
     def _refresh_points(self) -> None:
         # --------------------------------------------------
         # Helpers
@@ -1152,25 +1139,6 @@ class MapTab(QWidget):
             return
 
     
-        # --------------------------------------------------
-        # Render points (style from view panel)
-        # --------------------------------------------------
-        # snap = self._view_snapshot()
-    
-        # rad = int(snap.get("marker_size") or 6)
-        # opa = float(snap.get("marker_opacity") or 0.9)
-        # leg = bool(snap.get("show_colorbar", True))
-    
-        # auto = bool(snap.get("autoscale", True))
-        # vmin = None if auto else snap.get("vmin", None)
-        # vmax = None if auto else snap.get("vmax", None)
-    
-        # cmap = str(snap.get("colormap", "viridis"))
-        # inv = bool(snap.get("cmap_invert", False))
-    
-        # pts = out.to_dict("records")
-        # Render (scatter / hexbin / contour)
-        
         snap = self._view_snapshot()
     
         leg = bool(snap.get("show_colorbar", True))
@@ -1199,18 +1167,6 @@ class MapTab(QWidget):
             invert=inv,
         )
 
-        # self.canvas.set_points(
-        #     pts,
-        #     vmin=vmin,
-        #     vmax=vmax,
-        #     radius=rad,
-        #     opacity=opa,
-        #     label=v,
-        #     show_legend=leg,
-        #     cmap=cmap,
-        #     invert=inv,
-        # )
-    
         # --------------------------------------------------
         # Hotspots (attention layer)
         # --------------------------------------------------
@@ -1398,28 +1354,24 @@ class MapTab(QWidget):
             
         self._check_alerts()
 
+
     def _freeze_hover(self, ms: int = 250) -> None:
         if bool(self.store.get("map.focus_mode", False)):
             return
     
         self._hover_lock = True
-        self.nav_a.set_hover_enabled(False)
-        self.nav_c.set_hover_enabled(False)
     
-        # Optional: immediately collapse C if it is not pinned.
-        if not self.nav_c.is_pinned():
-            self.nav_c.collapse(immediate=True, force=True)
-            self._apply_split_width(
-                left=None, right=self.nav_c.handle_width())
+        # Close drawers while we rebind data to avoid "jumping"
+        self._dock_a.set_open(False)
+        self._dock_c.set_open(False)
+        self.head.set_data_checked(False)
+        self.head.set_view_checked(False)
     
         QTimer.singleShot(ms, self._unfreeze_hover)
-    
+
+
     def _unfreeze_hover(self) -> None:
         self._hover_lock = False
-        if bool(self.store.get("map.focus_mode", False)):
-            return
-        self.nav_a.set_hover_enabled(True)
-        self.nav_c.set_hover_enabled(True)
 
     def _view_snapshot(self) -> dict:
         keys = [
@@ -1457,34 +1409,6 @@ class MapTab(QWidget):
         snap = self._view_snapshot()
         self.canvas.apply_view(snap)
 
-    def _apply_split_width(
-        self,
-        *,
-        left: Optional[int],
-        right: Optional[int],
-    ) -> None:
-        sizes = list(self._split_main.sizes())
-        if len(sizes) != 3:
-            return
-    
-        total = int(sum(sizes)) or 1
-    
-        l = int(left) if left is not None else int(sizes[0])
-        r = int(right) if right is not None else int(sizes[2])
-    
-        l = max(0, l)
-        r = max(0, r)
-    
-        c = total - l - r
-        if c < 1:
-            c = 1
-            # If overflow, shrink the changing side.
-            if left is not None:
-                l = max(0, total - r - c)
-            if right is not None:
-                r = max(0, total - l - c)
-    
-        self._split_main.setSizes([l, c, r])
 
     def _on_files_selected(self, paths) -> None:
         # Store already updated in panel; keep hook.
@@ -1576,14 +1500,12 @@ class MapTab(QWidget):
 
 
     def _sync_from_store(self) -> None:
-        # engine = str(self.store.get("map.engine", "leaflet"))
-        # coord = str(self.store.get("map.coord_mode", "lonlat"))
+
         engine = str(self.store.get("map.engine", "leaflet")).strip()
     
         # If you store the key in the config store:
         gkey = str(self.store.get("map.google_api_key", "") or "").strip()
-    
-        # Avoid reloading WebEngine if nothing changed
+
         if (
             engine != self._engine_applied
             or gkey != self._google_key_applied
@@ -1645,46 +1567,33 @@ class MapTab(QWidget):
 
     def _set_focus_mode(self, enabled: bool) -> None:
         enabled = bool(enabled)
-
+    
         if enabled:
-            if self._sizes_main is None:
-                self._sizes_main = self._split_main.sizes()
             if self._sizes_vert is None:
                 self._sizes_vert = self._split_vert.sizes()
-
-            self.nav_a.setVisible(False)
-            self.nav_c.setVisible(False)
+    
+            self._dock_a.set_open(False)
+            self._dock_c.set_open(False)
+            self._win_a.hide()
+            self._win_c.hide()
+    
+            self.head.set_data_checked(False)
+            self.head.set_view_checked(False)
+    
             self.panel_d.setVisible(False)
-
-            self.nav_a.set_hover_enabled(False)
-            self.nav_c.set_hover_enabled(False)
-
-            self._split_main.setSizes([0, 1, 0])
             self._split_vert.setSizes([1, 0])
             return
-
-        self.nav_a.setVisible(True)
-        self.nav_c.setVisible(True)
-
-        self.nav_a.set_hover_enabled(True)
-        self.nav_c.set_hover_enabled(True)
-
-        if self._sizes_main:
-            self._split_main.setSizes(self._sizes_main)
-        else:
-            self._split_main.setSizes([320, 1, 320])
-
+    
         show_d = bool(self.store.get("map.show_analytics", False))
         self._set_analytics_visible(show_d)
-
+    
         if self._sizes_vert and show_d:
             self._split_vert.setSizes(self._sizes_vert)
         elif show_d:
             self._split_vert.setSizes([750, 250])
         else:
             self._split_vert.setSizes([1, 0])
-
-        self._sizes_main = None
+    
         self._sizes_vert = None
 
     def _set_analytics_visible(self, visible: bool) -> None:

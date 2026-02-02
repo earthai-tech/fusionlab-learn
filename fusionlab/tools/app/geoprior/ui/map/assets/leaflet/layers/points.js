@@ -7,16 +7,75 @@
     const L = ctx.L;
     const map = ctx.map;
 
-    // Points layer (match your old `const layer = L.layerGroup()...`)
+    // -------------------------------------------------
+    // Shared "main" layer for points/hexbin/contours.
+    // Keep ctx.pointsLayer as an alias for compatibility.
+    // -------------------------------------------------
     const layer =
-      ctx.pointsLayer || L.layerGroup().addTo(map);
+      ctx.mainLayer ||
+      ctx.layer ||
+      ctx.pointsLayer ||
+      L.layerGroup().addTo(map);
+
+    ctx.mainLayer = layer;
+    ctx.layer = layer;
     ctx.pointsLayer = layer;
+
+    // Shared main-state (used by hexbin/contours rerender)
+    ctx.__main =
+      ctx.__main || {
+        kind: "points",
+        points: [],
+        opts: {},
+      };
 
     // Legend control (match your old `let legendCtl = null`)
     let legendCtl = null;
 
+    function _clamp(x, a, b) {
+      if (window._clamp) return window._clamp(x, a, b);
+      return Math.max(a, Math.min(b, x));
+    }
+
+    function _color(t, cmap, inv) {
+      // Prefer common colormap module if present
+      const C = window.__GeoPriorCmap || {};
+      const fn = C.color || C.getColor || null;
+
+      if (typeof fn === "function") {
+        try {
+          return fn(t, cmap, inv);
+        } catch (e) {}
+      }
+
+      // Fallback to legacy globals if you kept them
+      if (window._color) {
+        try {
+          return window._color(t, cmap, inv);
+        } catch (e) {}
+      }
+
+      // Final fallback: HSL gradient (like old inline code)
+      const tt = inv ? 1 - t : t;
+      const h = 240 * (1 - tt);
+      return "hsl(" + h + ",80%,45%)";
+    }
+
     function clearPoints() {
       layer.clearLayers();
+
+      // IMPORTANT: remove contour overlay if it exists
+      if (ctx.contourOverlay) {
+        try {
+          map.removeLayer(ctx.contourOverlay);
+        } catch (e) {}
+        ctx.contourOverlay = null;
+      }
+
+      // Reset main mode so zoom/move hooks don't rerender old modes
+      ctx.__main.kind = "points";
+      ctx.__main.points = [];
+      ctx.__main.opts = {};
     }
 
     function setLegend(vmin, vmax, label, cmap, inv) {
@@ -42,9 +101,9 @@
         const title = label || "Z";
         const g =
           "linear-gradient(to top," +
-          window._color(0, cm, iv) +
+          _color(0, cm, iv) +
           "," +
-          window._color(1, cm, iv) +
+          _color(1, cm, iv) +
           ")";
 
         div.innerHTML =
@@ -71,6 +130,11 @@
     }
 
     function setPoints(points, opts) {
+      // Record main mode (so moving/zooming won't rerender hex/contours)
+      ctx.__main.kind = "points";
+      ctx.__main.points = points || [];
+      ctx.__main.opts = opts || {};
+
       clearPoints();
 
       const p = points || [];
@@ -109,9 +173,9 @@
         if (v != null && isFinite(v) && b > a) {
           t = (v - a) / (b - a);
         }
-        t = window._clamp(t, 0, 1);
+        t = _clamp(t, 0, 1);
 
-        const col = window._color(t, cmap, inv);
+        const col = _color(t, cmap, inv);
 
         const m = L.circleMarker([lat, lon], {
           radius: r,
@@ -139,9 +203,16 @@
 
       layer.eachLayer(function (m) {
         if (m.getLatLng) pts.push(m.getLatLng());
+        if (m.getBounds) {
+          try {
+            const b = m.getBounds();
+            pts.push(b.getNorthWest());
+            pts.push(b.getSouthEast());
+          } catch (e) {}
+        }
       });
 
-      // Match original: include hotspots too if present
+      // include hotspots if present
       const hotLayer = ctx.hotLayer;
       if (hotLayer) {
         hotLayer.eachLayer(function (m) {
@@ -154,6 +225,15 @@
             } catch (e) {}
           }
         });
+      }
+
+      // include contour overlay bounds if present
+      if (ctx.contourOverlay && ctx.contourOverlay.getBounds) {
+        try {
+          const b = ctx.contourOverlay.getBounds();
+          pts.push(b.getNorthWest());
+          pts.push(b.getSouthEast());
+        } catch (e) {}
       }
 
       if (!pts.length) return;

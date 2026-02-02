@@ -72,6 +72,8 @@ def maplibre_html() -> str:
         "      };",
         "    },",
         "    setPoints: function(){},",
+        "    setHexbin: function(){},",
+        "    setContours: function(){},",
         "    clearPoints: function(){},",
         "    fitPoints: function(){},",
         "    zoomIn: function(){},",
@@ -112,6 +114,7 @@ def maplibre_html() -> str:
         "  // Cache for reload safety",
         "  let lastPoints = [];",
         "  let lastPointOpts = {};",
+        "  let lastMainKind = 'points';",
         "  let lastHotspots = [];",
         "  let lastHotOpts = {};",
         "  let lastLegend = null;",
@@ -212,7 +215,13 @@ def maplibre_html() -> str:
         "    // replay cached state",
         "    try {",
         "      if (lastPoints && lastPoints.length) {",
-        "        setPoints(lastPoints, lastPointOpts || {});",
+        "        if (lastMainKind === 'hexbin_source') {",
+        "          setHexbin(lastPoints, lastPointOpts || {});",
+        "        } else if (lastMainKind === 'contour_source') {",
+        "          setContours(lastPoints, lastPointOpts || {});",
+        "        } else {",
+        "          setPoints(lastPoints, lastPointOpts || {});",
+        "        }",
         "      }",
         "    } catch (e) {}",
         "    try {",
@@ -624,18 +633,345 @@ def maplibre_html() -> str:
         "  function clearPoints() {",
         "    lastPoints = [];",
         "    lastPointOpts = {};",
+        "    lastMainKind = 'points';",
+        "",
+        "    // points",
         "    try {",
         "      const s = map.getSource('gp_points');",
         "      if (s) s.setData({",
         "        type: 'FeatureCollection', features: []",
         "      });",
         "    } catch (e) {}",
+        "",
+        "    // hexbin",
+        "    try { if (map.getLayer('gp_hex_fill'))",
+        "      map.removeLayer('gp_hex_fill'); } catch (e) {}",
+        "    try { if (map.getLayer('gp_hex_line'))",
+        "      map.removeLayer('gp_hex_line'); } catch (e) {}",
+        "    try { if (map.getSource('gp_hex'))",
+        "      map.removeSource('gp_hex'); } catch (e) {}",
+        "",
+        "    // contours (image overlay)",
+        "    try { if (map.getLayer('gp_contour_layer'))",
+        "      map.removeLayer('gp_contour_layer'); } catch (e) {}",
+        "    try { if (map.getSource('gp_contour_img'))",
+        "      map.removeSource('gp_contour_img'); } catch (e) {}",
         "  }",
         "",
         "  function _clamp(x, a, b) {",
         "    return Math.max(a, Math.min(b, x));",
         "  }",
         "",
+                r"""
+          // -------------------------------------------------
+          // Visualization strategies: hexbin + contours
+          // -------------------------------------------------
+        
+          function _agg(vals, metric) {
+            const m = String(metric || "mean").toLowerCase();
+            if (!vals || !vals.length) return null;
+            if (m === "count") return vals.length;
+            if (m === "max") return Math.max.apply(null, vals);
+            if (m === "min") return Math.min.apply(null, vals);
+            if (m === "sum") {
+              let s = 0;
+              for (let i = 0; i < vals.length; i++) s += vals[i];
+              return s;
+            }
+            let s = 0;
+            for (let i = 0; i < vals.length; i++) s += vals[i];
+            return s / vals.length;
+          }
+        
+          function _ensureHexLayer() {
+            if (!map.getSource("gp_hex")) {
+              map.addSource("gp_hex", {
+                type: "geojson",
+                data: { type: "FeatureCollection", features: [] }
+              });
+            }
+            if (!map.getLayer("gp_hex_fill")) {
+              map.addLayer({
+                id: "gp_hex_fill",
+                type: "fill",
+                source: "gp_hex",
+                paint: {
+                  "fill-color": ["get", "col"],
+                  "fill-opacity": ["get", "a"]
+                }
+              });
+            }
+            if (!map.getLayer("gp_hex_line")) {
+              map.addLayer({
+                id: "gp_hex_line",
+                type: "line",
+                source: "gp_hex",
+                paint: {
+                  "line-color": ["get", "col"],
+                  "line-opacity": ["get", "a"],
+                  "line-width": 1
+                }
+              });
+            }
+          }
+        
+          function _renderHexbin() {
+            const pts = lastPoints || [];
+            const o = lastPointOpts || {};
+        
+            if (!_gpLoaded) return;
+        
+            // clear other overlays but keep caches
+            try { if (map.getLayer("gp_contour_layer"))
+              map.removeLayer("gp_contour_layer"); } catch (e) {}
+            try { if (map.getSource("gp_contour_img"))
+              map.removeSource("gp_contour_img"); } catch (e) {}
+        
+            _ensureHexLayer();
+        
+            const gs = Math.max(5, Number(o.gridsize || 30));
+            const metric = String(o.metric || "mean");
+            const op = (o.opacity != null) ? Number(o.opacity) : 0.85;
+        
+            if (!pts.length) {
+              try {
+                const s = map.getSource("gp_hex");
+                if (s) s.setData({ type: "FeatureCollection", features: [] });
+              } catch (e) {}
+              return;
+            }
+        
+            const bins = {};
+            const sqrt3 = Math.sqrt(3);
+        
+            for (let i = 0; i < pts.length; i++) {
+              const p = pts[i] || {};
+              const lat = Number(p.lat);
+              const lon = Number(p.lon);
+              const v = Number(p.v);
+              if (!isFinite(lat) || !isFinite(lon) || !isFinite(v)) continue;
+        
+              const q = map.project([lon, lat]); // pixel coords
+              const x = q.x;
+              const y = q.y;
+        
+              const col = Math.round(x / (1.5 * gs));
+              const row = Math.round(
+                (y - (col & 1) * (sqrt3 * 0.5 * gs)) / (sqrt3 * gs)
+              );
+              const key = col + "," + row;
+        
+              if (!bins[key]) bins[key] = { col: col, row: row, vs: [] };
+              bins[key].vs.push(v);
+            }
+        
+            let lo = Infinity;
+            let hi = -Infinity;
+        
+            for (const k in bins) {
+              if (!bins.hasOwnProperty(k)) continue;
+              const it = bins[k];
+              const vv = _agg(it.vs, metric);
+              if (vv == null || !isFinite(vv)) continue;
+              it.v = vv;
+              lo = Math.min(lo, vv);
+              hi = Math.max(hi, vv);
+            }
+        
+            const a = (o.vmin != null) ? Number(o.vmin) : lo;
+            const b = (o.vmax != null) ? Number(o.vmax) : hi;
+        
+            const feats = [];
+        
+            for (const k in bins) {
+              if (!bins.hasOwnProperty(k)) continue;
+              const it = bins[k];
+              if (it.v == null || !isFinite(it.v)) continue;
+        
+              const cx = it.col * 1.5 * gs;
+              const cy = it.row * (sqrt3 * gs) +
+                (it.col & 1) * (sqrt3 * 0.5 * gs);
+        
+              const t = _clamp((it.v - a) / ((b - a) || 1), 0, 1);
+              const col = _color(t, o.cmap, !!o.invert);
+        
+              const ring = [];
+              for (let j = 0; j < 6; j++) {
+                const ang = (Math.PI / 3) * j;
+                const px = cx + gs * Math.cos(ang);
+                const py = cy + gs * Math.sin(ang);
+                const ll = map.unproject([px, py]);
+                ring.push([ll.lng, ll.lat]);
+              }
+              ring.push(ring[0]); // close
+        
+              feats.push({
+                type: "Feature",
+                geometry: { type: "Polygon", coordinates: [ring] },
+                properties: { col: col, a: op }
+              });
+            }
+        
+            try {
+              const s = map.getSource("gp_hex");
+              if (s) s.setData({ type: "FeatureCollection", features: feats });
+            } catch (e) {}
+        
+            if (o.showLegend) {
+              setLegend(a, b, o.label || "Z", o.cmap, !!o.invert);
+              lastLegend = {
+                vmin: a, vmax: b, label: o.label || "Z",
+                cmap: (o.cmap || "viridis"), inv: !!o.invert
+              };
+            }
+          }
+        
+          function setHexbin(points, opts) {
+            lastMainKind = "hexbin_source";
+            lastPoints = points || [];
+            lastPointOpts = opts || {};
+            if (!_gpLoaded) return;
+            _renderHexbin();
+          }
+        
+          function _renderContours() {
+            const pts = lastPoints || [];
+            const o = lastPointOpts || {};
+        
+            if (!_gpLoaded) return;
+        
+            // clear hexbin
+            try { if (map.getLayer("gp_hex_fill"))
+              map.removeLayer("gp_hex_fill"); } catch (e) {}
+            try { if (map.getLayer("gp_hex_line"))
+              map.removeLayer("gp_hex_line"); } catch (e) {}
+            try { if (map.getSource("gp_hex"))
+              map.removeSource("gp_hex"); } catch (e) {}
+        
+            const op = (o.opacity != null) ? Number(o.opacity) : 0.7;
+            const bw = Math.max(4, Number(o.bandwidth || 15));
+            const step = Math.max(6, Math.min(80, bw));
+        
+            const canvas = document.createElement("canvas");
+            const w = map.getCanvas().width;
+            const h = map.getCanvas().height;
+            if (!w || !h || !pts.length) return;
+        
+            canvas.width = w;
+            canvas.height = h;
+        
+            const ctx = canvas.getContext("2d");
+            if (!ctx) return;
+        
+            const proj = [];
+            let lo = Infinity;
+            let hi = -Infinity;
+        
+            for (let i = 0; i < pts.length; i++) {
+              const p = pts[i] || {};
+              const lat = Number(p.lat);
+              const lon = Number(p.lon);
+              const v = Number(p.v);
+              if (!isFinite(lat) || !isFinite(lon) || !isFinite(v)) continue;
+              const q = map.project([lon, lat]);
+              proj.push({ x: q.x, y: q.y, v: v });
+              lo = Math.min(lo, v);
+              hi = Math.max(hi, v);
+            }
+        
+            const a = (o.vmin != null) ? Number(o.vmin) : lo;
+            const b = (o.vmax != null) ? Number(o.vmax) : hi;
+        
+            const sig2 = 2 * step * step;
+            ctx.globalAlpha = 1.0;
+        
+            for (let y = 0; y < h; y += step) {
+              for (let x = 0; x < w; x += step) {
+                let num = 0;
+                let den = 0;
+        
+                for (let i = 0; i < proj.length; i++) {
+                  const p = proj[i];
+                  const dx = x - p.x;
+                  const dy = y - p.y;
+                  const d2 = dx * dx + dy * dy;
+                  const w0 = Math.exp(-d2 / sig2);
+                  num += w0 * p.v;
+                  den += w0;
+                }
+        
+                if (den <= 0) continue;
+        
+                const v = num / den;
+                const t = _clamp((v - a) / ((b - a) || 1), 0, 1);
+        
+                ctx.fillStyle = _color(t, o.cmap, !!o.invert);
+                ctx.fillRect(x, y, step, step);
+              }
+            }
+        
+            const url = canvas.toDataURL("image/png");
+        
+            // MapLibre image source expects corners (NW, NE, SE, SW)
+            const bb = map.getBounds();
+            const nw = bb.getNorthWest();
+            const ne = bb.getNorthEast();
+            const se = bb.getSouthEast();
+            const sw = bb.getSouthWest();
+        
+            try { if (map.getLayer("gp_contour_layer"))
+              map.removeLayer("gp_contour_layer"); } catch (e) {}
+            try { if (map.getSource("gp_contour_img"))
+              map.removeSource("gp_contour_img"); } catch (e) {}
+        
+            map.addSource("gp_contour_img", {
+              type: "image",
+              url: url,
+              coordinates: [
+                [nw.lng, nw.lat],
+                [ne.lng, ne.lat],
+                [se.lng, se.lat],
+                [sw.lng, sw.lat]
+              ]
+            });
+        
+            map.addLayer({
+              id: "gp_contour_layer",
+              type: "raster",
+              source: "gp_contour_img",
+              paint: { "raster-opacity": op }
+            });
+        
+            if (o.showLegend) {
+              setLegend(a, b, o.label || "Z", o.cmap, !!o.invert);
+              lastLegend = {
+                vmin: a, vmax: b, label: o.label || "Z",
+                cmap: (o.cmap || "viridis"), inv: !!o.invert
+              };
+            }
+          }
+        
+          function setContours(points, opts) {
+            lastMainKind = "contour_source";
+            lastPoints = points || [];
+            lastPointOpts = opts || {};
+            if (!_gpLoaded) return;
+            _renderContours();
+          }
+        
+          map.on("moveend", function () {
+            if (lastMainKind === "hexbin_source") _renderHexbin();
+            if (lastMainKind === "contour_source") _renderContours();
+          });
+        
+          map.on("zoomend", function () {
+            if (lastMainKind === "hexbin_source") _renderHexbin();
+            if (lastMainKind === "contour_source") _renderContours();
+          });
+        """,
+                
+        
+        
         "  function _color(t, cmap, inv) {",
         "    let tt = t;",
         "    if (inv) tt = 1 - tt;",
@@ -683,6 +1019,7 @@ def maplibre_html() -> str:
         "",
         "    lastPoints = p;",
         "    lastPointOpts = o;",
+        "    lastMainKind = 'points';",
         "    if (!_gpLoaded) return;",
         "",
         "    _ensurePointLayer();",
@@ -805,7 +1142,13 @@ def maplibre_html() -> str:
         "    // Replay cached state (if any)",
         "    try {",
         "      if (lastPoints && lastPoints.length) {",
-        "        setPoints(lastPoints, lastPointOpts || {});",
+        "        if (lastMainKind === 'hexbin_source') {",
+        "          setHexbin(lastPoints, lastPointOpts || {});",
+        "        } else if (lastMainKind === 'contour_source') {",
+        "          setContours(lastPoints, lastPointOpts || {});",
+        "        } else {",
+        "          setPoints(lastPoints, lastPointOpts || {});",
+        "        }",
         "      }",
         "    } catch (e) {}",
         "    try {",
@@ -817,6 +1160,8 @@ def maplibre_html() -> str:
         "",
         "  // Attach real functions",
         "  window.__GeoPriorMap.setPoints = setPoints;",
+        "  window.__GeoPriorMap.setHexbin = setHexbin;",
+        "  window.__GeoPriorMap.setContours = setContours;",
         "  window.__GeoPriorMap.clearPoints = clearPoints;",
         "  window.__GeoPriorMap.fitPoints = fitPoints;",
         "  window.__GeoPriorMap.zoomIn = zoomIn;",

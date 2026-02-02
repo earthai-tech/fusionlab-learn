@@ -746,8 +746,4 @@ def _leaflet_html() -> str:
     ]
     return "\n".join(lines)
 
-# function setLayer(name, kind, data, opts) {
-#   if (kind === "points") return drawPoints(name, data, opts);
-#   if (kind === "hexbin_source") return drawHexbin(name, data, opts);
-#   if (kind === "contour_source") return drawContour(name, data, opts);
-# }
+

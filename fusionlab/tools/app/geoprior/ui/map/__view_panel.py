@@ -70,23 +70,10 @@ class AutoHideViewPanel(AutoHidePanel):
     changed = pyqtSignal(object)
     export_requested = pyqtSignal(str)
 
-    # def __init__(
-    #     self,
-    #     *,
-    #     store: GeoConfigStore,
-    #     parent: Optional[QWidget] = None,
-    # ) -> None:
-    #     super().__init__(
-    #         title="View",
-    #         side="right",
-    #         expanded_w=320,
-    #         parent=parent,
-    #     )
     def __init__(
         self,
         *,
         store: GeoConfigStore,
-        embedded: bool = False,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(
@@ -94,7 +81,6 @@ class AutoHideViewPanel(AutoHidePanel):
             side="right",
             expanded_w=320,
             parent=parent,
-            embedded=embedded,
         )
         self.store = store
 

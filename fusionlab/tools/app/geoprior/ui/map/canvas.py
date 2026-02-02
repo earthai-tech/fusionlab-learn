@@ -158,7 +158,6 @@ class ForecastMapView(QFrame):
         Draw direction arrows.
         vectors = [{lat, lon, angle, mag}, ...]
         """
-        import json
         js_data = json.dumps(vectors)
         js = (
             "if (window.__GeoPriorMap && window.__GeoPriorMap.setVectors) {"
@@ -232,27 +231,32 @@ class ForecastMapView(QFrame):
             self._web.page().setWebChannel(self._channel)
             self._bridge.point_clicked.connect(self.point_clicked)
 
-        # self._web.setHtml(
-        #     html,
-        #     QUrl("https://geoprior.local/"),
-        # )
-        
-        # Load engine page.
-        # Leaflet: prefer local index.html so relative
-        # assets (style.css, layers/*.js) work.
-        if self._engine_active == "leaflet":
-            url = self._leaflet_index_url()
-            if url is not None:
-                self._web.setUrl(url)
-                return
-
-        # Fallback: inline HTML mode (also used by
-        # google/maplibre engines for now).
         self._web.setHtml(
             html,
             QUrl("https://geoprior.local/"),
         )
+        
+        # XXX TO OPTIMIZE: We comment this until everything refactored in 
+        # using assets/, common/ , layers/with js module are stables. 
+        # -----------------------------------------------
+        # # Load engine page.
+        # # Leaflet: prefer local index.html so relative
+        # # assets (style.css, layers/*.js) work.
+        # if self._engine_active == "leaflet":
+        #     url = self._leaflet_index_url()
+        #     if url is not None:
+        #         self._web.setUrl(url)
+        #         return
 
+        # # Fallback: inline HTML mode (also used by
+        # # google/maplibre engines for now).
+        # self._web.setHtml(
+        #     html,
+        #     QUrl("https://geoprior.local/"),
+        # )
+        # # -------------------------------------------------------
+        
+        
     def _engine_html(self) -> tuple[str, str]:
         req = self._engine_req
 
@@ -571,8 +575,14 @@ class ForecastMapView(QFrame):
         )
         js_opt = json.dumps(o, separators=(",", ":"))
 
-        fn = "setHexbin"
-        if k == "contour_source":
+        fn = "setPoints"
+        if k in ("hexbin_source", "hexbin"):
+            fn = "setHexbin"
+        elif k in (
+            "contour_source",
+            "contour",
+            "contours",
+        ):
             fn = "setContours"
 
         js = (
@@ -766,6 +776,12 @@ class ForecastMapView(QFrame):
         style: str, 
         opacity: float
         ) -> None:
+        #     spec = resolve_basemap(
+        #         self._engine_active,
+        #         provider,
+        #         style,
+        #     )
+        
         js = (
             "if (window.__GeoPriorMap) {"
             "  window.__GeoPriorMap.setBasemap("

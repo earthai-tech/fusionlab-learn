@@ -96,7 +96,14 @@ class ViewFactory:
         # 2. Determine Plot Type
         kind = str(
             self._get(K_PLOT_KIND, "scatter") or "scatter"
-        )
+        ).strip().lower()
+        
+        if kind in ("hex", "hexagon"):
+            kind = "hexbin"
+        
+        if kind in ("contours", "isoband", "isoline"):
+            kind = "contour"
+
         opacity = float(
             self._get(K_PLOT_OPACITY, 0.85) or 0.85
         )

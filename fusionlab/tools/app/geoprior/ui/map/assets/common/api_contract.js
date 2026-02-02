@@ -26,6 +26,9 @@
 
   // Core API (stubs)
   if (!gp.setPoints) gp.setPoints = _noop;
+  if (!gp.setHexbin) gp.setHexbin = _noop;
+  if (!gp.setContours) gp.setContours = _noop;
+
   if (!gp.clearPoints) gp.clearPoints = _noop;
   if (!gp.fitPoints) gp.fitPoints = _noop;
   if (!gp.fitBounds) gp.fitBounds = _noop;

@@ -73,6 +73,9 @@
 
   // Wire functions onto the shared contract (exact names)
   gp.setPoints = ctx.setPoints || gp.setPoints;
+  gp.setHexbin = ctx.setHexbin || gp.setHexbin;
+  gp.setContours = ctx.setContours || gp.setContours;
+
   gp.clearPoints = ctx.clearPoints || gp.clearPoints;
   gp.fitPoints = ctx.fitPoints || gp.fitPoints;
   gp.fitBounds = fitBounds;

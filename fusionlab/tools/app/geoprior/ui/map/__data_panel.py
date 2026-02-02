@@ -84,285 +84,12 @@ from .utils import (
 ROLE_PATH = Qt.UserRole
 ROLE_KIND = Qt.UserRole + 1
 
-# class AutoHidePanel(QFrame):
-#     """
-#     Base auto-hide panel with a handle and pin mode.
-
-#     Emits width_changed while animating, so the parent
-#     QSplitter can reallocate space to the map.
-#     """
-
-#     width_changed = pyqtSignal(int)
-#     pinned_changed = pyqtSignal(bool)
-
-#     def __init__(
-#         self,
-#         *,
-#         title: str,
-#         side: str,
-#         expanded_w: int = 300,
-#         handle_w: int = 22,
-#         parent: Optional[QWidget] = None,
-#     ) -> None:
-#         super().__init__(parent)
-
-#         self._title = str(title or "")
-#         self._side = str(side or "left").lower()
-
-#         self._expanded_w = int(expanded_w)
-#         self._handle_w = int(handle_w)
-
-#         self._pinned = False
-#         self._expanded = True
-#         self._hover_enabled = True
-
-#         self._anim = QPropertyAnimation(
-#             self,
-#             b"maximumWidth",
-#         )
-#         self._anim.setDuration(180)
-#         self._anim.setEasingCurve(QEasingCurve.OutCubic)
-#         self._anim.valueChanged.connect(
-#             self._on_anim_width,
-#         )
-#         self._anim.finished.connect(self._on_anim_done)
-
-#         self._hide_timer = QTimer(self)
-#         self._hide_timer.setSingleShot(True)
-#         self._hide_timer.timeout.connect(self._on_hide_timer)
-
-#         self._build_ui()
-#         self.expand(immediate=True)
-
-#     # -----------------------------
-#     # Public API
-#     # -----------------------------
-#     def handle_width(self) -> int:
-#         return int(self._handle_w)
-
-#     def expanded_width(self) -> int:
-#         return int(self._expanded_w)
-
-#     def toggle_pinned(self) -> None:
-#         self.set_pinned(not self._pinned)
-
-#     def set_pinned(self, pinned: bool) -> None:
-#         self._pinned = bool(pinned)
-#         self._update_pin_ui()
-
-#         if self._pinned:
-#             self.setMinimumWidth(self._expanded_w)
-#             self.expand()
-#         else:
-#             self.setMinimumWidth(self._handle_w)
-#             if not self.underMouse():
-#                 self.collapse()
-
-#         self.pinned_changed.emit(self._pinned)
-
-#     def is_pinned(self) -> bool:
-#         return bool(self._pinned)
-
-#     def set_hover_enabled(self, enabled: bool) -> None:
-#         self._hover_enabled = bool(enabled)
-#         if not self._hover_enabled:
-#             self._hide_timer.stop()
-
-#     def expand(self, *, immediate: bool = False) -> None:
-#         self._hide_timer.stop()
-#         self._expanded = True
-
-#         self._content.setVisible(True)
-
-#         if self._pinned:
-#             self.setMinimumWidth(self._expanded_w)
-#         else:
-#             self.setMinimumWidth(self._handle_w)
-
-#         if immediate:
-#             self._stop_anim()
-#             self.setMaximumWidth(self._expanded_w)
-#             self.width_changed.emit(self._expanded_w)
-#             return
-
-#         self._animate_to(self._expanded_w)
-
-#     def collapse(
-#         self,
-#         *,
-#         immediate: bool = False,
-#         force: bool = False,
-#     ) -> None:
-#         if self._pinned and not force:
-#             return
-
-#         self._expanded = False
-#         self.setMinimumWidth(self._handle_w)
-
-#         if immediate:
-#             self._stop_anim()
-#             self._content.setVisible(False)
-#             self.setMaximumWidth(self._handle_w)
-#             self.width_changed.emit(self._handle_w)
-#             return
-
-#         self._animate_to(self._handle_w)
-
-#     def is_expanded(self) -> bool:
-#         return bool(self._expanded)
-
-#     # -----------------------------
-#     # Qt events
-#     # -----------------------------
-#     def enterEvent(self, event: QEvent) -> None:
-#         super().enterEvent(event)
-#         if not self._hover_enabled:
-#             return
-#         self.expand()
-
-#     def leaveEvent(self, event: QEvent) -> None:
-#         super().leaveEvent(event)
-#         if not self._hover_enabled:
-#             return
-#         if self._pinned:
-#             return
-#         self._hide_timer.start(260)
-
-#     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
-#         if obj is self._btn_handle:
-#             if event.type() == QEvent.MouseButtonDblClick:
-#                 self.toggle_pinned()
-#                 return True
-#         return super().eventFilter(obj, event)
-
-#     # -----------------------------
-#     # Internals
-#     # -----------------------------
-#     def _build_ui(self) -> None:
-#         self.setObjectName("AutoHidePanel")
-#         self.setFrameShape(QFrame.NoFrame)
-
-#         self._handle = QWidget(self)
-#         hl = QVBoxLayout(self._handle)
-#         hl.setContentsMargins(0, 0, 0, 0)
-#         hl.setSpacing(6)
-
-#         self._btn_handle = QToolButton(self._handle)
-#         self._btn_handle.setText("≡")
-#         self._btn_handle.setToolTip(self._title)
-#         self._btn_handle.clicked.connect(self.expand)
-#         self._btn_handle.installEventFilter(self)
-
-#         hl.addWidget(self._btn_handle, 0)
-#         hl.addStretch(1)
-
-#         self._content = QWidget(self)
-#         cl = QVBoxLayout(self._content)
-#         cl.setContentsMargins(10, 10, 10, 10)
-#         cl.setSpacing(10)
-
-#         top = QWidget(self._content)
-#         tl = QHBoxLayout(top)
-#         tl.setContentsMargins(0, 0, 0, 0)
-#         tl.setSpacing(8)
-
-#         self._lb = QLabel(self._title, top)
-
-#         # Pin as small icon toggle
-#         self._btn_pin = QToolButton(top)
-#         self._btn_pin.setCheckable(True)
-#         self._btn_pin.toggled.connect(self.set_pinned)
-#         self._btn_pin.setToolButtonStyle(
-#             Qt.ToolButtonTextOnly,
-#         )
-
-#         tl.addWidget(self._lb, 1)
-#         tl.addWidget(self._btn_pin, 0)
-#         cl.addWidget(top)
-
-#         self.body = QWidget(self._content)
-#         cl.addWidget(self.body, 1)
-
-#         root = QHBoxLayout(self)
-#         root.setContentsMargins(0, 0, 0, 0)
-#         root.setSpacing(0)
-
-#         if self._side == "right":
-#             root.addWidget(self._content, 1)
-#             root.addWidget(self._handle, 0)
-#         else:
-#             root.addWidget(self._handle, 0)
-#             root.addWidget(self._content, 1)
-
-#         self.setMinimumWidth(self._handle_w)
-#         self.setMaximumWidth(self._expanded_w)
-#         self._update_pin_ui()
-
-#     def _update_pin_ui(self) -> None:
-#         self._btn_pin.blockSignals(True)
-#         self._btn_pin.setChecked(self._pinned)
-#         self._btn_pin.blockSignals(False)
-
-#         if self._pinned:
-#             self._btn_pin.setText("📌")
-#             self._btn_pin.setToolTip("Pinned")
-#             self._btn_pin.setStyleSheet(
-#                 "QToolButton{"
-#                 "font-weight:600;"
-#                 "padding:2px 8px;"
-#                 "border-radius:9px;"
-#                 "border:1px solid "
-#                 "rgba(46,49,145,0.60);"
-#                 "background:rgba(46,49,145,0.12);"
-#                 "}"
-#             )
-#         else:
-#             self._btn_pin.setText("📌")
-#             self._btn_pin.setToolTip("Pin panel")
-#             self._btn_pin.setStyleSheet("")
-
-#     def _animate_to(self, w: int) -> None:
-#         w = int(max(self._handle_w, w))
-#         self._stop_anim()
-#         self._anim.setStartValue(self.maximumWidth())
-#         self._anim.setEndValue(w)
-#         self._anim.start()
-
-#     def _stop_anim(self) -> None:
-#         if self._anim.state() == QPropertyAnimation.Running:
-#             self._anim.stop()
-
-#     def _on_anim_width(self, v) -> None:
-#         try:
-#             w = int(v)
-#         except Exception:
-#             w = int(self.maximumWidth())
-#         self.width_changed.emit(w)
-
-#     def _on_anim_done(self) -> None:
-#         if not self._expanded:
-#             self._content.setVisible(False)
-#             self.setMaximumWidth(self._handle_w)
-#             self.width_changed.emit(self._handle_w)
-
-#     def _on_hide_timer(self) -> None:
-#         if self._pinned:
-#             return
-#         if self.underMouse():
-#             return
-#         self.collapse()
-
 class AutoHidePanel(QFrame):
     """
     Base auto-hide panel with a handle and pin mode.
 
     Emits width_changed while animating, so the parent
     QSplitter can reallocate space to the map.
-
-    embedded=True:
-    - hides handle + top pin row
-    - disables hover / collapse logic
-    - behaves as a normal content widget
     """
 
     width_changed = pyqtSignal(int)
@@ -375,7 +102,6 @@ class AutoHidePanel(QFrame):
         side: str,
         expanded_w: int = 300,
         handle_w: int = 22,
-        embedded: bool = False,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -386,16 +112,9 @@ class AutoHidePanel(QFrame):
         self._expanded_w = int(expanded_w)
         self._handle_w = int(handle_w)
 
-        self._embedded = bool(embedded)
-
         self._pinned = False
         self._expanded = True
         self._hover_enabled = True
-
-        if self._embedded:
-            self._pinned = True
-            self._expanded = True
-            self._hover_enabled = False
 
         self._anim = QPropertyAnimation(
             self,
@@ -412,8 +131,6 @@ class AutoHidePanel(QFrame):
         self._hide_timer.setSingleShot(True)
         self._hide_timer.timeout.connect(self._on_hide_timer)
 
-        self._topbar = None
-
         self._build_ui()
         self.expand(immediate=True)
 
@@ -427,14 +144,9 @@ class AutoHidePanel(QFrame):
         return int(self._expanded_w)
 
     def toggle_pinned(self) -> None:
-        if self._embedded:
-            return
         self.set_pinned(not self._pinned)
 
     def set_pinned(self, pinned: bool) -> None:
-        if self._embedded:
-            return
-
         self._pinned = bool(pinned)
         self._update_pin_ui()
 
@@ -452,17 +164,11 @@ class AutoHidePanel(QFrame):
         return bool(self._pinned)
 
     def set_hover_enabled(self, enabled: bool) -> None:
-        if self._embedded:
-            return
         self._hover_enabled = bool(enabled)
         if not self._hover_enabled:
             self._hide_timer.stop()
 
     def expand(self, *, immediate: bool = False) -> None:
-        if self._embedded:
-            self._content.setVisible(True)
-            return
-
         self._hide_timer.stop()
         self._expanded = True
 
@@ -487,9 +193,6 @@ class AutoHidePanel(QFrame):
         immediate: bool = False,
         force: bool = False,
     ) -> None:
-        if self._embedded:
-            return
-
         if self._pinned and not force:
             return
 
@@ -512,16 +215,12 @@ class AutoHidePanel(QFrame):
     # Qt events
     # -----------------------------
     def enterEvent(self, event: QEvent) -> None:
-        if self._embedded:
-            return
         super().enterEvent(event)
         if not self._hover_enabled:
             return
         self.expand()
 
     def leaveEvent(self, event: QEvent) -> None:
-        if self._embedded:
-            return
         super().leaveEvent(event)
         if not self._hover_enabled:
             return
@@ -530,9 +229,6 @@ class AutoHidePanel(QFrame):
         self._hide_timer.start(260)
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
-        if self._embedded:
-            return super().eventFilter(obj, event)
-
         if obj is self._btn_handle:
             if event.type() == QEvent.MouseButtonDblClick:
                 self.toggle_pinned()
@@ -562,21 +258,17 @@ class AutoHidePanel(QFrame):
 
         self._content = QWidget(self)
         cl = QVBoxLayout(self._content)
-        if self._embedded:
-            cl.setContentsMargins(0, 0, 0, 0)
-        else:
-            cl.setContentsMargins(10, 10, 10, 10)
+        cl.setContentsMargins(10, 10, 10, 10)
         cl.setSpacing(10)
 
         top = QWidget(self._content)
-        self._topbar = top
-
         tl = QHBoxLayout(top)
         tl.setContentsMargins(0, 0, 0, 0)
         tl.setSpacing(8)
 
         self._lb = QLabel(self._title, top)
 
+        # Pin as small icon toggle
         self._btn_pin = QToolButton(top)
         self._btn_pin.setCheckable(True)
         self._btn_pin.toggled.connect(self.set_pinned)
@@ -602,24 +294,11 @@ class AutoHidePanel(QFrame):
             root.addWidget(self._handle, 0)
             root.addWidget(self._content, 1)
 
-        if self._embedded:
-            self.setMinimumWidth(0)
-            self.setMaximumWidth(16777215)
-            self._content.setVisible(True)
-            self._handle.setVisible(False)
-            if self._topbar is not None:
-                self._topbar.setVisible(False)
-        else:
-            self.setMinimumWidth(self._handle_w)
-            self.setMaximumWidth(self._expanded_w)
-            self._content.setVisible(False)
-
+        self.setMinimumWidth(self._handle_w)
+        self.setMaximumWidth(self._expanded_w)
         self._update_pin_ui()
 
     def _update_pin_ui(self) -> None:
-        if self._embedded:
-            return
-
         self._btn_pin.blockSignals(True)
         self._btn_pin.setChecked(self._pinned)
         self._btn_pin.blockSignals(False)
@@ -685,23 +364,10 @@ class AutoHideDataPanel(AutoHidePanel):
     sampling_changed = pyqtSignal(object)
 
 
-    # def __init__(
-    #     self,
-    #     *,
-    #     store: GeoConfigStore,
-    #     parent: Optional[QWidget] = None,
-    # ) -> None:
-    #     super().__init__(
-    #         title="Data",
-    #         side="left",
-    #         expanded_w=320,
-    #         parent=parent,
-    #     )
     def __init__(
         self,
         *,
         store: GeoConfigStore,
-        embedded: bool = False,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(
@@ -709,9 +375,7 @@ class AutoHideDataPanel(AutoHidePanel):
             side="left",
             expanded_w=320,
             parent=parent,
-            embedded=embedded,
         )
-        
         self.store = store
 
         self._selected: Set[str] = set()
