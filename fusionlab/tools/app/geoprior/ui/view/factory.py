@@ -28,7 +28,8 @@ from .keys import (
     K_CONTOUR_BANDWIDTH,
     K_CONTOUR_STEPS,
     K_CONTOUR_FILLED,
-    K_CONTOUR_LABELS
+    K_CONTOUR_LABELS, 
+    K_CONTOUR_METRIC
 )
 
 class RenderPayload:
@@ -283,6 +284,12 @@ class ViewFactory:
         steps = int(self._get(K_CONTOUR_STEPS, 10) or 10)
         filled = bool(self._get(K_CONTOUR_FILLED, True))
         labels = bool(self._get(K_CONTOUR_LABELS, False))
+        
+        metric = str(
+            self._get(K_CONTOUR_METRIC, "value") or "value"
+        ).strip().lower()
+        if metric not in ("value", "density"):
+            metric = "value"
 
         return RenderPayload(
             kind="contour_source",
@@ -292,10 +299,9 @@ class ViewFactory:
                 "bandwidth": bandwidth,
                 "steps": steps,
                 "filled": filled,
-                "labels":labels,
-                # Pass 'metric' if you want to switch between
-                # pure density (heatmap) vs value interpolation
-                "metric": "value", 
+                "labels": labels,
+                "metric": metric,  #  (value|density)
             },
         )
+
    

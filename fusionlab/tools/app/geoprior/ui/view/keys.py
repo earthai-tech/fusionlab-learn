@@ -33,7 +33,7 @@ K_CONTOUR_BANDWIDTH = "view.contour.bandwidth"  # Smoothing (km)
 K_CONTOUR_STEPS = "view.contour.steps"          # Number of levels
 K_CONTOUR_FILLED = "view.contour.filled"        # Bool: fill or lines
 K_CONTOUR_LABELS = "view.contour.labels"  
-
+K_CONTOUR_METRIC = "view.contour.metric"
 
 DEFAULTS = {
     K_PLOT_KIND: "scatter",

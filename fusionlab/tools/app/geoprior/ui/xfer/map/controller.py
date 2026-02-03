@@ -41,7 +41,8 @@ from ...view.keys import (
     K_FILTER_ENABLE, 
     K_FILTER_V_MIN, 
     K_FILTER_V_MAX, 
-    K_SPACE_MODE
+    K_SPACE_MODE, 
+    K_CONTOUR_METRIC
 )
 from ..insights import build_xfer_badges
 from ..types import MapApi, MapPoint
@@ -1301,10 +1302,10 @@ class XferMapController(QObject):
             for k, v in DEFAULTS.items():
                 if s.get(k, None) is None:
                     s.set(k, v)
-            # for k, v in VIEW_DEFAULTS.items():
-            #     if s.get(k, None) is None:
-            #         s.set(k, v)
-                    
+            m = str(s.get(K_CONTOUR_METRIC, "") or "").strip()
+            if not m:
+                s.set(K_CONTOUR_METRIC, "value")
+    
     def _map_keys(self) -> Set[str]:
         return set(map_keys())
 
@@ -1326,7 +1327,8 @@ class XferMapController(QObject):
                 K_FILTER_ENABLE,
                 K_FILTER_V_MIN,
                 K_FILTER_V_MAX, 
-                K_SPACE_MODE
+                K_SPACE_MODE, 
+                K_CONTOUR_METRIC
             }
 
     def _as_set(self, keys: object) -> Set[str]:

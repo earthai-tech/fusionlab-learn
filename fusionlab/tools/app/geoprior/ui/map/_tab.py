@@ -26,13 +26,13 @@ from PyQt5.QtWidgets import (
     QWidget,
     QFileDialog,
     QInputDialog,
+    QStackedLayout
 )
 
 from ...config.store import GeoConfigStore
 from ..view.factory import ViewFactory
 
 from .analytics_panel import CollapsibleAnalyticsPanel
-from .tooltab import MapToolTab
 from .canvas import ForecastMapView
 from .data_panel import AutoHideDataPanel
 from .head import MapHeadBar
@@ -47,8 +47,7 @@ from .hotspots import (
 from .coord_utils import ( 
     ensure_lonlat,
     parse_epsg, 
-    df_to_lonlat, 
-    lonlat_to_xy
+    df_to_lonlat
 )
 from .interpretation import (
     cfg_from_get,
@@ -80,21 +79,6 @@ from .keys import (
 )
 from .overlay_dock import SideDrawer, FloatingDockWindow
 
-class _OverlayHost(QWidget):
-    def __init__(
-        self,
-        *,
-        layout_cb,
-        parent=None,
-    ) -> None:
-        super().__init__(parent)
-        self._layout_cb = layout_cb
-
-    def resizeEvent(self, ev) -> None:
-        super().resizeEvent(ev)
-        cb = self._layout_cb
-        if cb is not None:
-            cb()
 
 class MapTab(QWidget):
     
@@ -180,40 +164,20 @@ class MapTab(QWidget):
         
         self._tabs_d = None
 
-        self._overlay_host = _OverlayHost(
-            layout_cb=self._layout_overlays,
-            parent=self,
+        self._overlay_host = QWidget(self)
+        self._overlay_stack = QStackedLayout(self._overlay_host)
+        self._overlay_stack.setStackingMode(
+            QStackedLayout.StackAll
         )
         
-        olay = QVBoxLayout(self._overlay_host)
-        olay.setContentsMargins(0, 0, 0, 0)
-        olay.setSpacing(0)
-        olay.addWidget(self.canvas, 1)
-        
-        # Overlays live ABOVE the canvas (not in a stack).
-        for w in (self._dock_a, self._dock_c, self.panel_d):
-            w.setParent(self._overlay_host)
-            w.raise_()
-
-        # Top-center hover toolbar (hotzone + bar).
-        self.tooltab = MapToolTab(
-            parent=self._overlay_host,
-            store=self.store,
-        )
-        self.tooltab.raise_()
+        self._overlay_stack.addWidget(self.canvas)
+        self._overlay_stack.addWidget(self._dock_a)
+        self._overlay_stack.addWidget(self._dock_c)
         
         self._dock_a.set_panel(self.nav_a)
         self._dock_c.set_panel(self.nav_c)
         
-        # Important: make the overlay widgets only as wide as
-        # the drawer, so they don't cover the whole map.
-        self._dock_a.setFixedWidth(380)
-        self._dock_c.setFixedWidth(380)
-        
-        # Start analytics hidden (same intent as before).
-        self.panel_d.setVisible(False)
-
-        # self._sizes_vert: Optional[list[int]] = None
+        self._sizes_vert: Optional[list[int]] = None
         self._hover_lock = False
 
         self._build_ui()
@@ -230,66 +194,36 @@ class MapTab(QWidget):
         lay.setSpacing(10)
     
         lay.addWidget(self.head)
-        
+    
         center_container = QWidget()
         center_lay = QVBoxLayout(center_container)
         center_lay.setContentsMargins(0, 0, 0, 0)
         center_lay.setSpacing(0)
-        
+    
         center_lay.addWidget(self._overlay_host, 1)
-        
+    
         self.prop_panel = PropagationPanel(
             store=self.store,
             parent=center_container,
         )
         self.prop_panel.setVisible(False)
         center_lay.addWidget(self.prop_panel, 0)
+    
+        self._split_vert.setChildrenCollapsible(False)
+        self._split_vert.addWidget(center_container)
         
-        lay.addWidget(center_container, 1)
+        # Start analytics hidden BEFORE it enters the splitter.
+        # Avoids a Matplotlib resize crash on first layout pass.
+        self.panel_d.setVisible(False)
         
-        # analytics starts hidden
-        self._set_analytics_visible(False)
-
+        self._split_vert.addWidget(self.panel_d)
+        
+        lay.addWidget(self._split_vert, 1)
+        
+        # Keep your existing logic (fine to keep).
         self._set_analytics_visible(False)
         self._split_vert.setSizes([1, 0])
 
-    def _layout_overlays(self) -> None:
-        host = self._overlay_host
-        if host is None:
-            return
-    
-        r = host.rect()
-        w = r.width()
-        h = r.height()
-    
-        # Left dock (Data)
-        if self._dock_a.isVisible():
-            dw = self._dock_a.drawer.width()
-            self._dock_a.setGeometry(0, 0, dw, h)
-            self._dock_a.raise_()
-    
-        # Right dock (View)
-        if self._dock_c.isVisible():
-            dw = self._dock_c.drawer.width()
-            x0 = max(0, w - dw)
-            self._dock_c.setGeometry(x0, 0, dw, h)
-            self._dock_c.raise_()
-    
-        # Bottom dock (Analytics)
-        if self.panel_d.isVisible():
-            ph = int(
-                self.store.get(
-                    "map.analytics.height",
-                    280,
-                ) or 280
-            )
-            ph = max(220, min(ph, h - 60))
-            self.panel_d.setGeometry(0, h - ph, w, ph)
-            self.panel_d.raise_()
-
-        # Hover tooltab (top-center).
-        if getattr(self, "tooltab", None) is not None:
-            self.tooltab.relayout(w, h)
 
     def _apply_defaults(self) -> None:
         cfg = self.store.cfg
@@ -353,11 +287,6 @@ class MapTab(QWidget):
         
         self.head.data_toggled.connect(self._on_data_toggled)
         self.head.view_toggled.connect(self._on_view_toggled)
-
-        if getattr(self, "tooltab", None) is not None:
-            self.tooltab.triggered.connect(
-                self._on_tooltab_triggered,
-            )
         
         self._dock_a.request_pin.connect(self._pin_data)
         self._dock_a.request_close.connect(self._close_data)
@@ -427,6 +356,10 @@ class MapTab(QWidget):
         self.head.clear_map_requested.connect(
             self._on_clear_map_requested
         )
+    
+        self.head.clear_map_clicked.connect(
+            self._on_clear_map_requested
+        )
 
         # Propagation connections
         self.prop_panel.simulation_requested.connect(
@@ -444,74 +377,30 @@ class MapTab(QWidget):
         ag = self.nav_c.alert_group
         ag.focus_requested.connect(self._on_focus_critical)
         ag.report_requested.connect(self._on_issue_warning)
-
-    def _on_tooltab_triggered(
-        self,
-        key: str,
-        state: bool,
-    ) -> None:
-        k = str(key or "").strip().lower()
-
-        if k == "data":
-            self._on_data_toggled(bool(state))
-        elif k == "view":
-            self._on_view_toggled(bool(state))
-        elif k == "focus":
-            self._on_focus_toggled(bool(state))
-        elif k == "analytics":
-            self._on_analytics_toggled(bool(state))
-        elif k == "fit":
-            self.canvas.fit_points()
-        elif k == "clear":
-            self._on_clear_map_requested()
-        elif k == "reset_xyz":
-            self._on_reset_xyz()
         
     def _on_data_toggled(self, on: bool) -> None:
         if self._win_a.isVisible():
             self._win_a.raise_()
             self._win_a.activateWindow()
             self.head.set_data_checked(False)
-            if getattr(self, "tooltab", None) is not None:
-                self.tooltab.set_checked("data", False)
             return
         self._dock_a.set_open(bool(on))
-        self._layout_overlays()
-
-        is_open = bool(self._dock_a.isVisible())
-        self.head.set_data_checked(is_open)
-        if getattr(self, "tooltab", None) is not None:
-            self.tooltab.set_checked("data", is_open)
-        
+    
     def _on_view_toggled(self, on: bool) -> None:
         if self._win_c.isVisible():
             self._win_c.raise_()
             self._win_c.activateWindow()
             self.head.set_view_checked(False)
-            if getattr(self, "tooltab", None) is not None:
-                self.tooltab.set_checked("view", False)
             return
         self._dock_c.set_open(bool(on))
-        self._layout_overlays()
-
-        is_open = bool(self._dock_c.isVisible())
-        self.head.set_view_checked(is_open)
-        if getattr(self, "tooltab", None) is not None:
-            self.tooltab.set_checked("view", is_open)
     
     def _close_data(self) -> None:
         self._dock_a.set_open(False)
         self.head.set_data_checked(False)
-        if getattr(self, "tooltab", None) is not None:
-            self.tooltab.set_checked("data", False)
-        self._layout_overlays()
     
     def _close_view(self) -> None:
         self._dock_c.set_open(False)
         self.head.set_view_checked(False)
-        if getattr(self, "tooltab", None) is not None:
-            self.tooltab.set_checked("view", False)
-        self._layout_overlays()
     
     def _pin_data(self) -> None:
         w = self._dock_a.take_panel()
@@ -519,8 +408,6 @@ class MapTab(QWidget):
             return
         self._dock_a.set_open(False)
         self.head.set_data_checked(False)
-        if getattr(self, "tooltab", None) is not None:
-            self.tooltab.set_checked("data", False)
         self._win_a.set_panel(w)
         self._win_a.show()
         self._win_a.raise_()
@@ -539,8 +426,6 @@ class MapTab(QWidget):
             return
         self._dock_c.set_open(False)
         self.head.set_view_checked(False)
-        if getattr(self, "tooltab", None) is not None:
-            self.tooltab.set_checked("view", False)
         self._win_c.set_panel(w)
         self._win_c.show()
         self._win_c.raise_()
@@ -1092,40 +977,40 @@ class MapTab(QWidget):
             for k, v in view.items():
                 self.store.set("map.view." + str(k), v)
 
+    # def _on_map_point_clicked(self, x: float, y: float) -> None:
+    #     # If focus mode hides analytics, exit focus
+    #     if bool(self.store.get("map.focus_mode", False)):
+    #         self.store.set("map.focus_mode", False)
+    
+    #     # Ensure analytics is visible and select Inspector tab
+    #     if not bool(self.store.get("map.show_analytics", False)):
+    #         self.store.set("map.show_analytics", True)
+    #         self._set_analytics_visible(True)
+    
+    #     try:
+    #         self.panel_d.tabs.setCurrentWidget(self.panel_d.inspector)
+    #         self.panel_d.inspector.set_xy(float(x), float(y))
+    #     except Exception:
+    #         pass
 
     def _on_map_point_clicked(self, x: float, y: float) -> None:
         if bool(self.store.get("map.focus_mode", False)):
             self.store.set("map.focus_mode", False)
     
+        # Make sure analytics is on
         if not bool(self.store.get("map.show_analytics", False)):
             self.store.set("map.show_analytics", True)
     
         tabs = self._tabs_d
         if tabs is None:
             tabs = getattr(self.panel_d, "tabs", None)
+    
         if tabs is None:
             return
     
         try:
-            # JS emits lon/lat (EPSG:4326). Analytics expects data X/Y.
-            mode = str(self.store.get(
-                "map.coord_mode", "lonlat")).strip().lower()
-            utm_epsg = parse_epsg(self.store.get(
-                "map.utm_epsg", None))
-            src_epsg = parse_epsg(self.store.get(
-                "map.coord_epsg", None))
-    
-            
-            x_data, y_data, _ok, _msg = lonlat_to_xy(
-                float(x),
-                float(y),
-                mode=mode,
-                utm_epsg=utm_epsg,
-                src_epsg=src_epsg,
-            )
-    
             tabs.setCurrentWidget(self.panel_d.inspector)
-            self.panel_d.inspector.set_xy(float(x_data), float(y_data))
+            self.panel_d.inspector.set_xy(float(x), float(y))
         except Exception:
             pass
 
@@ -1559,6 +1444,20 @@ class MapTab(QWidget):
         self._check_alerts()
 
 
+    # def _freeze_hover(self, ms: int = 250) -> None:
+    #     if bool(self.store.get("map.focus_mode", False)):
+    #         return
+    
+    #     self._hover_lock = True
+    
+    #     # Close drawers while we rebind data to avoid "jumping"
+    #     self._dock_a.set_open(False)
+    #     self._dock_c.set_open(False)
+    #     self.head.set_data_checked(False)
+    #     self.head.set_view_checked(False)
+    
+    #     QTimer.singleShot(ms, self._unfreeze_hover)
+
     def _freeze_hover(self, ms: int = 250) -> None:
         if bool(self.store.get("map.focus_mode", False)):
             return
@@ -1775,19 +1674,10 @@ class MapTab(QWidget):
         self.head.set_coord_mode(coord)
         self.head.set_xyz(x=x, y=y, z=z)
         self.head.set_focus_checked(focus)
-
-        if getattr(self, "tooltab", None) is not None:
-            self.tooltab.set_checked("focus", focus)
     
         # Analytics checkbox should appear ON if
         # either embedded is on OR pinned exists.
         self.head.set_analytics_checked(show_d or pinned)
-
-        if getattr(self, "tooltab", None) is not None:
-            self.tooltab.set_checked(
-                "analytics",
-                bool(show_d or pinned),
-            )
     
         self.canvas.set_focus_checked(focus)
     
@@ -1844,12 +1734,15 @@ class MapTab(QWidget):
         names = [n for n in names if n.strip()]
         self.head.set_bookmarks(names)
     
-
     
     def _set_focus_mode(self, enabled: bool) -> None:
         enabled = bool(enabled)
     
         if enabled:
+            if self._sizes_vert is None:
+                self._sizes_vert = self._split_vert.sizes()
+    
+            # Close drawers/windows
             self._dock_a.set_open(False)
             self._dock_c.set_open(False)
             self._win_a.hide()
@@ -1858,20 +1751,48 @@ class MapTab(QWidget):
             self.head.set_data_checked(False)
             self.head.set_view_checked(False)
     
-            self._set_analytics_visible(False)
+            # Hide analytics area
+            self.panel_d.setVisible(False)
+            self._split_vert.setSizes([1, 0])
+            return
     
-        self._layout_overlays()
-
-
+        # If leaving focus mode, restore according to store.
+        show_d = bool(
+            self.store.get("map.show_analytics", False)
+        )
+        pinned = bool(
+            self.store.get("map.analytics.pinned", False)
+        )
+    
+        if pinned:
+            # Pinned: keep embedded hidden,
+            # floating window managed elsewhere.
+            self._set_analytics_visible(False)
+            self._split_vert.setSizes([1, 0])
+        else:
+            self._set_analytics_visible(show_d)
+    
+            if self._sizes_vert and show_d:
+                self._split_vert.setSizes(self._sizes_vert)
+            elif show_d:
+                self._split_vert.setSizes([750, 250])
+            else:
+                self._split_vert.setSizes([1, 0])
+    
+        self._sizes_vert = None
+    
+    
     def _set_analytics_visible(self, visible: bool) -> None:
         visible = bool(visible)
+        self.panel_d.setVisible(visible)
+    
         if visible:
             self.panel_d.expand()
+            self._split_vert.setSizes([750, 250])
         else:
             self.panel_d.collapse()
+            self._split_vert.setSizes([1, 0])
     
-        self._layout_overlays()
-
                 
     def _infer_city_from_path(self, p: str) -> tuple[str, str, str]:
         try:

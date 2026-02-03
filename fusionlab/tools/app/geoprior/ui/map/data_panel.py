@@ -684,19 +684,6 @@ class AutoHideDataPanel(AutoHidePanel):
     active_changed = pyqtSignal(object)
     sampling_changed = pyqtSignal(object)
 
-
-    # def __init__(
-    #     self,
-    #     *,
-    #     store: GeoConfigStore,
-    #     parent: Optional[QWidget] = None,
-    # ) -> None:
-    #     super().__init__(
-    #         title="Data",
-    #         side="left",
-    #         expanded_w=320,
-    #         parent=parent,
-    #     )
     def __init__(
         self,
         *,
@@ -713,6 +700,9 @@ class AutoHideDataPanel(AutoHidePanel):
         )
         
         self.store = store
+        self._ds_base_rows = 3
+        self._ds_min_rows = 8
+        self._ds_tune_pending = False
 
         self._selected: Set[str] = set()
         self._cities: List[MapCity] = []
@@ -1212,6 +1202,12 @@ class AutoHideDataPanel(AutoHidePanel):
         self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         self.tree.itemSelectionChanged.connect(self._on_active_item_changed)
     
+        self.tree.itemExpanded.connect(
+        self._on_tree_fold_changed
+        )
+        self.tree.itemCollapsed.connect(
+            self._on_tree_fold_changed
+        )
         lay.addWidget(self.tree, 1)
         return w
     
@@ -1290,7 +1286,9 @@ class AutoHideDataPanel(AutoHidePanel):
         self.btn_remove.clicked.connect(self._on_remove_manual)
     
         return w
-
+    
+    def _on_tree_fold_changed(self, *_a) -> None:
+        self._schedule_ds_tune()
 
     def _build_details_box(self, parent: QWidget) -> QFrame:
         box = QFrame(parent)
@@ -1409,6 +1407,83 @@ class AutoHideDataPanel(AutoHidePanel):
     
         return box
 
+    def _schedule_ds_tune(self) -> None:
+        if getattr(self, "_ds_tune_pending", False):
+            return
+        self._ds_tune_pending = True
+        QTimer.singleShot(0, self._tune_ds_min_height)
+
+    def _active_tree(self) -> QTreeWidget:
+        src = str(
+            self.store.get("map.data_source", "auto")
+        ).strip().lower()
+        if src == "manual":
+            return self.tree_manual
+        return self.tree
+
+    def _tune_ds_min_height(self) -> None:
+        self._ds_tune_pending = False
+
+        tree = self._active_tree()
+        n = self._count_visible_dataset_rows(tree)
+
+        base = int(getattr(self, "_ds_base_rows", 3))
+        mins = int(getattr(self, "_ds_min_rows", 8))
+
+        if n <= 0:
+            rows = base
+        elif n <= base:
+            rows = base
+        elif n < mins:
+            rows = n
+        else:
+            rows = mins
+
+        row_h = int(tree.sizeHintForRow(0) or 0)
+        if row_h <= 0:
+            row_h = int(tree.fontMetrics().height() + 10)
+
+        hdr = tree.header()
+        hdr_h = int(hdr.sizeHint().height() or 0)
+
+        pad = 6
+        h = int(hdr_h + rows * row_h + pad)
+
+        tree.setMinimumHeight(h)
+        self.stack.setMinimumHeight(h)
+
+    def _count_visible_dataset_rows(
+        self,
+        tree: QTreeWidget,
+    ) -> int:
+        def ok_visible(it: QTreeWidgetItem) -> bool:
+            if it.isHidden():
+                return False
+            p = it.parent()
+            while p is not None:
+                if p.isHidden():
+                    return False
+                if not p.isExpanded():
+                    return False
+                p = p.parent()
+            return True
+
+        def walk(it: QTreeWidgetItem):
+            yield it
+            for k in range(it.childCount()):
+                yield from walk(it.child(k))
+
+        c = 0
+        for i in range(tree.topLevelItemCount()):
+            top = tree.topLevelItem(i)
+            for it in walk(top):
+                p = it.data(0, ROLE_PATH)
+                if not p:
+                    continue
+                if ok_visible(it):
+                    c += 1
+        return c
+
     # -------------------------------------------------
     # Store sync
     # -------------------------------------------------
@@ -1440,6 +1515,8 @@ class AutoHideDataPanel(AutoHidePanel):
                 _recurse(tree.topLevelItem(i))
         finally:
             tree.blockSignals(False)
+            
+        self._schedule_ds_tune()
 
 
     def _sync_from_store(self) -> None:
@@ -1537,10 +1614,6 @@ class AutoHideDataPanel(AutoHidePanel):
         self.active_changed.emit(str(p))
         self.columns_changed.emit(list(meta.cols))
         
-        # self.split.setSizes([650, 250])
-        # if want smaller 
-        # self.split.setSizes([700, 220])
-
 
     def _colmap_from_store(self) -> dict:
         return {
@@ -1548,27 +1621,7 @@ class AutoHideDataPanel(AutoHidePanel):
             "step": str(self.store.get("map.step_col", "")),
         }
     
-    # def _set_active_file(self, path: str) -> None:
-    #     self.store.set("map.active_file", str(path))
-    
-    #     cm = self._colmap_from_store()
-    #     meta = load_forecast_meta(
-    #         Path(path),
-    #         colmap=cm,
-    #     )
 
-    #     self._fill_details(meta)
-    
-    #     # Expand bottom details pane.
-    #     self.split.setSizes([650, 250])
-        
-    # def _colmap_from_store(self) -> dict:
-    #     return {
-    #         "x": str(self.store.get("map.x_col", "")),
-    #         "y": str(self.store.get("map.y_col", "")),
-    #         "time": str(self.store.get("map.time_col", "")),
-    #         "step": str(self.store.get("map.step_col", "")),
-    #     }
     def _details_set_empty(self) -> None:
         self.ed_active.setText("")
         self.lb_status.setText("No dataset selected.")
@@ -1790,6 +1843,9 @@ class AutoHideDataPanel(AutoHidePanel):
                 self._add_city_item(city)
         finally:
             self.tree.blockSignals(False)
+        
+        self._schedule_ds_tune()
+
 
     def _add_city_item(self, city: MapCity) -> None:
         it = QTreeWidgetItem(self.tree)
@@ -1906,7 +1962,9 @@ class AutoHideDataPanel(AutoHidePanel):
                 it.setCheckState(0, chk)
         finally:
             self.tree_manual.blockSignals(False)
-
+            
+        self._schedule_ds_tune()
+        
     def _on_add_csv(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
             self,

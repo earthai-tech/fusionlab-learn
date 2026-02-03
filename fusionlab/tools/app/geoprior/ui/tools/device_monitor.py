@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
@@ -41,6 +42,12 @@ from matplotlib.backends.backend_qt5agg import (
     FigureCanvasQTAgg as FigureCanvas,
 )
 from matplotlib.figure import Figure
+
+
+try:
+    from numpy.linalg import LinAlgError
+except Exception:  # pragma: no cover
+    LinAlgError = Exception  # type: ignore
 
 
 def _safe_str(x: Any) -> str:
@@ -284,10 +291,12 @@ class DeviceMonitorTool(QWidget):
         # ------------------------------
         # Plot area
         # ------------------------------
-        self._fig = Figure(
-            figsize=(6, 2.6),
-            tight_layout=True,
-        )
+        # self._fig = Figure(
+        #     figsize=(6, 2.6),
+        #     tight_layout=True,
+        # )
+        self._fig = Figure(figsize=(6, 2.6))
+
         self._canvas = FigureCanvas(self._fig)
         root.addWidget(self._canvas, 1)
 
@@ -375,10 +384,18 @@ class DeviceMonitorTool(QWidget):
             return
         ms = int(self._sp_int.value()) * 1000
         self._timer.start(ms)
-
+        
     def _tick(self) -> None:
+        if not self.isVisible():
+            return
+        if self._canvas.width() <= 2:
+            return
+        if self._canvas.height() <= 2:
+            return
+    
         self._refresh_probe(only_live=True)
         self._refresh_plot()
+
 
     # -----------------------------------------------------------------
     # Prefs (store + settings)
@@ -829,7 +846,18 @@ class DeviceMonitorTool(QWidget):
         # One compact legend (combined)
         ax.legend(handles, labels, loc="upper right")
 
-        self._fig.tight_layout()
+        # self._fig.tight_layout()
+        # self._canvas.draw()
+        try:
+            w, h = self._canvas.get_width_height()
+            if w <= 2 or h <= 2:
+                return
+            self._fig.tight_layout()
+        except (LinAlgError, ValueError):
+            # tight_layout can fail on transient sizes
+            # or complex twinx configurations.
+            pass
+        
         self._canvas.draw()
 
     def _clear_hist(self) -> None:
@@ -1224,3 +1252,11 @@ class DeviceMonitorTool(QWidget):
         # If user typed CUDA_VISIBLE_DEVICES in GUI prefs,
         # reflect it visually (no env mutation here).
         pass
+    
+    def showEvent(self, ev) -> None:
+        super().showEvent(ev)
+        self._apply_timer()
+    
+    def hideEvent(self, ev) -> None:
+        self._timer.stop()
+        super().hideEvent(ev)

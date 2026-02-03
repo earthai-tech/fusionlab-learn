@@ -384,11 +384,18 @@ class ForecastMapView(QFrame):
     # -----------------------------
     # Public API
     # -----------------------------
+    # def set_focus_checked(self, checked: bool) -> None:
+    #     self.btn_focus.blockSignals(True)
+    #     self.btn_focus.setChecked(bool(checked))
+    #     self.btn_focus.blockSignals(False)
     def set_focus_checked(self, checked: bool) -> None:
-        self.btn_focus.blockSignals(True)
-        self.btn_focus.setChecked(bool(checked))
-        self.btn_focus.blockSignals(False)
-
+        btn = getattr(self, "btn_focus", None)
+        if btn is None:
+            return
+        btn.blockSignals(True)
+        btn.setChecked(bool(checked))
+        btn.blockSignals(False)
+        
     # def clear_points(self) -> None:
     #     self._run_js(
     #         "if (window.__GeoPriorMap) {"
@@ -843,11 +850,23 @@ class ForecastMapView(QFrame):
                 pass
             stack.addWidget(self._web)
 
-        self._overlay = self._make_overlay(self._container)
+        # self._overlay = self._make_overlay(self._container)
+        # stack.addWidget(self._overlay)
+
+        # root.addWidget(self._container, 1)
+        # The hover tooltab (MapTab overlay) owns the
+        # interaction controls (fit/clear/focus/etc.).
+        # Keep the map canvas visually clean.
+        self._overlay = QWidget(self._container)
+        self._overlay.setObjectName("mapOverlayEmpty")
+        self._overlay.setAttribute(
+            Qt.WA_TranslucentBackground,
+            True,
+        )
         stack.addWidget(self._overlay)
 
         root.addWidget(self._container, 1)
-
+        
     def _make_overlay(self, parent: QWidget) -> QWidget:
         w = QWidget(parent)
         w.setAttribute(Qt.WA_TranslucentBackground, True)

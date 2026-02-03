@@ -73,7 +73,8 @@ from ...view.keys import (
     K_FILTER_ENABLE, 
     K_FILTER_V_MIN, 
     K_FILTER_V_MAX, 
-    K_SPACE_MODE
+    K_SPACE_MODE, 
+    K_CONTOUR_METRIC
 )
 from .interactions_ui import XferMapInteractionsBlock
 from .interpretation import map_help_html
@@ -267,6 +268,14 @@ class XferMapAdvancedPanel(QWidget):
         self.sp_cont_steps.setRange(2, 50)
         self.sp_cont_steps.setToolTip("Number of contour levels")
         
+        # Contour Metric
+        self.cmb_cont_metric = QComboBox(self)
+        self.cmb_cont_metric.addItems(["value", "density"])
+        self.cmb_cont_metric.setToolTip(
+            "value: value-weighted density\n"
+            "density: pure point density"
+        )
+
         self.chk_cont_fill = QCheckBox("Filled contours", self)
         self.chk_cont_lbl  = QCheckBox("Annotate", self)
 
@@ -290,17 +299,24 @@ class XferMapAdvancedPanel(QWidget):
         self.sec_viz.body_l.addWidget(self.lbl_cont_steps, 2, 0)
         self.sec_viz.body_l.addWidget(self.sp_cont_steps, 2, 1)
         
-        self.sec_viz.body_l.addWidget(self.chk_cont_fill, 3, 0)
-        self.sec_viz.body_l.addWidget(self.chk_cont_lbl, 3, 1)
+        # row: contour metric (row 3)
+        self.lbl_cont_metric = QLabel("Contour metric", self)
+        self.sec_viz.body_l.addWidget(self.lbl_cont_metric, 3, 0)
+        self.sec_viz.body_l.addWidget(self.cmb_cont_metric, 3, 1)
 
+        # move fill/labels to row 4
+        self.sec_viz.body_l.addWidget(self.chk_cont_fill, 4, 0)
+        self.sec_viz.body_l.addWidget(self.chk_cont_lbl, 4, 1)
+
+        # move hex rows down to 5/6
         self.lbl_hex_grid = QLabel("Grid Size", self)
-        self.sec_viz.body_l.addWidget(self.lbl_hex_grid, 4, 0)
-        self.sec_viz.body_l.addWidget(self.sp_hex_grid, 4, 1)
+        self.sec_viz.body_l.addWidget(self.lbl_hex_grid, 5, 0)
+        self.sec_viz.body_l.addWidget(self.sp_hex_grid, 5, 1)
 
         self.lbl_hex_mt = QLabel("Metric", self)
-        self.sec_viz.body_l.addWidget(self.lbl_hex_mt, 5, 0)
-        self.sec_viz.body_l.addWidget(self.cmb_hex_metric, 5, 1)
-        
+        self.sec_viz.body_l.addWidget(self.lbl_hex_mt, 6, 0)
+        self.sec_viz.body_l.addWidget(self.cmb_hex_metric, 6, 1)
+
         root.addWidget(self.sec_viz, 0)
         
         # -------------------------
@@ -571,7 +587,10 @@ class XferMapAdvancedPanel(QWidget):
         self.sp_vmin.valueChanged.connect(self._push_filt)
         self.sp_vmax.valueChanged.connect(self._push_filt)
         self.cmb_space.currentIndexChanged.connect(self._push_filt)
-        
+        self.cmb_cont_metric.currentIndexChanged.connect(
+            self._push_viz
+        )
+
         
     def _on_load_meta_click(self) -> None:
             path, _ = QFileDialog.getOpenFileName(
@@ -629,6 +648,7 @@ class XferMapAdvancedPanel(QWidget):
         b_cst = QSignalBlocker(self.sp_cont_steps)
         b_cfil = QSignalBlocker(self.chk_cont_fill)
         b_hgd = QSignalBlocker(self.sp_hex_grid)
+        b_cmet = QSignalBlocker(self.cmb_cont_metric)
         
         _ = (
             b_max,
@@ -641,7 +661,7 @@ class XferMapAdvancedPanel(QWidget):
             b_cfil, 
             b_hgd, 
             
-            # b_src,
+            b_cmet,
             b_pm,
             b_sep,
             b_met,
@@ -815,6 +835,13 @@ class XferMapAdvancedPanel(QWidget):
         if not ch or K_FILTER_ENABLE in ch:
             self.chk_filt_en.setChecked(bool(s.get(K_FILTER_ENABLE, False)))
             
+        if not ch or K_CONTOUR_METRIC in ch:
+            m = str(s.get(K_CONTOUR_METRIC, "value") or "value")
+            i = self.cmb_cont_metric.findText(m)
+            if i < 0:
+                i = 0
+            self.cmb_cont_metric.setCurrentIndex(i)
+
         self._enable_viz_opts()
         self._enable_hot_ana()
         
@@ -835,6 +862,7 @@ class XferMapAdvancedPanel(QWidget):
             s.set(K_CONTOUR_LABELS, self.chk_cont_lbl.isChecked())
             s.set(K_HEX_GRIDSIZE, self.sp_hex_grid.value())
             s.set(K_HEX_METRIC, self.cmb_hex_metric.currentText())
+            s.set(K_CONTOUR_METRIC, self.cmb_cont_metric.currentText())
 
         self._enable_viz_opts()
         
@@ -864,6 +892,9 @@ class XferMapAdvancedPanel(QWidget):
         self.sp_hex_grid.setVisible(is_hex)
         self.lbl_hex_mt.setVisible(is_hex)
         self.cmb_hex_metric.setVisible(is_hex)
+        self.lbl_cont_metric.setVisible(is_cont)
+        self.cmb_cont_metric.setVisible(is_cont)
+
         
     def _push_view(self) -> None:
         s = self._s

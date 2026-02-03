@@ -59,50 +59,18 @@ def _find_project_root(
 
 
 @lru_cache(maxsize=256)
-def try_icon(name: str) -> Optional[QIcon]:
-    """
-    Resolve an icon from the GeoPrior icons folder.
-
-    This searches for: <project_root>/geoprior/icons/<name>
-
-    Parameters
-    ----------
-    name
-        File name like "metric_dashboard.svg".
-
-    Returns
-    -------
-    QIcon or None
-        QIcon if found, else None.
-    """
-    nm = (name or "").strip()
-    if not nm:
-        return None
-
-    here = Path(__file__).resolve()
-    root = _find_project_root(here, markers=("geoprior",), max_up=14)
-    if root is None:
-        return None
-
-    p = root / "geoprior" / "icons" / nm
-    if not p.exists():
-        return None
-
-    return QIcon(str(p))
-
-
-@lru_cache(maxsize=256)
 def try_icon_path(name: str) -> Optional[Path]:
-    """
-    Like try_icon(), but returns the resolved Path instead of QIcon.
-    Useful if you need to pass the path to other APIs.
-    """
+    """Resolve an icon file path from the GeoPrior icons folder."""
     nm = (name or "").strip()
     if not nm:
         return None
 
     here = Path(__file__).resolve()
-    root = _find_project_root(here, markers=("geoprior",), max_up=14)
+    root = _find_project_root(
+        here,
+        markers=("geoprior",),
+        max_up=14,
+    )
     if root is None:
         return None
 
@@ -110,3 +78,42 @@ def try_icon_path(name: str) -> Optional[Path]:
     if p.exists():
         return p
     return None
+
+
+def try_icon(
+    name: str,
+    *,
+    fallback: Optional[QIcon] = None,
+    size: Optional[int] = None,
+) -> QIcon:
+    """Resolve an icon with a safe fallback.
+
+    Parameters
+    ----------
+    name
+        File name like "analytics.svg".
+    fallback
+        Icon returned when the file does not exist.
+    size
+        Optional render hint (kept for compatibility).
+        QIcon handles SVG scaling, so this is not
+        required. It is accepted to keep a stable API.
+
+    Returns
+    -------
+    QIcon
+        A valid icon object (may be null).
+    """
+    _ = size  # kept for call-site compatibility
+
+    p = try_icon_path(name)
+    if p is not None:
+        ico = QIcon(str(p))
+        if not ico.isNull():
+            return ico
+
+    if fallback is None:
+        return QIcon()
+    return fallback
+
+

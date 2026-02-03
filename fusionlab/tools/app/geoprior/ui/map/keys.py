@@ -138,6 +138,9 @@ _MAP_DEFAULTS = {
     "map.view.vmax": 1.0,
     "map.view.marker_size": 6,
     "map.view.marker_opacity": 0.9,
+
+    # Hover toolbar
+    "map.tooltab.pinned": False,
     
     "map.sampling.mode": "auto",
     "map.sampling.method": "grid",

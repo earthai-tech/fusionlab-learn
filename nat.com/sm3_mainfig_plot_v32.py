@@ -92,6 +92,8 @@ def plot_sm3_identifiability_v32(
     show_prior: bool = True,
     tau_units: str = "year",
     metric: str = "ridge_resid",
+    k_from_tau: bool = True,
+    k_cl_source: str = "prior",  # "prior" | "true" | "est"
 ) -> None:
     """
     metric:
@@ -180,18 +182,98 @@ def plot_sm3_identifiability_v32(
     mae_tau = float(np.nanmean(np.abs(y_tau - x_tau)))
     slope_tau, _, r2_tau = _linfit_stats(x_tau, y_tau)
 
+    # # -----------------
+    # # (b) K recovery (m/yr)
+    # # -----------------
+    # K_true = np.clip(df["K_true_mps"].to_numpy(float), eps, None)
+    # x_K = np.log10(K_true * SEC_PER_YEAR)
+    # y_K = np.log10(
+    #     np.clip(
+    #         df["K_est_med_m_per_year"].to_numpy(float),
+    #         eps,
+    #         None,
+    #     )
+    # )
+    # mae_K = float(np.nanmean(np.abs(y_K - x_K)))
+    # slope_K, _, r2_K = _linfit_stats(x_K, y_K)
     # -----------------
     # (b) K recovery (m/yr)
+    # Option A: K implied by tau via closure:
+    #   K = Hd^2 * Ss / (pi^2 * kappa * tau)
     # -----------------
-    K_true = np.clip(df["K_true_mps"].to_numpy(float), eps, None)
+    K_true = np.clip(
+        df["K_true_mps"].to_numpy(float),
+        eps,
+        None,
+    )
     x_K = np.log10(K_true * SEC_PER_YEAR)
-    y_K = np.log10(
-        np.clip(
-            df["K_est_med_m_per_year"].to_numpy(float),
+
+    if k_from_tau:
+        tau_est = np.clip(
+            df["tau_est_med_sec"].to_numpy(float),
             eps,
             None,
         )
-    )
+
+        if k_cl_source == "true":
+            Ss_use = np.clip(
+                df["Ss_true"].to_numpy(float),
+                eps,
+                None,
+            )
+            Hd_use = np.clip(
+                df["Hd_true"].to_numpy(float),
+                eps,
+                None,
+            )
+        elif k_cl_source == "est":
+            Ss_use = np.clip(
+                df["Ss_est_med"].to_numpy(float),
+                eps,
+                None,
+            )
+            Hd_use = np.clip(
+                df["Hd_est_med"].to_numpy(float),
+                eps,
+                None,
+            )
+        else:
+            Ss_use = np.clip(
+                df["Ss_prior"].to_numpy(float),
+                eps,
+                None,
+            )
+            Hd_use = np.clip(
+                df["Hd_prior"].to_numpy(float),
+                eps,
+                None,
+            )
+
+        kappa = np.clip(
+            df["kappa_b"].to_numpy(float),
+            eps,
+            None,
+        )
+
+        K_cl_mps = (Hd_use**2) * Ss_use / (
+            np.pi**2 * kappa * tau_est
+        )
+        y_K = np.log10(
+            np.clip(K_cl_mps * SEC_PER_YEAR, eps, None)
+        )
+        k_title = "Permeability from closure"
+        ylabK = r"$\log_{10}\,K_{cl}(\hat{\tau})$ (m/yr)"
+    else:
+        y_K = np.log10(
+            np.clip(
+                df["K_est_med_m_per_year"].to_numpy(float),
+                eps,
+                None,
+            )
+        )
+        k_title = "Permeability recovery"
+        ylabK = r"$\log_{10}\,\hat{K}$ (m/yr)"
+
     mae_K = float(np.nanmean(np.abs(y_K - x_K)))
     slope_K, _, r2_K = _linfit_stats(x_K, y_K)
 
@@ -351,9 +433,11 @@ def plot_sm3_identifiability_v32(
     axB.set_xlim(lo, hi)
     axB.set_ylim(lo, hi)
 
-    axB.set_title("Permeability recovery", pad=2)
+    axB.set_title(k_title, pad=2)
+    axB.set_ylabel(ylabK)
+    # axB.set_title("Permeability recovery", pad=2)
     axB.set_xlabel(r"$\log_{10}\,K_{true}$ (m/yr)")
-    axB.set_ylabel(r"$\log_{10}\,\hat{K}$ (m/yr)")
+    # axB.set_ylabel(r"$\log_{10}\,\hat{K}$ (m/yr)")
 
     axB.text(
         0.03,

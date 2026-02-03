@@ -46,6 +46,20 @@ from PyQt5.QtWidgets import (
 
 HAS_MPL = _Canvas is not None and Figure is not None
 
+_CANVAS_CLS = _Canvas
+
+if HAS_MPL and _Canvas is not None:
+    class _SafeCanvas(_Canvas):
+        def resizeEvent(self, event) -> None:
+            sz = event.size()
+            if sz.width() <= 1 or sz.height() <= 1:
+                return
+            try:
+                super().resizeEvent(event)
+            except ValueError:
+                return
+
+    _CANVAS_CLS = _SafeCanvas
 
 @dataclass
 class PlotActionBar:
@@ -156,7 +170,7 @@ class MplPlot(QFrame):
             return
 
         self.fig = Figure(figsize=(5, 3), dpi=100)
-        self.canvas = _Canvas(self.fig)
+        self.canvas = _CANVAS_CLS(self.fig)
         self.ax = self.fig.add_subplot(111)
 
         if self._with_tb and _Toolbar is not None:
@@ -197,6 +211,67 @@ class MplPlot(QFrame):
             btn_clear=btn_clear,
         )
         return w
+
+    def ensure_2d_axes(self) -> None:
+        """
+        Ensure the widget uses a single 2D axes.
+
+        Some plots may replace the axes with a 3D projection. This helper
+        removes extra axes and recreates a fresh 2D axes as self.ax.
+        """
+        if not self.is_ready():
+            return
+        assert self.fig is not None
+
+        fig = self.fig
+
+        # Remove *all* axes (2D/3D) to avoid leftover projections.
+        for a in list(fig.axes):
+            try:
+                a.remove()
+            except Exception:
+                pass
+
+        # Create a fresh 2D axes.
+        self.ax = fig.add_subplot(111)
+        self.canvas.draw_idle()
+
+    def show_empty(
+        self,
+        *,
+        title: str = "No data to plot",
+        message: str = "",
+        hint: str = "",
+    ) -> None:
+        if not self.is_ready():
+            return
+
+        self.ensure_2d_axes()
+        assert self.ax is not None
+
+        self.ax.set_axis_off()
+
+        t = str(title or "").strip()
+        m = str(message or "").strip()
+        h = str(hint or "").strip()
+
+        lines = [x for x in (t, m, h) if x]
+        if not lines:
+            lines = ["No data to plot"]
+
+        txt = "\n".join(lines)
+
+        self.ax.text(
+            0.5,
+            0.5,
+            txt,
+            ha="center",
+            va="center",
+            fontsize=12,
+            transform=self.ax.transAxes,
+        )
+        self.draw()
+
 
 def safe_quantile_cols(cols: Optional[Iterable[object]]) -> list[Tuple[float, str]]:
     """

@@ -1,26 +1,13 @@
 # geoprior/ui/map/overlay_dock.py
-# -*- coding: utf-8 -*-
-# License: BSD-3-Clause
-# Author: LKouadio
-
-"""
-Generic overlay dock primitives (no QDockWidget).
-
-Pattern
--------
-- A SideDrawer overlays the map (left/right).
-- A FloatingDockWindow is a tool window (pin/pop).
-- The SAME panel widget is moved between them by
-  take_panel()/set_panel() (reparenting).
-
-This matches the Xfer advanced overlay behaviour.
-"""
+# Drop-in replacement: uses try_icon() with SVGs + fallbacks.
+# Supports side="left"|"right"|"panel" to pick dock icons.
 
 from __future__ import annotations
 
 from typing import Optional
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, QSize, QTimer, pyqtSignal
+from PyQt5.QtGui import QGuiApplication, QIcon
 from PyQt5.QtWidgets import (
     QDialog,
     QFrame,
@@ -30,12 +17,28 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QStyle,
+    QApplication,
+    QSizePolicy
 )
+
+from ..icon_utils import try_icon
+
 
 __all__ = [
     "SideDrawer",
     "FloatingDockWindow",
 ]
+
+
+def _icon_or_std(
+    w: QWidget,
+    svg_name: str,
+    std: QStyle.StandardPixmap,
+) -> QIcon:
+    ico = try_icon(svg_name)
+    if ico is not None and (not ico.isNull()):
+        return ico
+    return w.style().standardIcon(std)
 
 
 class SideDrawer(QWidget):
@@ -92,8 +95,10 @@ class SideDrawer(QWidget):
         self.btn_pin.setAutoRaise(True)
         self.btn_pin.setToolTip("Pin (pop out)")
         self.btn_pin.setIcon(
-            self.style().standardIcon(
-                QStyle.SP_TitleBarMaxButton
+            _icon_or_std(
+                self.btn_pin,
+                "pin.svg",
+                QStyle.SP_TitleBarMaxButton,
             )
         )
         self.btn_pin.clicked.connect(self.request_pin.emit)
@@ -108,14 +113,13 @@ class SideDrawer(QWidget):
                 QStyle.SP_TitleBarCloseButton
             )
         )
-        self.btn_close.clicked.connect(
-            self.request_close.emit
-        )
+        self.btn_close.clicked.connect(self.request_close.emit)
         hdr.addWidget(self.btn_close, 0)
 
         dlay.addLayout(hdr, 0)
 
         self._panel_wrap = QWidget(self.drawer)
+        self._panel_wrap.setObjectName("gpDockBody")
         self._panel_lay = QVBoxLayout(self._panel_wrap)
         self._panel_lay.setContentsMargins(0, 0, 0, 0)
         self._panel_lay.setSpacing(0)
@@ -171,9 +175,16 @@ class FloatingDockWindow(QDialog):
         self,
         *,
         title: str,
+        side: str = "right",
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
+
+        self._side = str(side or "right").strip().lower()
+        if self._side not in ("left", "right", "panel"):
+            self._side = "right"
+
+        self._auto_sized = False
 
         self.setObjectName("gpDockWindow")
         self.setWindowFlags(
@@ -182,6 +193,11 @@ class FloatingDockWindow(QDialog):
             | Qt.WindowTitleHint
         )
         self.setWindowTitle(str(title or "Tools"))
+        self.setSizeGripEnabled(True)
+
+        win_ico = try_icon("dock-panel.svg")
+        if win_ico is not None and (not win_ico.isNull()):
+            self.setWindowIcon(win_ico)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -197,29 +213,81 @@ class FloatingDockWindow(QDialog):
 
         hdr.addStretch(1)
 
+        if self._side == "left":
+            svg = "dock-left.svg"
+        elif self._side == "panel":
+            svg = "dock-panel.svg"
+        else:
+            svg = "dock-right.svg"
+
         self.btn_unpin = QToolButton(self)
         self.btn_unpin.setObjectName("miniAction")
         self.btn_unpin.setAutoRaise(True)
-        self.btn_unpin.setToolTip("Return to drawer")
+        self.btn_unpin.setToolTip("Return to dock")
         self.btn_unpin.setIcon(
-            self.style().standardIcon(
-                QStyle.SP_TitleBarNormalButton
+            _icon_or_std(
+                self.btn_unpin,
+                svg,
+                QStyle.SP_TitleBarNormalButton,
             )
         )
-        self.btn_unpin.clicked.connect(
-            self.request_unpin.emit
-        )
+        self.btn_unpin.clicked.connect(self.request_unpin.emit)
         hdr.addWidget(self.btn_unpin, 0)
 
         root.addLayout(hdr, 0)
 
         self._panel_wrap = QWidget(self)
+        self._panel_wrap.setObjectName("gpDockBody")
+        self._panel_wrap.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding,
+        )
+
         self._panel_lay = QVBoxLayout(self._panel_wrap)
         self._panel_lay.setContentsMargins(0, 0, 0, 0)
         self._panel_lay.setSpacing(0)
+
         root.addWidget(self._panel_wrap, 1)
 
         self._panel: Optional[QWidget] = None
+
+    def _auto_size_from_panel(self, w: QWidget) -> None:
+        if self._auto_sized:
+            return
+
+        scr = self.screen()
+        if scr is None:
+            scr = QGuiApplication.primaryScreen()
+        if scr is None:
+            return
+
+        geo = scr.availableGeometry()
+
+        hint = w.sizeHint()
+        minh = w.minimumSizeHint()
+        want = hint.expandedTo(minh)
+
+        # For "panel" (analytics), prefer wide default
+        # without hard-coded pixels: use screen fractions.
+        if self._side == "panel":
+            want = want.expandedTo(
+                QSize(
+                    int(geo.width() * 0.60), # 0.78
+                    int(geo.height() * 0.52), # 0.62
+                )
+            )
+
+        # Keep inside the available screen
+        want = QSize(
+            min(want.width(), int(geo.width() * 0.95)),
+            min(want.height(), int(geo.height() * 0.95)),
+        )
+
+        # Respect panel's minimum sizing
+        self.setMinimumSize(minh)
+        self.resize(want)
+
+        self._auto_sized = True
 
     def set_panel(self, w: QWidget) -> None:
         if w is None:
@@ -231,7 +299,14 @@ class FloatingDockWindow(QDialog):
                 old.deleteLater()
 
         self._panel = w
+
+        w.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding,
+        )
         self._panel_lay.addWidget(w, 1)
+
+        self._auto_size_from_panel(w)
 
     def take_panel(self) -> Optional[QWidget]:
         if self._panel is None:
@@ -243,6 +318,11 @@ class FloatingDockWindow(QDialog):
         self._panel_lay.takeAt(0)
         w.setParent(None)
         return w
+
+    def showEvent(self, ev) -> None:
+        super().showEvent(ev)
+        if self._panel is not None:
+            self._auto_size_from_panel(self._panel)
 
     def closeEvent(self, ev) -> None:
         self.request_unpin.emit()

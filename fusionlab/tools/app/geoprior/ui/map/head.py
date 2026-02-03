@@ -23,7 +23,6 @@ Premium touches
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import List, Optional, Sequence
 
 from PyQt5.QtCore import Qt, QSize, pyqtSignal
@@ -44,6 +43,8 @@ from PyQt5.QtWidgets import (
     # QFontMetrics,
     # QIntValidator,
 )
+
+from ..icon_utils import try_icon
 
 @dataclass
 class XYZ:
@@ -198,10 +199,7 @@ class MapHeadBar(QWidget):
     
     epsg_changed = pyqtSignal(int)
     clear_map_requested = pyqtSignal()
-    
-    reset_mapping_clicked = pyqtSignal()
-    clear_map_clicked = pyqtSignal()
-    
+
     data_toggled = pyqtSignal(bool)
     view_toggled = pyqtSignal(bool)
 
@@ -298,8 +296,17 @@ class MapHeadBar(QWidget):
         self.btn_focus.setCheckable(True)
         self.btn_focus.setAutoRaise(True)
         self.btn_focus.setToolButtonStyle(
-            Qt.ToolButtonTextOnly
+            Qt.ToolButtonTextBesideIcon
         )
+        self.btn_focus.setIcon(
+            try_icon(
+                "focus.svg",
+                fallback=self.style().standardIcon(
+                    QStyle.SP_DialogApplyButton
+                ),
+            )
+        )
+        self.btn_focus.setIconSize(QSize(16, 16))
         self.btn_focus.setMinimumHeight(28)
 
         self.btn_analytics = QToolButton(self.card)
@@ -308,8 +315,17 @@ class MapHeadBar(QWidget):
         self.btn_analytics.setCheckable(True)
         self.btn_analytics.setAutoRaise(True)
         self.btn_analytics.setToolButtonStyle(
-            Qt.ToolButtonTextOnly
+            Qt.ToolButtonTextBesideIcon
         )
+        self.btn_analytics.setIcon(
+            try_icon(
+                "analytics.svg",
+                fallback=self.style().standardIcon(
+                    QStyle.SP_ComputerIcon
+                ),
+            )
+        )
+        self.btn_analytics.setIconSize(QSize(16, 16))
         self.btn_analytics.setMinimumHeight(28)
 
         self.btn_data = QToolButton(self.card)
@@ -319,8 +335,11 @@ class MapHeadBar(QWidget):
         self.btn_data.setAutoRaise(True)
         self.btn_data.setToolTip("Data panel")
         self.btn_data.setIcon(
-            self.style().standardIcon(
-                QStyle.SP_FileDialogContentsView
+            try_icon(
+                "data-panel.svg",
+                fallback=self.style().standardIcon(
+                    QStyle.SP_FileDialogContentsView
+                ),
             )
         )
         self.btn_data.setIconSize(QSize(16, 16))
@@ -333,8 +352,11 @@ class MapHeadBar(QWidget):
         self.btn_view.setAutoRaise(True)
         self.btn_view.setToolTip("View panel")
         self.btn_view.setIcon(
-            self.style().standardIcon(
-                QStyle.SP_FileDialogDetailedView
+            try_icon(
+                "view-panel.svg",
+                fallback=self.style().standardIcon(
+                    QStyle.SP_FileDialogDetailedView
+                ),
             )
         )
         self.btn_view.setIconSize(QSize(16, 16))
@@ -376,31 +398,8 @@ class MapHeadBar(QWidget):
         self.btn_swap.setText("⇄")
         self.btn_swap.setFixedSize(30, 30)
 
-        self.btn_reset = QToolButton(self.card)
-        self.btn_reset.setObjectName("miniAction")
-        self.btn_reset.setProperty("role", "mapHead")
-        self.btn_reset.setToolTip("Reset X/Y/Z mapping")
-        self.btn_reset.setAutoRaise(True)
-        self.btn_reset.setText("↺")
-        self.btn_reset.setFixedSize(30, 30)
-
-        self.btn_fit = QToolButton(self.card)
-        self.btn_fit.setObjectName("miniAction")
-        self.btn_fit.setProperty("role", "mapHead")
-        self.btn_fit.setToolTip("Zoom to points")
-        self.btn_fit.setAutoRaise(True)
-        self.btn_fit.setIcon(self._load_icon("map_icon.svg"))
-        self.btn_fit.setIconSize(QSize(18, 18))
-        self.btn_fit.setFixedSize(30, 30)
-        
-        self.btn_clear = QToolButton(self.card)
-        self.btn_clear.setObjectName("miniAction")
-        self.btn_clear.setProperty("role", "mapHead")
-        self.btn_clear.setToolTip("Clear map")
-        self.btn_clear.setAutoRaise(True)
-        self.btn_clear.setIcon(self._clear_icon())
-        self.btn_clear.setIconSize(QSize(16, 16))
-        self.btn_clear.setFixedSize(30, 30)
+        # Map actions (fit/clear/reset) moved to the
+        # hover tooltab and the "More" menu.
 
         self._build_ui()
         self._connect()
@@ -498,9 +497,6 @@ class MapHeadBar(QWidget):
         m1.addWidget(self.pk_y, 0)
         m1.addWidget(self.pk_z, 0)
         m1.addSpacing(2)
-        m1.addWidget(self.btn_fit, 0)
-        m1.addWidget(self.btn_clear, 0)
-        m1.addWidget(self.btn_reset, 0)
 
         r1.addWidget(ctrl, 1)
         r1.addWidget(mapping, 0)
@@ -540,15 +536,7 @@ class MapHeadBar(QWidget):
             lambda _v: self._update_status(),
         )
 
-        self.btn_fit.clicked.connect(self.fit_clicked)
         self.btn_swap.clicked.connect(self.swap_xy_clicked)
-        self.btn_reset.clicked.connect(
-            self.reset_mapping_clicked
-        )
-        
-        self.btn_clear.clicked.connect(
-            self.clear_map_clicked
-        )
         self.btn_data.toggled.connect(self.data_toggled)
         self.btn_view.toggled.connect(self.view_toggled)
 
@@ -703,9 +691,21 @@ class MapHeadBar(QWidget):
 
         menu.addSeparator()
         self._add_measure_menu(menu)
-        
+
+        menu.addSeparator()
+
+        act = menu.addAction("Zoom to points")
+        act.triggered.connect(self.fit_clicked.emit)
+
+        act = menu.addAction("Reset X/Y/Z mapping")
+        act.triggered.connect(
+            self.reset_mapping_clicked.emit
+        )
+
         act = menu.addAction("Clear map")
-        act.triggered.connect(self.clear_map_requested.emit)
+        act.triggered.connect(
+            self.clear_map_requested.emit
+        )
 
         return menu
 
@@ -939,9 +939,7 @@ class MapHeadBar(QWidget):
             cmb.blockSignals(False)
 
     def _load_icon(self, filename: str) -> QIcon:
-        here = Path(__file__).resolve()
-        pkg = here.parents[2]  # .../geoprior
-        icon_path = pkg / "icons" / filename
-        if icon_path.exists():
-            return QIcon(str(icon_path))
+        ico = try_icon(str(filename or ""))
+        if not ico.isNull():
+            return ico
         return QIcon()

@@ -258,9 +258,16 @@ _LEAFLET_HTML = r"""
           // 2. Compute Density
           // FIX: Use Math.abs(d.v) because subsidence is negative.
           // contourDensity requires positive weights to generate standard "heat" contours.
+          const metric =
+            String(opts.metric || "value").toLowerCase();
+
+          const wfun = (metric === "density")
+            ? (d => 1.0)
+            : (d => Math.abs(d.v));
+
           const contour = d3.contourDensity()
             .x(d => d.x).y(d => d.y)
-            .weight(d => Math.abs(d.v)) 
+            .weight(wfun)
             .size([w + 200, h + 200])
             .bandwidth(opts.bandwidth || 20)
             .thresholds(opts.steps || 15);

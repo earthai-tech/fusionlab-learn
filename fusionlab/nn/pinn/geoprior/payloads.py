@@ -626,6 +626,36 @@ def gather_physics_payload(
             Hd = np.clip(payload["Hd"], eps, None)
             tau_closure_calc = (Hd ** 2) * Ss / (np.pi ** 2 * kappa_val * K)
 
+        # --------------------------------------------------------------
+        # K implied by tau (invert the same closure convention)
+        # This is Option A: show what tau actually implies for K.
+        # --------------------------------------------------------------
+        SEC_PER_YEAR = 365.25 * 24.0 * 3600.0
+        PI2 = np.pi ** 2
+
+        tau_eff = np.clip(payload["tau"], eps, None)
+        Ss_eff = np.clip(payload["Ss"], eps, None)
+
+        if kappa_mode == "bar":
+            # tau = kappa_bar * H^2 * Ss / (pi^2 * K)
+            Hbase = np.clip(payload.get("H", payload["Hd"]), eps, None)
+            K_from_tau = (kappa_val * (Hbase ** 2) * Ss_eff) / (PI2 * tau_eff)
+        else:
+            # tau = Hd^2 * Ss / (pi^2 * kappa_b * K)
+            Hd_eff = np.clip(payload["Hd"], eps, None)
+            K_from_tau = ((Hd_eff ** 2) * Ss_eff) / (PI2 * kappa_val * tau_eff)
+
+        payload["K_from_tau"] = K_from_tau.astype(float_dtype, copy=False)
+
+        # Convenience fields for plotting panels (optional but handy)
+        K_from_tau_my = payload["K_from_tau"] * SEC_PER_YEAR
+        payload["K_from_tau_m_per_year"] = K_from_tau_my.astype(
+            float_dtype, copy=False
+        )
+
+        payload["log10_K_from_tau_m_per_year"] = np.log10(
+            np.clip(payload["K_from_tau_m_per_year"], eps, None)
+        ).astype(float_dtype, copy=False)
 
         payload["tau_closure_calc"] = tau_closure_calc
 
@@ -714,6 +744,15 @@ def save_physics_payload(
     if "H" in payload:
         npz_kwargs["H"] = payload["H"]
     
+    if "K_from_tau" in payload:
+        npz_kwargs["K_from_tau"] = payload["K_from_tau"]
+    if "K_from_tau_m_per_year" in payload:
+        npz_kwargs["K_from_tau_m_per_year"] = payload["K_from_tau_m_per_year"]
+    if "log10_K_from_tau_m_per_year" in payload:
+        npz_kwargs["log10_K_from_tau_m_per_year"] = payload[
+            "log10_K_from_tau_m_per_year"
+        ]
+
     # OPTIONAL
     if "cons_res_scaled" in payload:
         npz_kwargs["cons_res_scaled"] = payload[
@@ -742,6 +781,13 @@ def save_physics_payload(
             "log10_tau_closure", payload["log10_tau_prior"]
         ),
     })
+
+    if "K_from_tau" in payload:
+        df["K_from_tau"] = payload["K_from_tau"]
+    if "K_from_tau_m_per_year" in payload:
+        df["K_from_tau_m_per_year"] = payload["K_from_tau_m_per_year"]
+    if "log10_K_from_tau_m_per_year" in payload:
+        df["log10_K_from_tau_m_per_year"] = payload["log10_K_from_tau_m_per_year"]
 
     if format.lower() == "csv":
         df.to_csv(path, index=False)

@@ -602,6 +602,28 @@ def _make_scaling_kwargs(
         ),
     )
 
+def make_pinball_with_crossing(
+    quantiles: list[float],
+    weights: dict[float, float],
+    *,
+    lambda_cross: float = 5.0,
+):
+    base = make_weighted_pinball(quantiles, weights)
+
+    def loss(y_true, y_pred):
+        l = base(y_true, y_pred)
+
+        # penalty: enforce q10 <= q50 <= q90
+        q = _as_BHQO(y_pred, n_q=len(quantiles))  # (B,H,Q,O)
+        q10 = q[:, :, 0, 0]
+        q50 = q[:, :, 1, 0]
+        q90 = q[:, :, 2, 0]
+
+        p = tf.nn.relu(q10 - q50) + tf.nn.relu(q50 - q90)
+        return l + float(lambda_cross) * tf.reduce_mean(p)
+
+    return loss
+
 def train_one_pixel(
     Xtr: Dict[str, np.ndarray],
     ytr: Dict[str, np.ndarray],
@@ -692,7 +714,7 @@ def train_one_pixel(
         # keep False for "raw eps" clarity.
         # you can turn True later once you
         # export cons_res_scaled in payloads.
-        scale_pde_residuals=True,
+        scale_pde_residuals=False,
 
         pde_mode="consolidation",
         offset_mode="log10",
@@ -724,9 +746,17 @@ def train_one_pixel(
     QUANTILES = [0.1, 0.5, 0.9]
     SUBS_WEIGHTS = {0.1: 3.0, 0.5: 1.0, 0.9: 3.0}
 
+    # loss_dict = {
+    #     "subs_pred": make_weighted_pinball(
+    #         QUANTILES, SUBS_WEIGHTS
+    #     ),
+    #     "gwl_pred": tf.keras.losses.MSE,
+    # }
     loss_dict = {
-        "subs_pred": make_weighted_pinball(
-            QUANTILES, SUBS_WEIGHTS
+        "subs_pred": make_pinball_with_crossing(
+            QUANTILES,
+            SUBS_WEIGHTS,
+            lambda_cross=10.0,
         ),
         "gwl_pred": tf.keras.losses.MSE,
     }
@@ -745,16 +775,28 @@ def train_one_pixel(
         ],
     }
 
+    # physics_loss_weights = dict(
+    #     lambda_cons=10.0,
+    #     lambda_gw=0.0,
+    #     lambda_prior=0.3,
+    #     lambda_smooth=0.0,
+    #     lambda_bounds=10.0, #0.1,
+    #     lambda_mv=0.0,
+    #     mv_lr_mult=1.0,
+    #     kappa_lr_mult=0.0,
+    #     lambda_offset=float(lambda_offset),
+    #     lambda_q=1.0,
+    # )
     physics_loss_weights = dict(
-        lambda_cons=10.0,
+        lambda_cons=50.0,
         lambda_gw=0.0,
-        lambda_prior=0.3,
+        lambda_prior=3.0,
         lambda_smooth=0.0,
-        lambda_bounds=0.1,
+        lambda_bounds=10.0,
         lambda_mv=0.0,
         mv_lr_mult=1.0,
         kappa_lr_mult=0.0,
-        lambda_offset=float(lambda_offset),
+        lambda_offset=max(1.0, float(lambda_offset)),
         lambda_q=1.0,
     )
 
@@ -968,6 +1010,9 @@ def run_one_realisation(
         rng.normal(0.0, float(args.Ss_spread_dex))
     )
     Ss_true = float(Ss_prior * (10.0**dlogSs))
+    # --- SM3 identifiability: keep Ss fixed so tau is identifiable ---
+    # dlogSs = 0.0
+    # Ss_true = float(Ss_prior)
 
     logtau_t = float(
         logtau_p
