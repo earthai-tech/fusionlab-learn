@@ -273,6 +273,37 @@ def plot_sm3_identifiability_v32(
         )
         k_title = "Permeability recovery"
         ylabK = r"$\log_{10}\,\hat{K}$ (m/yr)"
+    
+    # if k_from_tau:
+    #     # Prefer precomputed columns if present
+    #     if "log10K_from_tau_m_per_year" in df.columns:
+    #         y_K = df["log10K_from_tau_m_per_year"].to_numpy(float)
+    #     elif "K_from_tau_m_per_year" in df.columns:
+    #         y_K = np.log10(
+    #             np.clip(
+    #                 df["K_from_tau_m_per_year"].to_numpy(float),
+    #                 eps,
+    #                 None,
+    #             )
+    #         )
+    #     else:
+    #         raise KeyError(
+    #             "k_from_tau=True but missing "
+    #             "'K_from_tau_m_per_year' (or log10K_...) in CSV."
+    #         )
+
+    #     k_title = "Permeability from closure"
+    #     ylabK = r"$\log_{10}\,K_{cl}(\hat{\tau})$ (m/yr)"
+    # else:
+    #     y_K = np.log10(
+    #         np.clip(
+    #             df["K_est_med_m_per_year"].to_numpy(float),
+    #             eps,
+    #             None,
+    #         )
+    #     )
+    #     k_title = "Permeability recovery"
+    #     ylabK = r"$\log_{10}\,\hat{K}$ (m/yr)"
 
     mae_K = float(np.nanmean(np.abs(y_K - x_K)))
     slope_K, _, r2_K = _linfit_stats(x_K, y_K)
@@ -592,4 +623,6 @@ if __name__ == "__main__":
         "figs/sm3_ident_v32_year.png",
         tau_units="year",
         metric="ridge_resid",
+        k_from_tau=True,
+        k_cl_source="est",   # <<< THIS makes panel (b) use Ss_est_med/Hd_est_med
     )

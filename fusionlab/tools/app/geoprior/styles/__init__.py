@@ -77,9 +77,9 @@ from ._styles import (
 # Preprocess patches (prep_styles.py -> _prep_styles.py)
 # ------------------------------------------------------------------ #
 
-from ._prep_styles import PREP_PATCH_DARK, PREP_PATCH_LIGHT
-from ._xfer_advsec import XFER_ADVSEC_LIGHT, XFER_ADVSEC_DARK
-from ._mapdock import MAP_DOCK_LIGHT, MAP_DOCK_DARK
+from ._preprocess import PREP_PATCH_DARK, PREP_PATCH_LIGHT
+from ._xfer import XFER_ADVSEC_LIGHT, XFER_ADVSEC_DARK
+from ._map import MAP_DOCK_LIGHT, MAP_DOCK_DARK
 
 FLAB_STYLE_SHEET = ( 
     FLAB_STYLE_SHEET 

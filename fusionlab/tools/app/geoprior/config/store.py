@@ -15,7 +15,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 from .geoprior_config import GeoPriorConfig
 from .prior_schema import FieldKey
 
-
+_MISSING = object()
 _KEY_PAT = re.compile(
     r"^(?P<base>[A-Za-z_][A-Za-z0-9_\.]*?)"
     r"(?:\[(?P<sub>[^\]]+)\])?$"
@@ -77,6 +77,7 @@ class GeoConfigStore(QObject):
     def snapshot_overrides(self) -> Dict[str, Any]:
         return dict(self._cfg.to_cfg_overrides())
 
+
     # -------------------------------------------------
     # Convenience (string keys)
     # -------------------------------------------------
@@ -97,6 +98,21 @@ class GeoConfigStore(QObject):
 
         return default
 
+    # def set(
+    #     self,
+    #     key: str,
+    #     value: Any,
+    # ) -> bool:
+    #     fkey, extra_key = self._parse_key_str(key)
+    #     if fkey is None:
+    #         old = self._extra.get(extra_key, None)
+    #         if old != value:
+    #             self._extra[extra_key] = value
+    #             self._mark_changed({extra_key})
+    #         return True
+
+    #     return self.set_value_by_key(fkey, value)
+    
     def set(
         self,
         key: str,
@@ -104,12 +120,18 @@ class GeoConfigStore(QObject):
     ) -> bool:
         fkey, extra_key = self._parse_key_str(key)
         if fkey is None:
-            old = self._extra.get(extra_key, None)
-            if old != value:
+            old = self._extra.get(extra_key, _MISSING)
+    
+            changed = (
+                old is _MISSING
+                or not _values_equal(old, value)
+            )
+            if changed:
                 self._extra[extra_key] = value
                 self._mark_changed({extra_key})
+    
             return True
-
+    
         return self.set_value_by_key(fkey, value)
 
     def _parse_key_str(
@@ -169,10 +191,15 @@ class GeoConfigStore(QObject):
 
         if not key.is_dict_item():
             value = self._coerce_value(name, value)
+            # old = getattr(self._cfg, name)
+            # if old != value:
+            #     setattr(self._cfg, name, value)
+            #     self._mark_changed({name})
             old = getattr(self._cfg, name)
-            if old != value:
+            if not _values_equal(old, value):
                 setattr(self._cfg, name, value)
                 self._mark_changed({name})
+
             return True
 
         cur = getattr(self._cfg, name)
@@ -403,3 +430,28 @@ class GeoConfigStore(QObject):
 
     def _emit_error(self, msg: str) -> None:
         self.error_raised.emit(str(msg))
+
+def _values_equal(a: Any, b: Any) -> bool:
+    if a is b:
+        return True
+    if a is None or b is None:
+        return False
+
+    eq = getattr(a, "equals", None)
+    if callable(eq):
+        try:
+            return bool(eq(b))
+        except Exception:
+            return False
+
+    eq = getattr(b, "equals", None)
+    if callable(eq):
+        try:
+            return bool(eq(a))
+        except Exception:
+            return False
+
+    try:
+        return bool(a == b)
+    except Exception:
+        return False

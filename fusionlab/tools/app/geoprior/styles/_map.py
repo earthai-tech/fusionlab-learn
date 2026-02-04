@@ -1,4 +1,4 @@
-# geoprior/ui/styles/_mapdock.py
+# geoprior/ui/styles/_map.py
 # -*- coding: utf-8 -*-
 # License: BSD-3-Clause
 # Author: LKouadio
@@ -191,6 +191,67 @@ QTabWidget#gpAnalyticsTabs::pane {
   border-radius: 10px;
   top: -1px;
 }
-
+QToolButton#mapHeadToggle[variant="mini"] {
+  padding: 4px 10px;
+}
 """
 
+MAP_HEAD_LIGHT = """
+/* ===== Map head (Light) ===== */
+QToolButton#mapHeadToggle[variant="mini"] {
+  padding: 4px 10px;
+}
+
+/* Keep head inputs visually consistent */
+QFrame#mapHeadGroup QComboBox,
+QFrame#mapHeadGroup QLineEdit {
+  min-height: 28px;
+  padding: 2px 8px;
+}
+
+/* Disabled state: readable + clearly inactive */
+QFrame#mapHeadGroup QWidget:disabled {
+  color: rgba(40, 40, 60, 140);
+}
+
+QFrame#mapHeadGroup QLineEdit:disabled,
+QFrame#mapHeadGroup QComboBox:disabled {
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(46,49,145,0.18);
+}
+
+QFrame#mapHeadGroup QComboBox:disabled::drop-down {
+  background: rgba(0, 0, 0, 0.03);
+}
+"""
+
+MAP_HEAD_DARK = """
+/* ===== Map head (Dark) ===== */
+QToolButton#mapHeadToggle[variant="mini"] {
+  padding: 4px 10px;
+}
+
+QFrame#mapHeadGroup QComboBox,
+QFrame#mapHeadGroup QLineEdit {
+  min-height: 28px;
+  padding: 2px 8px;
+}
+
+/* Disabled state: keep contrast in dark theme */
+QFrame#mapHeadGroup QWidget:disabled {
+  color: rgba(226, 232, 240, 140);
+}
+
+QFrame#mapHeadGroup QLineEdit:disabled,
+QFrame#mapHeadGroup QComboBox:disabled {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+QFrame#mapHeadGroup QComboBox:disabled::drop-down {
+  background: rgba(255, 255, 255, 0.05);
+}
+"""
+
+MAP_DOCK_LIGHT += MAP_HEAD_LIGHT
+MAP_DOCK_DARK  += MAP_HEAD_DARK

@@ -41,7 +41,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from .basemap.basemap import resolve_basemap
+from .basemap.basemap import resolve_basemap # noqa
 from .engines.leaflet_html import _leaflet_html
 from .engines.maplibre_html import maplibre_html
 from .engines.google_html import google_html
@@ -82,6 +82,8 @@ class _LogPage(QWebEnginePage):
 
 class _GeoPriorBridge(QObject):
     point_clicked = pyqtSignal(float, float)
+    point_clicked_id = pyqtSignal(int)
+    group_bbox = pyqtSignal(float, float, float, float)
 
     @pyqtSlot(float, float)
     def pointClicked(self, x: float, y: float) -> None:
@@ -91,9 +93,38 @@ class _GeoPriorBridge(QObject):
         except Exception:
             pass
 
+
+    @pyqtSlot(int)
+    def pointClickedId(self, sid: int) -> None:
+        try:
+            self.point_clicked_id.emit(int(sid))
+        except Exception:
+            return
+        
+    @pyqtSlot(float, float, float, float)
+    def groupSelectedBBox(
+        self,
+        min_lon: float,
+        min_lat: float,
+        max_lon: float,
+        max_lat: float,
+    ) -> None:
+        try:
+            self.group_bbox.emit(
+                float(min_lon),
+                float(min_lat),
+                float(max_lon),
+                float(max_lat),
+            )
+        except Exception:
+            return
+
 class ForecastMapView(QFrame):
     request_focus_mode = pyqtSignal(bool)
     point_clicked = pyqtSignal(float, float)
+    point_clicked_id = pyqtSignal(int)
+    group_bbox = pyqtSignal(float, float, float, float)
+
 
     def __init__(
         self,
@@ -230,6 +261,10 @@ class ForecastMapView(QFrame):
             self._channel.registerObject("bridge", self._bridge)
             self._web.page().setWebChannel(self._channel)
             self._bridge.point_clicked.connect(self.point_clicked)
+            self._bridge.point_clicked_id.connect(
+                self.point_clicked_id
+            )
+            self._bridge.group_bbox.connect(self.group_bbox)
 
         self._web.setHtml(
             html,
@@ -270,6 +305,17 @@ class ForecastMapView(QFrame):
 
         return _leaflet_html(), "leaflet"
 
+    def set_select_mode(self, mode: str) -> None:
+        m = str(mode or "off").strip().lower()
+        if m not in ("off", "point", "group"):
+            m = "off"
+
+        self._run_js(
+            "if (window.__GeoPriorMap && "
+            "window.__GeoPriorMap.setSelectMode) {"
+            f"  window.__GeoPriorMap.setSelectMode('{m}');"
+            "}",
+        )
 
     def _on_loaded(self, ok: bool) -> None:
         self._page_loaded = bool(ok)
@@ -505,8 +551,8 @@ class ForecastMapView(QFrame):
     def _norm_points(
         self,
         points: Sequence[Dict[str, Any]],
-    ) -> List[Dict[str, float]]:
-        out: List[Dict[str, float]] = []
+    ) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
         for p in points or []:
             if not isinstance(p, dict):
                 continue
@@ -525,7 +571,18 @@ class ForecastMapView(QFrame):
             if not math.isfinite(v):
                 continue
     
-            out.append({"lat": lat, "lon": lon, "v": v})
+            sid = p.get("sid", None)
+            if sid is not None:
+                try:
+                    sid = int(sid)
+                except Exception:
+                    sid = None
+
+            d = {"lat": lat, "lon": lon, "v": v}
+            if sid is not None:
+                d["sid"] = sid
+
+            out.append(d)
     
         return out
 

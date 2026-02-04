@@ -46,7 +46,60 @@ from ..icon_utils import try_icon
 from .basemap.basemap import engine_providers, engine_styles
 from .data_panel import AutoHidePanel
 from .alerts import AlertGroup
-from .keys import ( 
+from .keys import (
+    MAP_VIEW_BASEMAP,
+    MAP_VIEW_SHOW_COLORBAR,
+    MAP_VIEW_BASEMAP_STYLE,
+    MAP_VIEW_TILES_OPACITY,
+    MAP_VIEW_COLORMAP,
+    MAP_VIEW_CMAP_INVERT,
+    MAP_VIEW_AUTOSCALE,
+    MAP_VIEW_VMIN,
+    MAP_VIEW_VMAX,
+    MAP_VIEW_MARKER_SIZE,
+    MAP_VIEW_MARKER_OPACITY,
+    MAP_VIEW_CLIP_MODE,
+    MAP_VIEW_SHOW_LEGEND,
+    MAP_VIEW_LEGEND_POS,
+    
+    MAP_VIEW_HOTSPOTS_ENABLED,
+    MAP_VIEW_HOTSPOTS_MODE,
+    MAP_VIEW_HOTSPOTS_METHOD,
+    MAP_VIEW_HOTSPOTS_METRIC,
+    MAP_VIEW_HOTSPOTS_TIME_AGG,
+    MAP_VIEW_HOTSPOTS_THR_MODE,
+    MAP_VIEW_HOTSPOTS_QUANTILE,
+    MAP_VIEW_HOTSPOTS_ABS_THR,
+    MAP_VIEW_HOTSPOTS_CELL_KM,
+    MAP_VIEW_HOTSPOTS_MIN_PTS,
+    MAP_VIEW_HOTSPOTS_MAX_N,
+    MAP_VIEW_HOTSPOTS_MIN_SEP_KM,
+    MAP_VIEW_HOTSPOTS_STYLE,
+    MAP_VIEW_HOTSPOTS_PULSE,
+    MAP_VIEW_HOTSPOTS_PULSE_SPEED,
+    MAP_VIEW_HOTSPOTS_RING_KM,
+    MAP_VIEW_HOTSPOTS_LABELS,
+
+    MAP_VIEW_INTERP_ENABLED,
+    MAP_VIEW_INTERP_SCHEME,
+    MAP_VIEW_INTERP_CALLOUTS,
+    MAP_VIEW_INTERP_CALLOUT_LEVEL,
+    MAP_VIEW_INTERP_CALLOUT_ACTIONS,
+    MAP_VIEW_INTERP_ACTION_PACK,
+    MAP_VIEW_INTERP_ACTION_INTENSITY,
+    MAP_VIEW_INTERP_TONE,
+
+    MAP_VIEW_PLOT_KIND,
+    MAP_VIEW_HEX_GRIDSIZE,
+    MAP_VIEW_HEX_METRIC,
+    MAP_VIEW_CONTOUR_BANDWIDTH,
+    MAP_VIEW_CONTOUR_STEPS,
+    MAP_VIEW_CONTOUR_FILLED,
+    MAP_VIEW_CONTOUR_LABELS,
+    MAP_VIEW_FILTER_ENABLE,
+    MAP_VIEW_FILTER_VMIN,
+    MAP_VIEW_FILTER_VMAX,
+ 
     VIEW_DEFAULTS, 
     VIEW_KEYS, 
     K_PROP_ENABLED, 
@@ -70,18 +123,7 @@ class AutoHideViewPanel(AutoHidePanel):
     changed = pyqtSignal(object)
     export_requested = pyqtSignal(str)
 
-    # def __init__(
-    #     self,
-    #     *,
-    #     store: GeoConfigStore,
-    #     parent: Optional[QWidget] = None,
-    # ) -> None:
-    #     super().__init__(
-    #         title="View",
-    #         side="right",
-    #         expanded_w=320,
-    #         parent=parent,
-    #     )
+
     def __init__(
         self,
         *,
@@ -354,15 +396,15 @@ class AutoHideViewPanel(AutoHidePanel):
     def _refresh_basemap_choices(self) -> None:
         eng = get_engine(self.store, "leaflet")
     
-        cur_p = str(self.store.get("map.view.basemap", "osm") or "osm")
+        cur_p = str(self.store.get(MAP_VIEW_BASEMAP, "osm") or "osm")
         cur_s = str(
             self.store.get(
-                "map.view.basemap_style", "light")
+                MAP_VIEW_BASEMAP_STYLE, "light")
             or "light"
         )
     
         prov = engine_providers(eng)
-        sty = engine_styles(eng, cur_p)
+        engine_styles(eng, cur_p) # sty = 
     
         with QSignalBlocker(self.cmb_base):
             self.cmb_base.clear()
@@ -383,9 +425,9 @@ class AutoHideViewPanel(AutoHidePanel):
                 self.cmb_style.setCurrentIndex(0)
     
         # enforce store coherence (provider may change)
-        self.store.set("map.view.basemap", p_now)
+        self.store.set(MAP_VIEW_BASEMAP, p_now)
         self.store.set(
-            "map.view.basemap_style",
+            MAP_VIEW_BASEMAP_STYLE,
             str(self.cmb_style.currentText() or "light"),
         )
 
@@ -395,7 +437,7 @@ class AutoHideViewPanel(AutoHidePanel):
         p_now = str(self.cmb_base.currentText() or "osm")
     
         cur_s = str(
-            self.store.get("map.view.basemap_style", "light")
+            self.store.get(MAP_VIEW_BASEMAP_STYLE, "light")
             or "light"
         )
     
@@ -407,9 +449,9 @@ class AutoHideViewPanel(AutoHidePanel):
             if self.cmb_style.currentIndex() < 0:
                 self.cmb_style.setCurrentIndex(0)
     
-        self.store.set("map.view.basemap", p_now)
+        self.store.set(MAP_VIEW_BASEMAP, p_now)
         self.store.set(
-            "map.view.basemap_style",
+            MAP_VIEW_BASEMAP_STYLE,
             str(self.cmb_style.currentText() or "light"),
         )
 
@@ -992,20 +1034,20 @@ class AutoHideViewPanel(AutoHidePanel):
         self._set_combo(
             self.cmb_base,
             str(self.store.get(
-                "map.view.basemap",
+                MAP_VIEW_BASEMAP,
                 "osm",
             )),
         )
         self._set_combo(
             self.cmb_style,
             str(self.store.get(
-                "map.view.basemap_style",
+                MAP_VIEW_BASEMAP_STYLE,
                 "light",
             )),
         )
 
         top = float(self.store.get(
-            "map.view.tiles_opacity",
+            MAP_VIEW_TILES_OPACITY,
             1.0,
         ) or 1.0)
         self._set_slider_pct(self.sl_tiles_op, top)
@@ -1014,142 +1056,142 @@ class AutoHideViewPanel(AutoHidePanel):
         self._set_combo(
             self.cmb_cmap,
             str(self.store.get(
-                "map.view.colormap",
+                MAP_VIEW_COLORMAP,
                 "viridis",
             )),
         )
         self.chk_inv.setChecked(bool(self.store.get(
-            "map.view.cmap_invert",
+            MAP_VIEW_CMAP_INVERT,
             False,
         )))
 
         self._set_combo(
             self.cmb_clip,
             str(self.store.get(
-                "map.view.clip_mode",
+                MAP_VIEW_CLIP_MODE,
                 "none",
             )),
         )
         self.chk_auto.setChecked(bool(self.store.get(
-            "map.view.autoscale",
+            MAP_VIEW_AUTOSCALE,
             True,
         )))
 
         self.sp_vmin.setValue(float(self.store.get(
-            "map.view.vmin",
+            MAP_VIEW_VMIN,
             0.0,
         ) or 0.0))
         self.sp_vmax.setValue(float(self.store.get(
-            "map.view.vmax",
+            MAP_VIEW_VMAX,
             1.0,
         ) or 1.0))
 
         size = int(self.store.get(
-            "map.view.marker_size",
+            MAP_VIEW_MARKER_SIZE,
             6,
         ) or 6)
         self.sp_size.setValue(size)
 
         op = float(self.store.get(
-            "map.view.marker_opacity",
+            MAP_VIEW_MARKER_OPACITY,
             0.85,
         ) or 0.85)
         self._set_slider_pct(self.sl_op, op)
         self.lb_op.setText(self._pct_text(op))
 
         self.chk_cbar.setChecked(bool(self.store.get(
-            "map.view.show_colorbar",
+            MAP_VIEW_SHOW_COLORBAR,
             True,
         )))
         self.chk_leg.setChecked(bool(self.store.get(
-            "map.view.show_legend",
+            MAP_VIEW_SHOW_LEGEND,
             False,
         )))
         self._set_combo(
             self.cmb_legpos,
             str(self.store.get(
-                "map.view.legend_pos",
+                MAP_VIEW_LEGEND_POS,
                 "br",
             )),
         )
         
         # --- hotspots
         self.chk_hot.setChecked(bool(self.store.get(
-            "map.view.hotspots.enabled", False
+            MAP_VIEW_HOTSPOTS_ENABLED, False
         )))
         self._set_combo(self.cmb_hot_mode, str(self.store.get(
-            "map.view.hotspots.mode", "auto"
+            MAP_VIEW_HOTSPOTS_MODE, "auto"
         )))
         self._set_combo(self.cmb_hot_method, str(self.store.get(
-            "map.view.hotspots.method", "grid"
+            MAP_VIEW_HOTSPOTS_METHOD, "grid"
         )))
         self._set_combo(self.cmb_hot_metric, str(self.store.get(
-            "map.view.hotspots.metric", "high"
+            MAP_VIEW_HOTSPOTS_METRIC, "high"
         )))
         self._set_combo(self.cmb_hot_time, str(self.store.get(
-            "map.view.hotspots.time_agg", "current"
+            MAP_VIEW_HOTSPOTS_TIME_AGG, "current"
         )))
         self._set_combo(self.cmb_thr, str(self.store.get(
-            "map.view.hotspots.thr_mode", "quantile"
+            MAP_VIEW_HOTSPOTS_THR_MODE, "quantile"
         )))
         
-        q = float(self.store.get("map.view.hotspots.quantile", 0.98) or 0.98)
+        q = float(self.store.get(MAP_VIEW_HOTSPOTS_QUANTILE, 0.98) or 0.98)
         q = max(0.0, min(1.0, q))
         self.sl_q.setValue(int(round(q * 1000.0)))
         self.lb_q.setText(f"{q:.3f}")
         
         self.sp_abs.setValue(float(self.store.get(
-            "map.view.hotspots.abs_thr", 0.0
+            MAP_VIEW_HOTSPOTS_ABS_THR, 0.0
         ) or 0.0))
         
         self.sp_cell.setValue(float(self.store.get(
-            "map.view.hotspots.cell_km", 1.0
+            MAP_VIEW_HOTSPOTS_CELL_KM, 1.0
         ) or 1.0))
         self.sp_minpts.setValue(int(self.store.get(
-            "map.view.hotspots.min_pts", 20
+            MAP_VIEW_HOTSPOTS_MIN_PTS, 20
         ) or 20))
         self.sp_maxn.setValue(int(self.store.get(
-            "map.view.hotspots.max_n", 8
+            MAP_VIEW_HOTSPOTS_MAX_N, 8
         ) or 8))
         self.sp_sep.setValue(float(self.store.get(
-            "map.view.hotspots.min_sep_km", 2.0
+            MAP_VIEW_HOTSPOTS_MIN_SEP_KM, 2.0
         ) or 2.0))
         
         self._set_combo(self.cmb_hot_style, str(self.store.get(
-            "map.view.hotspots.style", "pulse"
+            MAP_VIEW_HOTSPOTS_STYLE, "pulse"
         )))
         self.chk_pulse.setChecked(bool(self.store.get(
-            "map.view.hotspots.pulse", True
+            MAP_VIEW_HOTSPOTS_PULSE, True
         )))
         
-        sp = float(self.store.get("map.view.hotspots.pulse_speed", 1.0) or 1.0)
+        sp = float(self.store.get(MAP_VIEW_HOTSPOTS_PULSE_SPEED, 1.0) or 1.0)
         sp = max(0.2, min(3.0, sp))
         self.sl_speed.setValue(int(round(sp * 100.0)))
         self.lb_speed.setText(f"{sp:.1f}×")
         
-        rk = float(self.store.get("map.view.hotspots.ring_km", 0.8) or 0.8)
+        rk = float(self.store.get(MAP_VIEW_HOTSPOTS_RING_KM, 0.8) or 0.8)
         self.sp_ring.setValue(rk)
         
         self.chk_labels.setChecked(bool(self.store.get(
-            "map.view.hotspots.labels", True
+            MAP_VIEW_HOTSPOTS_LABELS, True
         )))
         
         # --- interpretation
         self.chk_interp.setChecked(bool(self.store.get(
-            "map.view.interp.enabled",
+            MAP_VIEW_INTERP_ENABLED,
             False,
         )))
 
         self._set_combo(
             self.cmb_interp,
             str(self.store.get(
-                "map.view.interp.scheme",
+                MAP_VIEW_INTERP_SCHEME,
                 "subsidence",
             )),
         )
 
         self.chk_callouts.setChecked(bool(self.store.get(
-            "map.view.interp.callouts",
+            MAP_VIEW_INTERP_CALLOUTS,
             True,
         )))
 
@@ -1171,7 +1213,7 @@ class AutoHideViewPanel(AutoHidePanel):
         self._set_combo(
             self.cmb_tone,
             str(self.store.get(
-                "map.view.interp.tone",
+                MAP_VIEW_INTERP_TONE,
                 "municipal",
             )),
         )
@@ -1196,64 +1238,64 @@ class AutoHideViewPanel(AutoHidePanel):
         self._set_combo(
             self.cmb_plot_kind,
             str(self.store.get(
-                "map.view.plot.kind",
+                MAP_VIEW_PLOT_KIND,
                 "scatter",
             ) or "scatter"),
         )
         
         self.sp_hex_grid.setValue(
             int(self.store.get(
-            "map.view.hex.gridsize",
+            MAP_VIEW_HEX_GRIDSIZE,
             30,
         ) or 30))
         
         self._set_combo(
             self.cmb_hex_metric,
             str(self.store.get(
-                "map.view.hex.metric",
+                MAP_VIEW_HEX_METRIC,
                 "mean",
             ) or "mean"),
         )
         
         self.sp_ctr_bw.setValue(
             float(self.store.get(
-            "map.view.contour.bandwidth",
+            MAP_VIEW_CONTOUR_BANDWIDTH,
             15.0,
         ) or 15.0))
         
         self.sp_ctr_steps.setValue(
             int(self.store.get(
-            "map.view.contour.steps",
+            MAP_VIEW_CONTOUR_STEPS,
             10,
         ) or 10))
         
         self.chk_ctr_filled.setChecked(
             bool(self.store.get(
-            "map.view.contour.filled",
+            MAP_VIEW_CONTOUR_FILLED,
             True,
         )))
         
         self.chk_ctr_labels.setChecked(
             bool(self.store.get(
-            "map.view.contour.labels",
+            MAP_VIEW_CONTOUR_LABELS,
             False,
         )))
         
         self.chk_filt.setChecked(
             bool(self.store.get(
-            "map.view.filter.enable",
+            MAP_VIEW_FILTER_ENABLE,
             False,
         )))
         
         self.sp_fmin.setValue(
             float(self.store.get(
-            "map.view.filter.v_min",
+            MAP_VIEW_FILTER_VMIN,
             -50.0,
         ) or -50.0))
         
         self.sp_fmax.setValue(
             float(self.store.get(
-            "map.view.filter.v_max",
+            MAP_VIEW_FILTER_VMAX,
             50.0,
         ) or 50.0))
         
@@ -1262,7 +1304,7 @@ class AutoHideViewPanel(AutoHidePanel):
         self._set_combo(
             self.cmb_int,
             str(self.store.get(
-                "map.view.interp.action_intensity",
+                MAP_VIEW_INTERP_ACTION_INTENSITY,
                 "balanced",
             )),
         )
@@ -1448,12 +1490,12 @@ class AutoHideViewPanel(AutoHidePanel):
 
 
         def _on_base(v: str) -> None:
-            self.store.set("map.view.basemap", str(v))
+            self.store.set(MAP_VIEW_BASEMAP, str(v))
             self._refresh_styles_only()
             self._update_chips()
         
         def _on_style(v: str) -> None:
-            self.store.set("map.view.basemap_style", str(v))
+            self.store.set(MAP_VIEW_BASEMAP_STYLE, str(v))
             self._update_chips()
         
         self.cmb_base.currentTextChanged.connect(_on_base)
@@ -1465,17 +1507,17 @@ class AutoHideViewPanel(AutoHidePanel):
 
         self.cmb_cmap.currentTextChanged.connect(
             lambda v: self.store.set(
-                "map.view.colormap", str(v)
+                MAP_VIEW_COLORMAP, str(v)
             )
         )
         self.chk_inv.toggled.connect(
             lambda b: self.store.set(
-                "map.view.cmap_invert", bool(b)
+                MAP_VIEW_CMAP_INVERT, bool(b)
             )
         )
         self.cmb_clip.currentTextChanged.connect(
             lambda v: self.store.set(
-                "map.view.clip_mode", str(v)
+                MAP_VIEW_CLIP_MODE, str(v)
             )
         )
 
@@ -1485,24 +1527,24 @@ class AutoHideViewPanel(AutoHidePanel):
 
         self.sp_size.valueChanged.connect(
             lambda v: self.store.set(
-                "map.view.marker_size", int(v)
+                MAP_VIEW_MARKER_SIZE, int(v)
             )
         )
         self.sl_op.valueChanged.connect(self._on_op)
 
         self.chk_cbar.toggled.connect(
             lambda b: self.store.set(
-                "map.view.show_colorbar", bool(b)
+                MAP_VIEW_SHOW_COLORBAR, bool(b)
             )
         )
         self.chk_leg.toggled.connect(
             lambda b: self.store.set(
-                "map.view.show_legend", bool(b)
+                MAP_VIEW_SHOW_LEGEND, bool(b)
             )
         )
         self.cmb_legpos.currentTextChanged.connect(
             lambda v: self.store.set(
-                "map.view.legend_pos", str(v)
+                MAP_VIEW_LEGEND_POS, str(v)
             )
         )
 
@@ -1513,36 +1555,36 @@ class AutoHideViewPanel(AutoHidePanel):
         # --- hotspots
         self.chk_hot.toggled.connect(
             lambda b: (
-                self.store.set("map.view.hotspots.enabled", bool(b)),
+                self.store.set(MAP_VIEW_HOTSPOTS_ENABLED, bool(b)),
                 self._update_hotspot_ui_enabled(),
             )
         )
         
         self.cmb_hot_mode.currentTextChanged.connect(
             lambda v: (
-                self.store.set("map.view.hotspots.mode", str(v)),
+                self.store.set(MAP_VIEW_HOTSPOTS_MODE, str(v)),
                 self._update_hotspot_ui_enabled(),
             )
         )
         
         self.cmb_hot_method.currentTextChanged.connect(
             lambda v: self.store.set(
-                "map.view.hotspots.method", str(v)
+                MAP_VIEW_HOTSPOTS_METHOD, str(v)
             )
         )
         self.cmb_hot_metric.currentTextChanged.connect(
             lambda v: self.store.set(
-                "map.view.hotspots.metric", str(v)
+                MAP_VIEW_HOTSPOTS_METRIC, str(v)
             )
         )
         self.cmb_hot_time.currentTextChanged.connect(
             lambda v: self.store.set(
-                "map.view.hotspots.time_agg", str(v)
+                MAP_VIEW_HOTSPOTS_TIME_AGG, str(v)
             )
         )
         self.cmb_thr.currentTextChanged.connect(
             lambda v: (
-                self.store.set("map.view.hotspots.thr_mode", str(v)),
+                self.store.set(MAP_VIEW_HOTSPOTS_THR_MODE, str(v)),
                 self._update_hotspot_ui_enabled(),
             )
         )
@@ -1550,46 +1592,46 @@ class AutoHideViewPanel(AutoHidePanel):
         def _on_q(v: int) -> None:
             q = float(v) / 1000.0
             self.lb_q.setText(f"{q:.3f}")
-            self.store.set("map.view.hotspots.quantile", q)
+            self.store.set(MAP_VIEW_HOTSPOTS_QUANTILE, q)
         
         self.sl_q.valueChanged.connect(_on_q)
         
         self.sp_abs.valueChanged.connect(
             lambda v: self.store.set(
-                "map.view.hotspots.abs_thr", float(v)
+                MAP_VIEW_HOTSPOTS_ABS_THR, float(v)
             )
         )
         
         self.sp_cell.valueChanged.connect(
             lambda v: self.store.set(
-                "map.view.hotspots.cell_km", float(v)
+                MAP_VIEW_HOTSPOTS_CELL_KM, float(v)
             )
         )
         self.sp_minpts.valueChanged.connect(
             lambda v: self.store.set(
-                "map.view.hotspots.min_pts", int(v)
+                MAP_VIEW_HOTSPOTS_MIN_PTS, int(v)
             )
         )
         self.sp_maxn.valueChanged.connect(
             lambda v: self.store.set(
-                "map.view.hotspots.max_n", int(v)
+                MAP_VIEW_HOTSPOTS_MAX_N, int(v)
             )
         )
         self.sp_sep.valueChanged.connect(
             lambda v: self.store.set(
-                "map.view.hotspots.min_sep_km", float(v)
+                MAP_VIEW_HOTSPOTS_MIN_SEP_KM, float(v)
             )
         )
         
         self.cmb_hot_style.currentTextChanged.connect(
             lambda v: (
-                self.store.set("map.view.hotspots.style", str(v)),
+                self.store.set(MAP_VIEW_HOTSPOTS_STYLE, str(v)),
                 self._update_hotspot_ui_enabled(),
             )
         )
         self.chk_pulse.toggled.connect(
             lambda b: (
-                self.store.set("map.view.hotspots.pulse", bool(b)),
+                self.store.set(MAP_VIEW_HOTSPOTS_PULSE, bool(b)),
                 self._update_hotspot_ui_enabled(),
             )
         )
@@ -1598,18 +1640,18 @@ class AutoHideViewPanel(AutoHidePanel):
             sp = float(v) / 100.0
             sp = max(0.2, min(3.0, sp))
             self.lb_speed.setText(f"{sp:.1f}×")
-            self.store.set("map.view.hotspots.pulse_speed", sp)
+            self.store.set(MAP_VIEW_HOTSPOTS_PULSE_SPEED, sp)
         
         self.sl_speed.valueChanged.connect(_on_speed)
         
         self.sp_ring.valueChanged.connect(
             lambda v: self.store.set(
-                "map.view.hotspots.ring_km", float(v)
+                MAP_VIEW_HOTSPOTS_RING_KM, float(v)
             )
         )
         self.chk_labels.toggled.connect(
             lambda b: self.store.set(
-                "map.view.hotspots.labels", bool(b)
+                MAP_VIEW_HOTSPOTS_LABELS, bool(b)
             )
         )
         
@@ -1617,7 +1659,7 @@ class AutoHideViewPanel(AutoHidePanel):
         self.chk_interp.toggled.connect(
             lambda b: (
                 self.store.set(
-                    "map.view.interp.enabled",
+                    MAP_VIEW_INTERP_ENABLED,
                     bool(b),
                 ),
                 self._update_interp_ui_enabled(),
@@ -1628,7 +1670,7 @@ class AutoHideViewPanel(AutoHidePanel):
         self.cmb_interp.currentTextChanged.connect(
             lambda v: (
                 self.store.set(
-                    "map.view.interp.scheme",
+                    MAP_VIEW_INTERP_SCHEME,
                     str(v),
                 ),
                 self._update_interp_summary(),
@@ -1638,7 +1680,7 @@ class AutoHideViewPanel(AutoHidePanel):
         self.cmb_tone.currentTextChanged.connect(
             lambda v: (
                 self.store.set(
-                    "map.view.interp.tone",
+                    MAP_VIEW_INTERP_TONE,
                     str(v),
                 ),
                 self._update_interp_summary(),
@@ -1648,7 +1690,7 @@ class AutoHideViewPanel(AutoHidePanel):
         self.chk_callouts.toggled.connect(
             lambda b: (
                 self.store.set(
-                    "map.view.interp.callouts",
+                    MAP_VIEW_INTERP_CALLOUTS,
                     bool(b),
                 ),
                 self._update_interp_summary(),
@@ -1658,8 +1700,7 @@ class AutoHideViewPanel(AutoHidePanel):
         self.cmb_call_lvl.currentTextChanged.connect(
             lambda v: (
                 self.store.set(
-                    "map.view.interp."
-                    "callout_level",
+                    MAP_VIEW_INTERP_CALLOUT_LEVEL,
                     str(v),
                 ),
                 self._update_interp_summary(),
@@ -1668,24 +1709,21 @@ class AutoHideViewPanel(AutoHidePanel):
 
         self.chk_call_act.toggled.connect(
             lambda b: self.store.set(
-                "map.view.interp."
-                "callout_actions",
+                MAP_VIEW_INTERP_CALLOUT_ACTIONS,
                 bool(b),
             )
         )
 
         self.cmb_pack.currentTextChanged.connect(
             lambda v: self.store.set(
-                "map.view.interp."
-                "action_pack",
+                MAP_VIEW_INTERP_ACTION_PACK,
                 str(v),
             )
         )
 
         self.cmb_int.currentTextChanged.connect(
             lambda v: self.store.set(
-                "map.view.interp."
-                "action_intensity",
+                MAP_VIEW_INTERP_ACTION_INTENSITY,
                 str(v),
             )
         )
@@ -1706,7 +1744,7 @@ class AutoHideViewPanel(AutoHidePanel):
             )
         )
         def _on_kind(v: str) -> None:
-            self.store.set("map.view.plot.kind", str(v))
+            self.store.set(MAP_VIEW_PLOT_KIND, str(v))
             self._update_render_ui_enabled()
             self._update_chips()
         
@@ -1714,42 +1752,42 @@ class AutoHideViewPanel(AutoHidePanel):
         
         self.sp_hex_grid.valueChanged.connect(
             lambda v: self.store.set(
-                "map.view.hex.gridsize",
+                MAP_VIEW_HEX_GRIDSIZE,
                 int(v),
             )
         )
         
         self.cmb_hex_metric.currentTextChanged.connect(
             lambda v: self.store.set(
-                "map.view.hex.metric",
+                MAP_VIEW_HEX_METRIC,
                 str(v),
             )
         )
         
         self.sp_ctr_bw.valueChanged.connect(
             lambda v: self.store.set(
-                "map.view.contour.bandwidth",
+                MAP_VIEW_CONTOUR_BANDWIDTH,
                 float(v),
             )
         )
         
         self.sp_ctr_steps.valueChanged.connect(
             lambda v: self.store.set(
-                "map.view.contour.steps",
+                MAP_VIEW_CONTOUR_STEPS,
                 int(v),
             )
         )
         
         self.chk_ctr_filled.toggled.connect(
             lambda b: self.store.set(
-                "map.view.contour.filled",
+                MAP_VIEW_CONTOUR_FILLED,
                 bool(b),
             )
         )
         
         self.chk_ctr_labels.toggled.connect(
             lambda b: self.store.set(
-                "map.view.contour.labels",
+                MAP_VIEW_CONTOUR_LABELS,
                 bool(b),
             )
         )
@@ -1757,7 +1795,7 @@ class AutoHideViewPanel(AutoHidePanel):
         self.chk_filt.toggled.connect(
             lambda b: (
                 self.store.set(
-                    "map.view.filter.enable",
+                    MAP_VIEW_FILTER_ENABLE,
                     bool(b),
                 ),
                 self._update_render_ui_enabled(),
@@ -1766,14 +1804,14 @@ class AutoHideViewPanel(AutoHidePanel):
         
         self.sp_fmin.valueChanged.connect(
             lambda v: self.store.set(
-                "map.view.filter.v_min",
+                MAP_VIEW_FILTER_VMIN,
                 float(v),
             )
         )
         
         self.sp_fmax.valueChanged.connect(
             lambda v: self.store.set(
-                "map.view.filter.v_max",
+                MAP_VIEW_FILTER_VMAX,
                 float(v),
             )
         )
@@ -1807,22 +1845,22 @@ class AutoHideViewPanel(AutoHidePanel):
     def _on_tiles_op(self, v: int) -> None:
         f = float(v) / 100.0
         self.lb_tiles_op.setText(self._pct_text(f))
-        self.store.set("map.view.tiles_opacity", f)
+        self.store.set(MAP_VIEW_TILES_OPACITY, f)
 
     def _on_op(self, v: int) -> None:
         f = float(v) / 100.0
         self.lb_op.setText(self._pct_text(f))
-        self.store.set("map.view.marker_opacity", f)
+        self.store.set(MAP_VIEW_MARKER_OPACITY, f)
 
     def _on_auto(self, enabled: bool) -> None:
-        self.store.set("map.view.autoscale", bool(enabled))
+        self.store.set(MAP_VIEW_AUTOSCALE, bool(enabled))
         self._update_vrange_enabled()
 
     def _on_vmin(self, v: float) -> None:
-        self.store.set("map.view.vmin", float(v))
+        self.store.set(MAP_VIEW_VMIN, float(v))
 
     def _on_vmax(self, v: float) -> None:
-        self.store.set("map.view.vmax", float(v))
+        self.store.set(MAP_VIEW_VMAX, float(v))
 
     def _update_vrange_enabled(self) -> None:
         auto = bool(self.chk_auto.isChecked())

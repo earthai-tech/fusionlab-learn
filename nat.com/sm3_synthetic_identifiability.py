@@ -974,13 +974,13 @@ def run_one_realisation(
     *,
     r: int,
     args: argparse.Namespace,
-    rng: np.random.Generator,
     priors: List[LithoPrior],
     years: np.ndarray,
     outdir: str,
 ) -> Dict[str, Any]:
     n_lith = len(priors)
-
+    
+    rng = np.random.default_rng(int(args.seed) + int(r))
     run_dir = os.path.join(outdir, f"real_{r:03d}")
     os.makedirs(run_dir, exist_ok=True)
 
@@ -1270,6 +1270,35 @@ def run_one_realisation(
     }
     
     row.update(flatten_diag(diag))
+    
+    # ---- add to SM3 row: closure-implied K from tau (m/yr) ----
+    eps = 1e-12
+    PI2 = np.pi ** 2
+    
+    tau_est = max(float(tau_est_sec), eps)
+    kappa = max(float(args.kappa_b), eps)
+    
+    # choose which Ss/Hd you want for closure:
+    # (A) est (recommended if you're plotting k_cl_source="est")
+    Ss_use = max(float(eff["Ss"]), eps)
+    Hd_use = max(float(eff["Hd"]), eps)
+    
+    # (B) prior
+    # Ss_use = max(float(meta["Ss_prior"]), eps)
+    # Hd_use = max(float(meta["Hd_prior"]), eps)
+    
+    # (C) true
+    # Ss_use = max(float(meta["Ss_true"]), eps)
+    # Hd_use = max(float(meta["Hd_true"]), eps)
+    
+    K_cl_mps = (Hd_use ** 2) * Ss_use / (PI2 * kappa * tau_est)
+    K_cl_m_per_year = K_cl_mps * SEC_PER_YEAR
+    
+    row["K_from_tau_m_per_year"] = float(K_cl_m_per_year)
+    row["log10_K_from_tau_m_per_year"] = float(
+        np.log10(max(K_cl_m_per_year, eps))
+    )
+
     offs = diag.get("offsets", {}).get("vs_true", {})
 
     def _q50(name: str) -> float:
@@ -1287,57 +1316,140 @@ def run_one_realisation(
     row["ridge_resid_q50"] = float(
         abs(dK - (dS + 2.0 * dH))
     )
-
-
+    
+    done_path = os.path.join(run_dir, "DONE.json")
+    with open(done_path, "w", encoding="utf-8") as f:
+        json.dump({"realisation": int(r), "done": True}, f)
+        
     return row
 
 def run_experiment(args: argparse.Namespace) -> pd.DataFrame:
+    """
+    Run SM3 synthetic identifiability experiment with resume support.
+
+    Resume logic
+    ------------
+    - Writes each completed realisation row immediately to
+      <outdir>/sm3_synth_runs.csv (append mode).
+    - Writes a per-realisation DONE.json marker in
+      <outdir>/real_<r:03d>/DONE.json.
+    - On restart, skips any realisation that is already present in the
+      CSV OR has DONE.json.
+
+    Manual control
+    --------------
+    args.start_realisation is 1-based:
+      --start-realisation 1   starts at r=0
+      --start-realisation 49  starts at r=48
+    Completed runs are still skipped even if start_realisation is set.
+    """
+
     os.makedirs(args.outdir, exist_ok=True)
 
-    rng = np.random.default_rng(int(args.seed))
     priors = litho_priors()
     years = np.arange(int(args.n_years), dtype=float)
 
+    runs_csv = os.path.join(args.outdir, "sm3_synth_runs.csv")
+
+    # -----------------------------
+    # Load existing progress (if any)
+    # -----------------------------
+    done: set[int] = set()
     rows: List[Dict[str, Any]] = []
 
-    for r in range(int(args.n_realizations)):
+    if os.path.exists(runs_csv):
+        try:
+            df_prev = pd.read_csv(runs_csv)
+        except Exception:
+            df_prev = None
+
+        if df_prev is not None and not df_prev.empty:
+            if "realisation" in df_prev.columns:
+                done = set(df_prev["realisation"].astype(int).tolist())
+            rows = df_prev.to_dict("records")
+
+    def _append_row_csv(path: str, row: Dict[str, Any]) -> None:
+        df1 = pd.DataFrame([row])
+        header = not os.path.exists(path)
+        df1.to_csv(path, mode="a", header=header, index=False)
+
+    # -----------------------------
+    # Determine start index (1-based arg)
+    # -----------------------------
+    start_idx = 0
+    if hasattr(args, "start_realisation") and args.start_realisation is not None:
+        sr = int(args.start_realisation)
+        if sr < 1:
+            raise ValueError("--start-realisation must be >= 1.")
+        start_idx = sr - 1
+
+    nR = int(args.n_realizations)
+
+    # -----------------------------
+    # Main loop (resume-aware)
+    # -----------------------------
+    for r in range(start_idx, nR):
+        run_dir = os.path.join(args.outdir, f"real_{r:03d}")
+        done_marker = os.path.join(run_dir, "DONE.json")
+
+        # Skip if completed (marker OR row already in CSV)
+        if os.path.exists(done_marker) or (r in done):
+            print(f"[resume] skip realisation {r+1:03d}/{nR:03d}")
+            continue
+
         print("=" * 62)
-        print(
-            f"Realisation {r+1:03d}/{args.n_realizations:03d}"
-        )
+        print(f"Realisation {r+1:03d}/{nR:03d}")
         print("=" * 62)
 
         row = run_one_realisation(
             r=r,
             args=args,
-            rng=rng,
             priors=priors,
             years=years,
             outdir=args.outdir,
         )
+
         rows.append(row)
+        _append_row_csv(runs_csv, row)
 
-    df = pd.DataFrame(rows)
-    
-    x = np.log10(df.tau_est_med_sec.to_numpy())
-    y = np.log10(df.tau_true_sec.to_numpy())
-    m = np.isfinite(x) & np.isfinite(y)
-    
-    if m.sum() >= 2:
-        r2 = np.corrcoef(x[m], y[m])[0, 1] ** 2
+        # keep in-memory done updated too (helps if you ever loop back)
+        done.add(int(r))
+
+    # -----------------------------
+    # Build final DF from all rows we have
+    # Prefer reading the CSV as the source of truth if it exists.
+    # -----------------------------
+    if os.path.exists(runs_csv):
+        df = pd.read_csv(runs_csv)
     else:
-        r2 = np.nan
+        df = pd.DataFrame(rows)
 
+    # -----------------------------
+    # Quick scalar diagnostic (as before)
+    # -----------------------------
+    if (
+        "tau_est_med_sec" in df.columns
+        and "tau_true_sec" in df.columns
+        and len(df) > 0
+    ):
+        x = np.log10(df.tau_est_med_sec.to_numpy(dtype=float))
+        y = np.log10(df.tau_true_sec.to_numpy(dtype=float))
+        m = np.isfinite(x) & np.isfinite(y)
 
-    print("r2 = np.corrcoef(np.log10(df.tau_est_med_sec), np.log10(df.tau_true_sec))[0,1]**2")
-    print("r2 (computed manually):", r2 )
-    
-    runs_csv = os.path.join(
-        args.outdir,
-        "sm3_synth_runs.csv",
-    )
-    df.to_csv(runs_csv, index=False)
+        if m.sum() >= 2:
+            r2 = float(np.corrcoef(x[m], y[m])[0, 1] ** 2)
+        else:
+            r2 = float("nan")
 
+        print(
+            "r2 = np.corrcoef(np.log10(df.tau_est_med_sec), "
+            "np.log10(df.tau_true_sec))[0,1]**2"
+        )
+        print("r2 (computed manually):", r2)
+
+    # -----------------------------
+    # Write/update summary CSV
+    # -----------------------------
     metrics = []
     for c in df.columns:
         if c in ("realisation", "lith_idx"):
@@ -1348,14 +1460,14 @@ def run_experiment(args: argparse.Namespace) -> pd.DataFrame:
 
     summ_rows: List[Dict[str, Any]] = []
     for c in metrics:
-        x = df[c].to_numpy(dtype=float)
-        x = x[np.isfinite(x)]
-        if x.size:
-            mean = float(np.mean(x))
-            std = float(np.std(x))
-            p05 = float(np.quantile(x, 0.05))
-            p50 = float(np.quantile(x, 0.50))
-            p95 = float(np.quantile(x, 0.95))
+        arr = df[c].to_numpy(dtype=float)
+        arr = arr[np.isfinite(arr)]
+        if arr.size:
+            mean = float(np.mean(arr))
+            std = float(np.std(arr))
+            p05 = float(np.quantile(arr, 0.05))
+            p50 = float(np.quantile(arr, 0.50))
+            p95 = float(np.quantile(arr, 0.95))
         else:
             mean = float("nan")
             std = float("nan")
@@ -1375,10 +1487,7 @@ def run_experiment(args: argparse.Namespace) -> pd.DataFrame:
         )
 
     df_sum = pd.DataFrame(summ_rows)
-    sum_csv = os.path.join(
-        args.outdir,
-        "sm3_synth_summary.csv",
-    )
+    sum_csv = os.path.join(args.outdir, "sm3_synth_summary.csv")
     df_sum.to_csv(sum_csv, index=False)
 
     print("[OK] wrote:", runs_csv)
@@ -1419,7 +1528,6 @@ def main() -> None:
         choices=("step", "ramp"),
         default="step",
     )
-
     ap.add_argument("--alpha", type=float, default=1.0)
     ap.add_argument("--hd-factor", type=float, default=0.6)
     ap.add_argument(
@@ -1443,7 +1551,13 @@ def main() -> None:
         type=float,
         default=0.4,
     )
-
+    ap.add_argument(
+        "--start-realisation",
+        type=int,
+        default=1,
+        help="1-based realisation index to start from (resume-safe).",
+    )
+    
     args = ap.parse_args()
 
     ok = args.tau_min > 0.0 and args.tau_max > args.tau_min

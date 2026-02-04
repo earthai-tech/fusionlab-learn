@@ -22,7 +22,7 @@ We will deepen each tab progressively.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -75,12 +75,51 @@ from .sampling import (
     cfg_from_get as samp_cfg_from_get,
     sample_points,
 )
+from .keys import (
+    MAP_ACTIVE_FILE,
+    MAP_TIME_COL,
+    MAP_X_COL,
+    MAP_Y_COL,
+    MAP_Z_COL,
+    MAP_OBS_COL,
+    MAP_ID_COL,
+    MAP_VALUE_COL,
+    MAP_TIME_VALUE,
+    MAP_STEP_COL,
+    MAP_CLICK_SAMPLE_IDX,
+    MAP_DF_ALL,
+    MAP_DF_FRAME,
+    MAP_DF_POINTS,
+    MAP_SAMPLING_CELL_KM,
+    MAP_SAMPLING_MODE,
+    MAP_SAMPLING_METHOD,
+    MAP_SAMPLING_MAX_POINTS,
+    MAP_SAMPLING_SEED,
+    MAP_SAMPLING_MAX_PER_CELL,
+    MAP_SAMPLING_APPLY_HOTSPOTS,
+)
+
+
+def pick_id_col(cols: Sequence[str]) -> str:
+    cand = [str(c) for c in (cols or [])]
+    for name in (
+        "sample_idx",
+        "sid",
+        "point_id",
+        "site_id",
+        "id",
+    ):
+        if name in cand:
+            return name
+    return ""
 
 
 @dataclass
 class MapAnaCtx:
     path: Optional[Path] = None
     df: Optional[pd.DataFrame] = None
+    df_all: Optional[pd.DataFrame] = None
+    df_points: Optional[pd.DataFrame] = None
 
     x: str = ""
     y: str = ""
@@ -88,8 +127,10 @@ class MapAnaCtx:
     t: str = ""
     step: str = ""
 
+    id_col: str = ""
+
     time_value: str = ""
-    q_cols: list[tuple[float, str]] = None  # type: ignore
+    q_cols: list[tuple[float, str]] = field(default_factory=list)
     obs_col: str = ""
 
 
@@ -122,7 +163,10 @@ class CollapsibleAnalyticsPanel(QFrame):
 
         self._spatial = SpatialTab(parent=self)
         self._sharp = SharpnessTab(parent=self)
-        self._rely = ReliabilityTab(parent=self)
+        self._rely = ReliabilityTab(
+            store=self.store,
+            parent=self,
+        )
         self._insp = InspectorTab(parent=self)
 
         self._build_ui()
@@ -154,40 +198,99 @@ class CollapsibleAnalyticsPanel(QFrame):
         """
         Pull from store and update all tabs.
         """
-        if self.store is None:
+        store = self.store
+        if store is None:
             return
-
-        p = str(self.store.get("map.active_file", ""))
-        p = p.strip()
-        path = Path(p) if p else None
-
-        x = str(self.store.get("map.x_col", "")).strip()
-        y = str(self.store.get("map.y_col", "")).strip()
-        z = str(self.store.get("map.value_col", "")).strip()
+    
+        def _sget(key: str) -> str:
+            return str(store.get(key, "") or "").strip()
+    
+        p_raw = _sget(MAP_ACTIVE_FILE)
+        path = Path(p_raw) if p_raw else None
+    
+        x = _sget(MAP_X_COL)
+        y = _sget(MAP_Y_COL)
+    
+        z = _sget(MAP_VALUE_COL)
         if not z:
-            z = str(self.store.get("map.z_col", "")).strip()
-
-        t = str(self.store.get("map.time_col", "")).strip()
-        step = str(self.store.get("map.step_col", "")).strip()
-        tv = str(self.store.get("map.time_value", "")).strip()
-
-        df = self._load_frame(
-            path=path,
-            x=x,
-            y=y,
-            z=z,
-            t=t,
-            step=step,
-            time_value=tv,
-        )
-
+            z = _sget(MAP_Z_COL)
+    
+        t = _sget(MAP_TIME_COL)
+        step = _sget(MAP_STEP_COL)
+        tv = _sget(MAP_TIME_VALUE)
+    
+        df_all = store.get(MAP_DF_ALL, None)
+        df_frame = store.get(MAP_DF_FRAME, None)
+        df_points = store.get(MAP_DF_POINTS, None)
+    
+        hcols: list[str] = []
+        if path is not None and path.exists():
+            try:
+                hcols = list(
+                    pd.read_csv(
+                        path,
+                        nrows=0,
+                    ).columns
+                )
+            except Exception:  # noqa: BLE001
+                hcols = []
+    
+        id_col = pick_id_col(hcols)
+        q_cols_hdr = safe_quantile_cols(hcols)
+        obs_auto = pick_obs_col(hcols)
+    
+        obs_over = _sget(MAP_OBS_COL)
+        obs_pick = obs_auto
+        if obs_over and obs_over in hcols:
+            obs_pick = obs_over
+    
+        extra: list[str] = []
+        if id_col:
+            extra.append(id_col)
+        if obs_pick:
+            extra.append(obs_pick)
+    
+        for _q, c in (q_cols_hdr or []):
+            if c:
+                extra.append(str(c))
+    
+        if (
+            isinstance(df_frame, pd.DataFrame)
+            and not df_frame.empty
+        ):
+            df = df_frame
+        else:
+            df = self._load_frame(
+                path=path,
+                x=x,
+                y=y,
+                z=z,
+                t=t,
+                step=step,
+                time_value=tv,
+                extra_cols=extra,
+            )
+    
         cols = list(df.columns) if df is not None else []
-        q_cols = safe_quantile_cols(cols)
-        obs = pick_obs_col(cols)
-
+        q_cols = safe_quantile_cols(cols) or q_cols_hdr
+        q_cols = [
+            (float(q), str(c))
+            for (q, c) in (q_cols or [])
+            if str(c) in cols
+        ]
+    
+        id_col2 = id_col if (id_col in cols) else ""
+        obs2 = obs_pick if (obs_pick in cols) else ""
+    
         self._ctx = MapAnaCtx(
             path=path,
             df=df,
+            df_all=df_all
+            if isinstance(df_all, pd.DataFrame)
+            else None,
+            df_points=df_points
+            if isinstance(df_points, pd.DataFrame)
+            else None,
             x=x,
             y=y,
             z=z,
@@ -195,20 +298,23 @@ class CollapsibleAnalyticsPanel(QFrame):
             step=step,
             time_value=tv,
             q_cols=q_cols,
-            obs_col=obs,
+            obs_col=obs2,
+            id_col=id_col2,
         )
-
-        for tab in (
+    
+        tabs = (
             self._sel,
             self._spatial,
             self._sharp,
             self._rely,
             self._insp,
-        ):
+        )
+    
+        for tab in tabs:
             try:
+                setattr(tab, "store", self.store)
                 tab.set_context(self._ctx)
             except Exception:
-                # optional: log the exception
                 pass
 
     # -------------------------
@@ -319,10 +425,7 @@ class CollapsibleAnalyticsPanel(QFrame):
         if w is None:
             return
     
-        ref = getattr(w, "refresh", None)
-        if callable(ref):
-            ref()
-    
+        self.refresh()
     
     def take_tabs(self) -> Optional[QTabWidget]:
         tabs = self.tabs
@@ -383,23 +486,41 @@ class CollapsibleAnalyticsPanel(QFrame):
     # -------------------------
     def _on_store_changed(self, keys) -> None:
         ks = set(keys or [])
-        want = {
-            "map.active_file",
-            "map.x_col",
-            "map.y_col",
-            "map.z_col",
-            "map.value_col",
-            "map.time_col",
-            "map.step_col",
-            "map.time_value",
-            "map.sampling.mode",
-            "map.sampling.method",
-            "map.sampling.max_points",
-            "map.sampling.seed",
-            "map.sampling.cell_km",
-            "map.sampling.max_per_cell",
-            "map.sampling.apply_hotspots",
+        
+        if MAP_CLICK_SAMPLE_IDX in ks:
+            sid = self.store.get(MAP_CLICK_SAMPLE_IDX, None)
+            if sid is not None:
+                try:
+                    self._sel.set_id(int(sid))
+                except Exception:
+                    pass
+                try:
+                    self._insp.set_id(int(sid))
+                except Exception:
+                    pass
+            return
 
+        want = {
+            MAP_ACTIVE_FILE, 
+            MAP_X_COL,
+            MAP_Y_COL,
+            MAP_Z_COL,
+            MAP_VALUE_COL,
+            MAP_TIME_COL,
+            MAP_STEP_COL,
+            MAP_TIME_VALUE,
+            MAP_SAMPLING_CELL_KM,
+            MAP_SAMPLING_MODE, 
+            MAP_SAMPLING_METHOD, 
+            MAP_SAMPLING_MAX_POINTS, 
+            MAP_SAMPLING_SEED, 
+            MAP_SAMPLING_MAX_PER_CELL, 
+            MAP_SAMPLING_APPLY_HOTSPOTS, 
+            MAP_DF_ALL, 
+            MAP_DF_FRAME, 
+            MAP_DF_POINTS,
+            MAP_ID_COL, 
+            MAP_OBS_COL
         }
         if ks.intersection(want):
             self.refresh()
@@ -414,14 +535,19 @@ class CollapsibleAnalyticsPanel(QFrame):
         t: str,
         step: str,
         time_value: str,
+        extra_cols: Sequence[str] = (),
     ) -> Optional[pd.DataFrame]:
         if path is None:
             return None
         if not path.exists():
             return None
 
-        use = []
+        use: list[str] = []
         for c in (x, y, z, t, step):
+            if c and c not in use:
+                use.append(c)
+        for c in (extra_cols or ()):  # extras: q/obs/id
+            c = str(c or "").strip()
             if c and c not in use:
                 use.append(c)
 
@@ -511,6 +637,7 @@ class _TabBase(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._ctx = MapAnaCtx(q_cols=[])
+        self.store: Optional[GeoConfigStore] = None
 
     def set_context(self, ctx: MapAnaCtx) -> None:
         self._ctx = ctx
@@ -581,9 +708,11 @@ class SelectionTab(_TabBase):
         parent=None,
     ) -> None:
         super().__init__(parent)
+
         self.store = store
 
         self._sel: list[tuple[float, float]] = []
+        self._sel_id: Optional[int] = None
         self._tol_auto = True
         
         self.lb_info = QLabel(
@@ -753,13 +882,23 @@ class SelectionTab(_TabBase):
 
     def clear_selection(self) -> None:
         self._sel = []
+        self._sel_id = None
         self.lb_info.setText(
             "Click a point on the map to inspect."
         )
         self.refresh()
 
+    def set_id(self, sid: int) -> None:
+        try:
+            self._sel_id = int(sid)
+        except Exception:
+            return
+        self._sel = []
+        self.refresh()
+
     def set_xy(self, x: float, y: float) -> None:
         """Set selection to a single point."""
+        self._sel_id = None
         try:
             self._sel = [(float(x), float(y))]
         except Exception:
@@ -778,6 +917,63 @@ class SelectionTab(_TabBase):
                 continue
         self._sel = out
         self.refresh()
+
+
+    def _load_id_series(
+        self,
+        *,
+        path: Path,
+        id_col: str,
+        sid: int,
+        t: str,
+        z: str,
+        step: str,
+        q_cols: Sequence[str],
+    ) -> Optional[pd.DataFrame]:
+        
+        use: list[str] = [id_col, t, z]
+        
+        df_all = getattr(self._ctx, "df_all", None)
+        if isinstance(df_all, pd.DataFrame) and (not df_all.empty):
+            if id_col in df_all.columns:
+                cols = [c for c in use if c in df_all.columns]
+                m = df_all[id_col] == int(sid)
+                sub = df_all.loc[m, cols]
+                if len(sub):
+                    return sub.reset_index(drop=True)
+
+        if step:
+            use.append(step)
+        for c in q_cols or []:
+            if c and c not in use:
+                use.append(str(c))
+        try:
+            chunks = pd.read_csv(
+                path,
+                usecols=use,
+                chunksize=200_000,
+            )
+        except Exception:
+            return None
+
+        keep: list[pd.DataFrame] = []
+        for ch in chunks:
+            if id_col not in ch.columns:
+                continue
+            try:
+                m = ch[id_col] == sid
+            except Exception:
+                m = False
+            part = ch.loc[m]
+            if not part.empty:
+                keep.append(part)
+        if not keep:
+            return None
+        try:
+            return pd.concat(keep, ignore_index=True)
+        except Exception:
+            return None
+
 
     # -------------------------
     # Plot
@@ -806,6 +1002,7 @@ class SelectionTab(_TabBase):
         y = ctx.y
         t = ctx.t
         z = ctx.z
+        # step = ctx.step
         qs = ctx.q_cols or []
 
         if not (x and y and t and z):
@@ -819,7 +1016,7 @@ class SelectionTab(_TabBase):
             )
             return
 
-        if not self._sel:
+        if not self._sel and self._sel_id is None:
             _show_empty(
                 self.plot,
                 title="No selection",
@@ -830,16 +1027,34 @@ class SelectionTab(_TabBase):
 
         tol = float(self.sp_tol.value())
         q_names = [c for _, c in qs]
-        df = load_series_for_points(
-            path=path,
-            x=x,
-            y=y,
-            t=t,
-            z=z,
-            q_cols=q_names,
-            pts=self._sel,
-            tol=tol,
-        )
+
+        df = None
+        if (
+            self._sel_id is not None
+            and ctx.id_col
+            and path is not None
+            and path.exists()
+        ):
+            df = self._load_id_series(
+                path=path,
+                id_col=ctx.id_col,
+                sid=int(self._sel_id),
+                t=t,
+                z=z,
+                step=ctx.step,
+                q_cols=q_names,
+            )
+        else:
+            df = load_series_for_points(
+                path=path,
+                x=x,
+                y=y,
+                t=t,
+                z=z,
+                q_cols=q_names,
+                pts=self._sel,
+                tol=tol,
+            )
 
         if df is None or df.empty:
             _show_empty(
@@ -1371,6 +1586,7 @@ class SharpnessTab(_TabBase):
 
         df = self._ctx.df
         qs = self._ctx.q_cols or []
+        # step = self._ctx.step
         t = self._ctx.t
 
         if df is None or not len(df):
@@ -1490,11 +1706,18 @@ class ReliabilityTab(_TabBase):
     PIT + coverage if observation exists.
     """
 
-    def __init__(self, parent=None) -> None:
+    def __init__(
+        self,
+        *,
+        store: Optional[GeoConfigStore] = None,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
 
-        self.ed_obs = QLineEdit(self)
-        self.ed_obs.setReadOnly(True)
+        self.store = store
+
+        self.cmb_obs = QComboBox(self)
+        self.cmb_obs.addItem("(auto)")
 
         self.plot = MplPlot(
             title="Reliability / PIT",
@@ -1506,6 +1729,10 @@ class ReliabilityTab(_TabBase):
         )
         self._build_ui()
 
+        self.cmb_obs.currentIndexChanged.connect(
+            self._on_obs_changed,
+        )
+
     def _build_ui(self) -> None:
         box = QGroupBox("Inputs", self)
         v = QVBoxLayout(box)
@@ -1513,7 +1740,7 @@ class ReliabilityTab(_TabBase):
         v.setSpacing(8)
     
         v.addWidget(QLabel("Obs column:", box), 0)
-        v.addWidget(self.ed_obs, 0)
+        v.addWidget(self.cmb_obs, 0)
         v.addStretch(1)
     
         # Scroll wrapper (controls + plot)
@@ -1530,6 +1757,47 @@ class ReliabilityTab(_TabBase):
             )
 
 
+
+    def _on_obs_changed(self, _i: int) -> None:
+        if self.store is None:
+            return
+        name = str(self.cmb_obs.currentText() or "").strip()
+        if name == "(auto)":
+            name = ""
+        self.store.set(MAP_OBS_COL, name)
+        self.refresh()
+
+    def _refresh_obs_choices(
+        self,
+        *,
+        cols: Sequence[str],
+        obs_auto: str,
+    ) -> None:
+        cands: list[str] = []
+        for c in cols or []:
+            cl = str(c).lower()
+            if any(k in cl for k in ("obs", "truth", "actual", "target")):
+                cands.append(str(c))
+        if obs_auto and obs_auto not in cands:
+            cands.insert(0, obs_auto)
+
+        cur = str(
+            self.store.get(MAP_OBS_COL, "") if self.store else ""
+        ).strip()
+        want = cur or obs_auto or ""
+
+        with QSignalBlocker(self.cmb_obs):
+            self.cmb_obs.clear()
+            self.cmb_obs.addItem("(auto)")
+            for c in cands:
+                self.cmb_obs.addItem(c)
+
+            if want:
+                j = self.cmb_obs.findText(want)
+                if j >= 0:
+                    self.cmb_obs.setCurrentIndex(int(j))
+
+
     def refresh(self) -> None:
         if not HAS_MPL:
             return
@@ -1538,10 +1806,17 @@ class ReliabilityTab(_TabBase):
 
         df = self._ctx.df
         qs = self._ctx.q_cols or []
-        obs = self._ctx.obs_col or ""
+        obs_auto = self._ctx.obs_col or ""
+        obs_override = str(
+            self.store.get(MAP_OBS_COL, "")
+            if self.store else ""
+        ).strip()
+        obs = obs_override or obs_auto
 
-        self.ed_obs.setText(obs)
-
+        self._refresh_obs_choices(
+            cols=list(df.columns) if df is not None else [],
+            obs_auto=obs,
+        )
 
 
         if df is None or not len(df):
@@ -1609,6 +1884,8 @@ class InspectorTab(_TabBase):
         super().__init__(parent)
 
         self._pts: list[tuple[float, float]] = []
+        self._ids: list[int] = []
+        self._active_sid: Optional[int] = None
         self._pts_key: tuple[str, str, str] = ("", "", "")
 
         self.sp_pt = QSpinBox(self)
@@ -1743,7 +2020,42 @@ class InspectorTab(_TabBase):
         self._ctx = ctx
         self._ensure_pts()
         self.refresh()
+        
+    def set_id(self, sid: int) -> None:
+        try:
+            self._active_sid = int(sid)
+        except Exception:
+            self._active_sid = None
+    
+        if self._active_sid is not None and self._ids:
+            try:
+                i = self._ids.index(self._active_sid)
+                self.sp_pt.setValue(int(i))
+            except Exception:
+                pass
+        self.refresh()
+        
+    # def set_id(self, sid: int) -> None:
+    #     """
+    #     Jump to a point by its stable id (sample_idx).
+    #     """
+    #     try:
+    #         si = int(sid)
+    #     except Exception:
+    #         return
 
+    #     self._active_sid = si
+
+    #     if self._ids:
+    #         try:
+    #             j = self._ids.index(si)
+    #             self.sp_pt.setValue(int(j))
+    #             return
+    #         except Exception:
+    #             pass
+
+    #     self.refresh()
+        
     def _ensure_pts(self) -> None:
         """
         Rebuild point list when:
@@ -1774,19 +2086,150 @@ class InspectorTab(_TabBase):
         if not (x and y):
             return
 
-        pts = self._scan_unique_xy(
-            path=path,
-            x=x,
-            y=y,
-            limit=int(self.sp_max.value()),
-        )
-        self._pts = pts
+        id_col = str(self._ctx.id_col or "").strip()
+        
+        # ---------------------------------------------
+        # PATCH: Prefer in-memory frame (ctx.df)
+        # ---------------------------------------------
+        df = getattr(self._ctx, "df", None)
+        if isinstance(df, pd.DataFrame) and (not df.empty):
+            lim = int(self.sp_max.value())
+
+            # Prefer a stable id column if available
+            cid = str(id_col or "").strip()
+            if not cid:
+                if "sample_idx" in df.columns:
+                    cid = "sample_idx"
+                elif "sid" in df.columns:
+                    cid = "sid"
+
+            if cid and (cid in df.columns):
+                sub = df[[cid, x, y]].copy()
+                sub = sub.dropna(subset=[cid, x, y])
+
+                # Keep one row per id (stable list)
+                try:
+                    sub[cid] = pd.to_numeric(
+                        sub[cid], errors="coerce"
+                    )
+                except Exception:
+                    pass
+
+                sub = sub.dropna(subset=[cid])
+                sub = sub.drop_duplicates(subset=[cid])
+
+                if lim > 0 and len(sub) > lim:
+                    sub = sub.iloc[:lim]
+
+                try:
+                    xs = pd.to_numeric(
+                        sub[x], errors="coerce"
+                    )
+                    ys = pd.to_numeric(
+                        sub[y], errors="coerce"
+                    )
+                    ok = xs.notna() & ys.notna()
+                    sub = sub.loc[ok]
+                    pts = list(
+                        zip(
+                            xs.loc[ok].astype(float),
+                            ys.loc[ok].astype(float),
+                        )
+                    )
+                except Exception:
+                    pts = list(zip(sub[x], sub[y]))
+
+                ids: list[int] = []
+                for v in sub[cid].tolist():
+                    try:
+                        if pd.isna(v):
+                            continue
+                        ids.append(int(v))
+                    except Exception:
+                        continue
+
+                self._pts = pts
+                self._ids = ids
+
+            else:
+                # Fallback: unique (x,y)
+                sub = df[[x, y]].copy()
+                sub = sub.dropna(subset=[x, y])
+                sub = sub.drop_duplicates(subset=[x, y])
+
+                if lim > 0 and len(sub) > lim:
+                    sub = sub.iloc[:lim]
+
+                try:
+                    xs = pd.to_numeric(
+                        sub[x], errors="coerce"
+                    )
+                    ys = pd.to_numeric(
+                        sub[y], errors="coerce"
+                    )
+                    ok = xs.notna() & ys.notna()
+                    sub = sub.loc[ok]
+                    self._pts = list(
+                        zip(
+                            xs.loc[ok].astype(float),
+                            ys.loc[ok].astype(float),
+                        )
+                    )
+                except Exception:
+                    self._pts = list(zip(sub[x], sub[y]))
+
+                self._ids = []
+
+            if not self._pts:
+                return
+
+            # reuse the same "range + active sid + label"
+            self.sp_pt.setRange(0, len(self._pts) - 1)
+
+            j = 0
+            if self._active_sid is not None and self._ids:
+                try:
+                    j = self._ids.index(int(self._active_sid))
+                except Exception:
+                    j = 0
+
+            self.sp_pt.setValue(int(j))
+            self._update_xy_label()
+            return
+
+        
+        if id_col:
+            pts, ids = self._scan_unique_sid_xy(
+                path=path,
+                x=x,
+                y=y,
+                id_col=id_col,
+                limit=int(self.sp_max.value()),
+            )
+            self._pts = pts
+            self._ids = ids
+        else:
+            self._ids = []
+            self._pts = self._scan_unique_xy(
+                path=path,
+                x=x,
+                y=y,
+                limit=int(self.sp_max.value()),
+            )
 
         if not self._pts:
             return
 
         self.sp_pt.setRange(0, len(self._pts) - 1)
-        self.sp_pt.setValue(0)
+
+        j = 0
+        if self._active_sid is not None and self._ids:
+            try:
+                j = self._ids.index(int(self._active_sid))
+            except Exception:
+                j = 0
+
+        self.sp_pt.setValue(int(j))
         self._update_xy_label()
 
     def _update_xy_label(self) -> None:
@@ -1797,7 +2240,16 @@ class InspectorTab(_TabBase):
         i = int(self.sp_pt.value())
         i = max(0, min(i, len(self._pts) - 1))
         x0, y0 = self._pts[i]
-        self.lb_xy.setText(f"{x0:.6f}, {y0:.6f}")
+        sid = None
+        if i < len(self._ids):
+            sid = self._ids[i]
+
+        if sid is None:
+            self.lb_xy.setText(f"{x0:.6f}, {y0:.6f}")
+        else:
+            self.lb_xy.setText(
+                f"sid={sid} | {x0:.6f}, {y0:.6f}"
+            )
 
     # -------------------------
     # Data access
@@ -1820,30 +2272,28 @@ class InspectorTab(_TabBase):
 
         use = [x, y]
         try:
-            it = pd.read_csv(
+            chunks = pd.read_csv(
                 path,
                 usecols=use,
-                chunksize=200000,
+                chunksize=200_000,
             )
         except Exception:
             return out
 
-        for ch in it:
+        for ch in chunks:
             if x not in ch.columns or y not in ch.columns:
                 continue
 
             d = ch[[x, y]].dropna()
-            if not len(d):
+            if d.empty:
                 continue
 
             d = d.drop_duplicates()
-            for row in d.itertuples(index=False):
+            for xx, yy in d.itertuples(index=False, name=None):
                 try:
-                    xx = float(row[0])
-                    yy = float(row[1])
+                    key = (float(xx), float(yy))
                 except Exception:
                     continue
-                key = (xx, yy)
                 if key in seen:
                     continue
                 seen.add(key)
@@ -1852,6 +2302,114 @@ class InspectorTab(_TabBase):
                     return out
 
         return out
+
+    def _scan_unique_sid_xy(
+        self,
+        *,
+        path: Path,
+        x: str,
+        y: str,
+        id_col: str,
+        limit: int = 2000,
+    ) -> tuple[list[tuple[float, float]], list[int]]:
+        """
+        Chunked unique scan for (sample_idx, x, y).
+
+        Returns:
+            (points, ids) where points[i] corresponds to ids[i].
+        """
+        pts: list[tuple[float, float]] = []
+        ids: list[int] = []
+        seen: set[int] = set()
+
+        use = [id_col, x, y]
+        try:
+            chunks = pd.read_csv(
+                path,
+                usecols=use,
+                chunksize=200_000,
+            )
+        except Exception:
+            return pts, ids
+
+        for ch in chunks:
+            if (
+                id_col not in ch.columns
+                or x not in ch.columns
+                or y not in ch.columns
+            ):
+                continue
+
+            ch = ch[[id_col, x, y]].dropna()
+            if ch.empty:
+                continue
+
+            ch = ch.drop_duplicates(subset=[id_col])
+            for sid, xx, yy in ch.itertuples(index=False, name=None):
+                try:
+                    si = int(sid)
+                except Exception:
+                    continue
+                if si in seen:
+                    continue
+                try:
+                    pts.append((float(xx), float(yy)))
+                    ids.append(si)
+                    seen.add(si)
+                except Exception:
+                    continue
+
+                if len(ids) >= int(limit):
+                    return pts, ids
+
+        return pts, ids
+
+    def _load_id_series(
+
+        self,
+        *,
+        path: Path,
+        id_col: str,
+        sid: int,
+        t: str,
+        z: str,
+        step: str,
+        qs: list[tuple[float, str]],
+    ) -> Optional[pd.DataFrame]:
+        use: list[str] = [id_col, t, z]
+        if step:
+            use.append(step)
+        for _q, c in (qs or []):
+            if c and c not in use:
+                use.append(str(c))
+        try:
+            chunks = pd.read_csv(
+                path,
+                usecols=use,
+                chunksize=200_000,
+            )
+        except Exception:
+            return None
+
+        keep: list[pd.DataFrame] = []
+        for ch in chunks:
+            if id_col not in ch.columns:
+                continue
+            try:
+                m = ch[id_col] == sid
+            except Exception:
+                m = False
+            part = ch.loc[m]
+            if not part.empty:
+                keep.append(part)
+
+        if not keep:
+            return None
+        try:
+            return pd.concat(keep, ignore_index=True)
+        except Exception:
+            return None
+
 
     def _load_point_series(
         self,
@@ -1917,7 +2475,7 @@ class InspectorTab(_TabBase):
 
         self._update_xy_label()
 
-        df0 = self._ctx.df
+        # df0 = self._ctx.df
         path = self._ctx.path
 
         x = self._ctx.x
@@ -1925,6 +2483,7 @@ class InspectorTab(_TabBase):
         t = self._ctx.t
         z = self._ctx.z
         qs = self._ctx.q_cols or []
+        step = self._ctx.step
 
         if path is None or not path.exists():
             _show_empty(
@@ -1962,17 +2521,32 @@ class InspectorTab(_TabBase):
         x0, y0 = self._pts[i]
 
         tol = float(self.sp_tol.value())
-        df = self._load_point_series(
-            path=path,
-            x=x,
-            y=y,
-            t=t,
-            z=z,
-            qs=qs,
-            x0=x0,
-            y0=y0,
-            tol=tol,
-        )
+
+        df = None
+        if self._ids and i < len(self._ids) and self._ctx.id_col:
+            sid = self._ids[i]
+            df = self._load_id_series(
+                path=path,
+                id_col=self._ctx.id_col,
+                sid=int(sid),
+                t=t,
+                z=z,
+                step=step,
+                qs=qs,
+            )
+
+        if df is None or not len(df):
+            df = self._load_point_series(
+                path=path,
+                x=x,
+                y=y,
+                t=t,
+                z=z,
+                qs=qs,
+                x0=x0,
+                y0=y0,
+                tol=tol,
+            )
 
         if df is None or not len(df):
             _show_empty(
@@ -2006,7 +2580,14 @@ class InspectorTab(_TabBase):
         ax.set_xlabel(t)
         ax.set_ylabel(z)
 
-        title = f"({x0:.4f}, {y0:.4f})"
+        sid = None
+        if self._ids and i < len(self._ids):
+            sid = self._ids[i]
+
+        if sid is None:
+            title = f"({x0:.4f}, {y0:.4f})"
+        else:
+            title = f"sid={sid} | ({x0:.4f}, {y0:.4f})"
         ax.set_title(title)
 
         if self.chk_fan.isChecked():
@@ -2094,6 +2675,7 @@ class InspectorTab(_TabBase):
                 err = e
                 best = col
         return best
+
 
     def set_xy(self, x: float, y: float) -> None:
         """

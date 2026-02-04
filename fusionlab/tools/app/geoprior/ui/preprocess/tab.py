@@ -67,7 +67,6 @@ from ...utils.path_display import (
     compact_path,
     set_path_label,
 )
-from ...utils.generic_utils import open_json_editor
 
 from ..stage1_workspace.workspace import Stage1Workspace
 from ..stage1_workspace.readiness import (
@@ -79,10 +78,12 @@ from ..stage1_workspace.visual_checks import (
     Stage1VisualData,
 )
 from ..icon_utils import try_icon
-from .status import compute_preprocess_nav
+from ..json_editor import open_json_editor
+# from ...utils.generic_utils import open_json_editor
 from ..kv_panel import KeyValuePanel 
 from .preview import Stage1PreviewViz, RecapTable 
 from .navigator import PreprocessNavigator
+from .status import compute_preprocess_nav
 
 MakeCardFn = Callable[[str], Tuple[QWidget, QVBoxLayout]]
 MakeRunBtnFn = Callable[[str], object]

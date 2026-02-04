@@ -244,6 +244,44 @@ class MapToolTab(QWidget):
         )
 
         self.add_separator()
+    
+        self.add_tool(
+            ToolSpec(
+                key="select_point",
+                tooltip="Select a point",
+                icon_name="select-point.svg",
+                fallback_sp=getattr(
+                    QStyle,
+                    "SP_ArrowCursor",
+                    QStyle.SP_ArrowUp,
+                ),
+                checkable=True,
+            )
+        )
+        self.add_tool(
+            ToolSpec(
+                key="select_group",
+                tooltip="Select a group",
+                icon_name="select-group.svg",
+                fallback_sp=QStyle.SP_FileDialogListView,
+                checkable=True,
+            )
+        )
+        self.add_tool(
+            ToolSpec(
+                key="clear_selection",
+                tooltip="Clear selection",
+                icon_name="clear-selection.svg",
+                fallback_sp=getattr(
+                    QStyle,
+                    "SP_DialogResetButton",
+                    QStyle.SP_BrowserReload,
+                ),
+                checkable=False,
+            )
+        )
+
+        self.add_separator()
 
         self.add_tool(
             ToolSpec(

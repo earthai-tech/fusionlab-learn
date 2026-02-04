@@ -108,6 +108,11 @@ class ColumnPicker(QWidget):
         self._cols: List[str] = []
 
         self.setObjectName("mapColPicker")
+        sp = QSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Fixed,
+        )
+        self.setSizePolicy(sp)
 
         self.lb = QLabel(label, self)
         self.lb.setObjectName("mapColLabel")
@@ -262,32 +267,45 @@ class MapHeadBar(QWidget):
         )
         self.cmb_coord.setMinimumHeight(30)
         
-        # EPSG input (shown only in "epsg" mode)
+        # EPSG input (stable slot; enabled only in "epsg" mode)
         self._epsg_wrap = QWidget(self.card)
         self._epsg_wrap.setObjectName("mapHeadEpsgWrap")
-        
+        self._epsg_wrap.setSizePolicy(
+            QSizePolicy.Fixed,
+            QSizePolicy.Fixed,
+        )
+
         ew = QHBoxLayout(self._epsg_wrap)
         ew.setContentsMargins(0, 0, 0, 0)
-        ew.setSpacing(6)
-        
+        ew.setSpacing(4)
+
         self.lb_epsg = QLabel("EPSG", self._epsg_wrap)
         self.lb_epsg.setObjectName("mapHeadKey")
-        
+
         self.ed_epsg = QLineEdit(self._epsg_wrap)
         self.ed_epsg.setObjectName("mapHeadEpsgEdit")
-        self.ed_epsg.setFixedHeight(30)
-        self.ed_epsg.setFixedWidth(88)
+        self.ed_epsg.setAlignment(Qt.AlignCenter)
+        self.ed_epsg.setMinimumHeight(30)
+        self.ed_epsg.setFixedWidth(72)
         self.ed_epsg.setPlaceholderText("4326")
-        self.ed_epsg.setToolTip("Source EPSG for X/Y columns")
-        
+        self.ed_epsg.setToolTip(
+            "Source EPSG for X/Y columns"
+        )
+
         vld = QIntValidator(1, 999999, self.ed_epsg)
         self.ed_epsg.setValidator(vld)
-        
+
         ew.addWidget(self.lb_epsg, 0)
         ew.addWidget(self.ed_epsg, 0)
-        ew.addStretch(1)
-        
-        self._epsg_wrap.setVisible(False)
+
+        # Always reserve the slot (stable layout).
+        self._epsg_wrap.setVisible(True)
+        self._epsg_wrap.setEnabled(False)
+
+        # Keep the wrapper compact (prevents "too wide" EPSG block).
+        lbw = self.lb_epsg.sizeHint().width()
+        # spacing(4) + edit(72) + tiny slack(6)
+        self._epsg_wrap.setFixedWidth(lbw + 4 + 72 + 6)
 
         # Toggle pills
         self.btn_focus = QToolButton(self.card)
@@ -328,12 +346,17 @@ class MapHeadBar(QWidget):
         self.btn_analytics.setIconSize(QSize(16, 16))
         self.btn_analytics.setMinimumHeight(28)
 
+        # Data / View (mini pill toggles)
         self.btn_data = QToolButton(self.card)
-        self.btn_data.setObjectName("miniAction")
-        self.btn_data.setProperty("role", "mapHead")
+        self.btn_data.setObjectName("mapHeadToggle")
+        self.btn_data.setProperty("variant", "mini")
+        self.btn_data.setText("Data")
         self.btn_data.setCheckable(True)
         self.btn_data.setAutoRaise(True)
-        self.btn_data.setToolTip("Data panel")
+        self.btn_data.setToolButtonStyle(
+            Qt.ToolButtonTextBesideIcon
+        )
+        self.btn_data.setToolTip("Toggle data")
         self.btn_data.setIcon(
             try_icon(
                 "data-panel.svg",
@@ -343,14 +366,18 @@ class MapHeadBar(QWidget):
             )
         )
         self.btn_data.setIconSize(QSize(16, 16))
-        self.btn_data.setFixedSize(30, 30)
-        
+        self.btn_data.setMinimumHeight(28)
+
         self.btn_view = QToolButton(self.card)
-        self.btn_view.setObjectName("miniAction")
-        self.btn_view.setProperty("role", "mapHead")
+        self.btn_view.setObjectName("mapHeadToggle")
+        self.btn_view.setProperty("variant", "mini")
+        self.btn_view.setText("View")
         self.btn_view.setCheckable(True)
         self.btn_view.setAutoRaise(True)
-        self.btn_view.setToolTip("View panel")
+        self.btn_view.setToolButtonStyle(
+            Qt.ToolButtonTextBesideIcon
+        )
+        self.btn_view.setToolTip("Toggle view options")
         self.btn_view.setIcon(
             try_icon(
                 "view-panel.svg",
@@ -360,7 +387,7 @@ class MapHeadBar(QWidget):
             )
         )
         self.btn_view.setIconSize(QSize(16, 16))
-        self.btn_view.setFixedSize(30, 30)
+        self.btn_view.setMinimumHeight(28)
 
         self._bm_acts = {}
         self._ms_acts = {}
@@ -373,10 +400,18 @@ class MapHeadBar(QWidget):
         self.btn_more.setPopupMode(
             QToolButton.InstantPopup
         )
-        ico = self.style().standardIcon(
-            QStyle.SP_TitleBarMenuButton
+        # ico = self.style().standardIcon(
+        #     QStyle.SP_TitleBarMenuButton
+        # )
+        # self.btn_more.setIcon(ico)
+        self.btn_more.setIcon(
+            try_icon(
+                "more.svg",
+                fallback=self.style().standardIcon(
+                    QStyle.SP_TitleBarMenuButton
+                ),
+            )
         )
-        self.btn_more.setIcon(ico)
         self.btn_more.setIconSize(QSize(16, 16))
         self.btn_more.setText("")
         self.btn_more.setFixedSize(30, 30)
@@ -462,14 +497,21 @@ class MapHeadBar(QWidget):
         r1.setContentsMargins(0, 0, 0, 0)
         r1.setSpacing(10)
 
+        # ---- Controls group (single row, stable EPSG slot)
         ctrl = QFrame(row1)
         ctrl.setObjectName("mapHeadGroup")
+        ctrl.setSizePolicy(
+            QSizePolicy.Minimum,
+            QSizePolicy.Fixed,
+        )
+
         c1 = QHBoxLayout(ctrl)
         c1.setContentsMargins(10, 8, 10, 8)
         c1.setSpacing(8)
 
         lb_engine = QLabel("Engine", ctrl)
         lb_engine.setObjectName("mapHeadKey")
+
         lb_coord = QLabel("Coords", ctrl)
         lb_coord.setObjectName("mapHeadKey")
 
@@ -480,10 +522,19 @@ class MapHeadBar(QWidget):
         c1.addWidget(self.cmb_coord, 0)
         c1.addSpacing(6)
         c1.addWidget(self._epsg_wrap, 0)
-        c1.addStretch(1)
 
+        # No stretch here: ctrl stays "minimum needed"
+        # so Mapping gets the width.
+        # (Do not addStretch(1) in ctrl)
+
+        # ---- Mapping group (gets stretch, won't collapse)
         mapping = QFrame(row1)
         mapping.setObjectName("mapHeadGroup")
+        mapping.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Fixed,
+        )
+
         m1 = QHBoxLayout(mapping)
         m1.setContentsMargins(10, 8, 10, 8)
         m1.setSpacing(8)
@@ -491,20 +542,30 @@ class MapHeadBar(QWidget):
         title = QLabel("Mapping", mapping)
         title.setObjectName("mapHeadKey")
 
+        # Ensure pickers keep usable width.
+        for pk in (self.pk_x, self.pk_y, self.pk_z):
+            pk.setSizePolicy(
+                QSizePolicy.Expanding,
+                QSizePolicy.Fixed,
+            )
+            pk.setMinimumWidth(170)
+
         m1.addWidget(title, 0)
-        m1.addWidget(self.pk_x, 0)
+        m1.addWidget(self.pk_x, 1)
         m1.addWidget(self.btn_swap, 0)
-        m1.addWidget(self.pk_y, 0)
-        m1.addWidget(self.pk_z, 0)
+        m1.addWidget(self.pk_y, 1)
+        m1.addWidget(self.pk_z, 1)
         m1.addSpacing(2)
 
-        r1.addWidget(ctrl, 1)
-        r1.addWidget(mapping, 0)
+        # Critical stretch: Mapping expands, ctrl doesn't.
+        r1.addWidget(ctrl, 0)
+        r1.addWidget(mapping, 1)
 
         card_l.addWidget(row0, 0)
         card_l.addWidget(row1, 0)
 
         root.addWidget(self.card, 1)
+
 
     def _connect(self) -> None:
         self.cmb_engine.currentTextChanged.connect(
@@ -563,7 +624,7 @@ class MapHeadBar(QWidget):
 
     def _on_coord_changed(self, mode: str) -> None:
         m = str(mode or "").strip().lower()
-        self._epsg_wrap.setVisible(m == "epsg")
+        self._epsg_wrap.setEnabled(m == "epsg")
         self.coord_mode_changed.emit(str(m))
 
     def _emit_epsg(self) -> None:
@@ -594,7 +655,7 @@ class MapHeadBar(QWidget):
     def set_coord_mode(self, mode: str) -> None:
         self._set_combo(self.cmb_coord, mode)
         m = str(mode or "").strip().lower()
-        self._epsg_wrap.setVisible(m == "epsg")
+        self._epsg_wrap.setEnabled(m == "epsg")
 
     def set_focus_checked(self, checked: bool) -> None:
         self.btn_focus.blockSignals(True)

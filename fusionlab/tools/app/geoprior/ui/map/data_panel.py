@@ -18,9 +18,9 @@ Features (now)
 Notes
 -----
 We persist UI-only state via store._extra:
-- map.data_source      : "auto" | "manual"
-- map.manual_files     : list[str]
-- map.selected_files   : list[str]
+- MAP_DATA_SOURCE      : "auto" | "manual"
+- MAP_MANUAL_FILES     : list[str]
+- MAP_SELECTED_FILES   : list[str]
 """
 
 from __future__ import annotations
@@ -80,277 +80,27 @@ from .utils import (
     load_forecast_meta,
     ForecastMeta,
 )
+from .keys  import ( 
+    
+    MAP_DATA_SOURCE, 
+    MAP_MANUAL_FILES, 
+    MAP_SELECTED_FILES, 
+    MAP_ACTIVE_FILE, 
+    MAP_TIME_COL, 
+    MAP_STEP_COL, 
+    MAP_VALUE_COL, 
+    MAP_TIME_VALUE, 
+    MAP_SAMPLING_MODE,
+    MAP_SAMPLING_METHOD, 
+    MAP_SAMPLING_MAX_POINTS, 
+    MAP_SAMPLING_SEED, 
+    MAP_SAMPLING_CELL_KM, 
+    MAP_SAMPLING_MAX_PER_CELL, 
+    MAP_SAMPLING_APPLY_HOTSPOTS,  
+)
 
 ROLE_PATH = Qt.UserRole
 ROLE_KIND = Qt.UserRole + 1
-
-# class AutoHidePanel(QFrame):
-#     """
-#     Base auto-hide panel with a handle and pin mode.
-
-#     Emits width_changed while animating, so the parent
-#     QSplitter can reallocate space to the map.
-#     """
-
-#     width_changed = pyqtSignal(int)
-#     pinned_changed = pyqtSignal(bool)
-
-#     def __init__(
-#         self,
-#         *,
-#         title: str,
-#         side: str,
-#         expanded_w: int = 300,
-#         handle_w: int = 22,
-#         parent: Optional[QWidget] = None,
-#     ) -> None:
-#         super().__init__(parent)
-
-#         self._title = str(title or "")
-#         self._side = str(side or "left").lower()
-
-#         self._expanded_w = int(expanded_w)
-#         self._handle_w = int(handle_w)
-
-#         self._pinned = False
-#         self._expanded = True
-#         self._hover_enabled = True
-
-#         self._anim = QPropertyAnimation(
-#             self,
-#             b"maximumWidth",
-#         )
-#         self._anim.setDuration(180)
-#         self._anim.setEasingCurve(QEasingCurve.OutCubic)
-#         self._anim.valueChanged.connect(
-#             self._on_anim_width,
-#         )
-#         self._anim.finished.connect(self._on_anim_done)
-
-#         self._hide_timer = QTimer(self)
-#         self._hide_timer.setSingleShot(True)
-#         self._hide_timer.timeout.connect(self._on_hide_timer)
-
-#         self._build_ui()
-#         self.expand(immediate=True)
-
-#     # -----------------------------
-#     # Public API
-#     # -----------------------------
-#     def handle_width(self) -> int:
-#         return int(self._handle_w)
-
-#     def expanded_width(self) -> int:
-#         return int(self._expanded_w)
-
-#     def toggle_pinned(self) -> None:
-#         self.set_pinned(not self._pinned)
-
-#     def set_pinned(self, pinned: bool) -> None:
-#         self._pinned = bool(pinned)
-#         self._update_pin_ui()
-
-#         if self._pinned:
-#             self.setMinimumWidth(self._expanded_w)
-#             self.expand()
-#         else:
-#             self.setMinimumWidth(self._handle_w)
-#             if not self.underMouse():
-#                 self.collapse()
-
-#         self.pinned_changed.emit(self._pinned)
-
-#     def is_pinned(self) -> bool:
-#         return bool(self._pinned)
-
-#     def set_hover_enabled(self, enabled: bool) -> None:
-#         self._hover_enabled = bool(enabled)
-#         if not self._hover_enabled:
-#             self._hide_timer.stop()
-
-#     def expand(self, *, immediate: bool = False) -> None:
-#         self._hide_timer.stop()
-#         self._expanded = True
-
-#         self._content.setVisible(True)
-
-#         if self._pinned:
-#             self.setMinimumWidth(self._expanded_w)
-#         else:
-#             self.setMinimumWidth(self._handle_w)
-
-#         if immediate:
-#             self._stop_anim()
-#             self.setMaximumWidth(self._expanded_w)
-#             self.width_changed.emit(self._expanded_w)
-#             return
-
-#         self._animate_to(self._expanded_w)
-
-#     def collapse(
-#         self,
-#         *,
-#         immediate: bool = False,
-#         force: bool = False,
-#     ) -> None:
-#         if self._pinned and not force:
-#             return
-
-#         self._expanded = False
-#         self.setMinimumWidth(self._handle_w)
-
-#         if immediate:
-#             self._stop_anim()
-#             self._content.setVisible(False)
-#             self.setMaximumWidth(self._handle_w)
-#             self.width_changed.emit(self._handle_w)
-#             return
-
-#         self._animate_to(self._handle_w)
-
-#     def is_expanded(self) -> bool:
-#         return bool(self._expanded)
-
-#     # -----------------------------
-#     # Qt events
-#     # -----------------------------
-#     def enterEvent(self, event: QEvent) -> None:
-#         super().enterEvent(event)
-#         if not self._hover_enabled:
-#             return
-#         self.expand()
-
-#     def leaveEvent(self, event: QEvent) -> None:
-#         super().leaveEvent(event)
-#         if not self._hover_enabled:
-#             return
-#         if self._pinned:
-#             return
-#         self._hide_timer.start(260)
-
-#     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
-#         if obj is self._btn_handle:
-#             if event.type() == QEvent.MouseButtonDblClick:
-#                 self.toggle_pinned()
-#                 return True
-#         return super().eventFilter(obj, event)
-
-#     # -----------------------------
-#     # Internals
-#     # -----------------------------
-#     def _build_ui(self) -> None:
-#         self.setObjectName("AutoHidePanel")
-#         self.setFrameShape(QFrame.NoFrame)
-
-#         self._handle = QWidget(self)
-#         hl = QVBoxLayout(self._handle)
-#         hl.setContentsMargins(0, 0, 0, 0)
-#         hl.setSpacing(6)
-
-#         self._btn_handle = QToolButton(self._handle)
-#         self._btn_handle.setText("≡")
-#         self._btn_handle.setToolTip(self._title)
-#         self._btn_handle.clicked.connect(self.expand)
-#         self._btn_handle.installEventFilter(self)
-
-#         hl.addWidget(self._btn_handle, 0)
-#         hl.addStretch(1)
-
-#         self._content = QWidget(self)
-#         cl = QVBoxLayout(self._content)
-#         cl.setContentsMargins(10, 10, 10, 10)
-#         cl.setSpacing(10)
-
-#         top = QWidget(self._content)
-#         tl = QHBoxLayout(top)
-#         tl.setContentsMargins(0, 0, 0, 0)
-#         tl.setSpacing(8)
-
-#         self._lb = QLabel(self._title, top)
-
-#         # Pin as small icon toggle
-#         self._btn_pin = QToolButton(top)
-#         self._btn_pin.setCheckable(True)
-#         self._btn_pin.toggled.connect(self.set_pinned)
-#         self._btn_pin.setToolButtonStyle(
-#             Qt.ToolButtonTextOnly,
-#         )
-
-#         tl.addWidget(self._lb, 1)
-#         tl.addWidget(self._btn_pin, 0)
-#         cl.addWidget(top)
-
-#         self.body = QWidget(self._content)
-#         cl.addWidget(self.body, 1)
-
-#         root = QHBoxLayout(self)
-#         root.setContentsMargins(0, 0, 0, 0)
-#         root.setSpacing(0)
-
-#         if self._side == "right":
-#             root.addWidget(self._content, 1)
-#             root.addWidget(self._handle, 0)
-#         else:
-#             root.addWidget(self._handle, 0)
-#             root.addWidget(self._content, 1)
-
-#         self.setMinimumWidth(self._handle_w)
-#         self.setMaximumWidth(self._expanded_w)
-#         self._update_pin_ui()
-
-#     def _update_pin_ui(self) -> None:
-#         self._btn_pin.blockSignals(True)
-#         self._btn_pin.setChecked(self._pinned)
-#         self._btn_pin.blockSignals(False)
-
-#         if self._pinned:
-#             self._btn_pin.setText("📌")
-#             self._btn_pin.setToolTip("Pinned")
-#             self._btn_pin.setStyleSheet(
-#                 "QToolButton{"
-#                 "font-weight:600;"
-#                 "padding:2px 8px;"
-#                 "border-radius:9px;"
-#                 "border:1px solid "
-#                 "rgba(46,49,145,0.60);"
-#                 "background:rgba(46,49,145,0.12);"
-#                 "}"
-#             )
-#         else:
-#             self._btn_pin.setText("📌")
-#             self._btn_pin.setToolTip("Pin panel")
-#             self._btn_pin.setStyleSheet("")
-
-#     def _animate_to(self, w: int) -> None:
-#         w = int(max(self._handle_w, w))
-#         self._stop_anim()
-#         self._anim.setStartValue(self.maximumWidth())
-#         self._anim.setEndValue(w)
-#         self._anim.start()
-
-#     def _stop_anim(self) -> None:
-#         if self._anim.state() == QPropertyAnimation.Running:
-#             self._anim.stop()
-
-#     def _on_anim_width(self, v) -> None:
-#         try:
-#             w = int(v)
-#         except Exception:
-#             w = int(self.maximumWidth())
-#         self.width_changed.emit(w)
-
-#     def _on_anim_done(self) -> None:
-#         if not self._expanded:
-#             self._content.setVisible(False)
-#             self.setMaximumWidth(self._handle_w)
-#             self.width_changed.emit(self._handle_w)
-
-#     def _on_hide_timer(self) -> None:
-#         if self._pinned:
-#             return
-#         if self.underMouse():
-#             return
-#         self.collapse()
 
 class AutoHidePanel(QFrame):
     """
@@ -1052,18 +802,18 @@ class AutoHideDataPanel(AutoHidePanel):
 
     def _sync_sampling_from_store(self) -> None:
         mode = str(self.store.get(
-            "map.sampling.mode",
+            MAP_SAMPLING_MODE,
             "auto",
         ) or "auto").strip().lower()
 
         method = str(self.store.get(
-            "map.sampling.method",
+            MAP_SAMPLING_METHOD,
             "grid",
         ) or "grid").strip().lower()
 
         try:
             maxp = int(self.store.get(
-                "map.sampling.max_points",
+                MAP_SAMPLING_MAX_POINTS,
                 80000,
             ))
         except Exception:
@@ -1071,7 +821,7 @@ class AutoHideDataPanel(AutoHidePanel):
 
         try:
             seed = int(self.store.get(
-                "map.sampling.seed",
+                MAP_SAMPLING_SEED,
                 0,
             ))
         except Exception:
@@ -1079,7 +829,7 @@ class AutoHideDataPanel(AutoHidePanel):
 
         try:
             cell = float(self.store.get(
-                "map.sampling.cell_km",
+                MAP_SAMPLING_CELL_KM,
                 1.0,
             ))
         except Exception:
@@ -1087,14 +837,14 @@ class AutoHideDataPanel(AutoHidePanel):
 
         try:
             per = int(self.store.get(
-                "map.sampling.max_per_cell",
+                MAP_SAMPLING_MAX_PER_CELL,
                 50,
             ))
         except Exception:
             per = 50
 
         hot = bool(self.store.get(
-            "map.sampling.apply_hotspots",
+            MAP_SAMPLING_APPLY_HOTSPOTS,
             True,
         ))
 
@@ -1149,17 +899,17 @@ class AutoHideDataPanel(AutoHidePanel):
         }
 
         with self.store.batch():
-            self.store.set("map.sampling.mode", snap["mode"])
-            self.store.set("map.sampling.method", snap["method"])
-            self.store.set("map.sampling.max_points", snap["max_points"])
-            self.store.set("map.sampling.seed", snap["seed"])
-            self.store.set("map.sampling.cell_km", snap["cell_km"])
+            self.store.set(MAP_SAMPLING_MODE, snap["mode"])
+            self.store.set(MAP_SAMPLING_METHOD, snap["method"])
+            self.store.set(MAP_SAMPLING_MAX_POINTS, snap["max_points"])
+            self.store.set(MAP_SAMPLING_SEED, snap["seed"])
+            self.store.set(MAP_SAMPLING_CELL_KM, snap["cell_km"])
             self.store.set(
-                "map.sampling.max_per_cell",
+                MAP_SAMPLING_MAX_PER_CELL,
                 snap["max_per_cell"],
             )
             self.store.set(
-                "map.sampling.apply_hotspots",
+                MAP_SAMPLING_APPLY_HOTSPOTS,
                 snap["apply_hotspots"],
             )
 
@@ -1415,7 +1165,7 @@ class AutoHideDataPanel(AutoHidePanel):
 
     def _active_tree(self) -> QTreeWidget:
         src = str(
-            self.store.get("map.data_source", "auto")
+            self.store.get(MAP_DATA_SOURCE, "auto")
         ).strip().lower()
         if src == "manual":
             return self.tree_manual
@@ -1490,7 +1240,7 @@ class AutoHideDataPanel(AutoHidePanel):
     def _on_filter_changed(self, text: str) -> None:
         text = (text or "").strip().lower()
     
-        src = str(self.store.get("map.data_source", "auto")).strip().lower()
+        src = str(self.store.get(MAP_DATA_SOURCE, "auto")).strip().lower()
         tree = self.tree_manual if src == "manual" else self.tree
     
         def _match_item(it: QTreeWidgetItem) -> bool:
@@ -1520,7 +1270,7 @@ class AutoHideDataPanel(AutoHidePanel):
 
 
     def _sync_from_store(self) -> None:
-        src = str(self.store.get("map.data_source", "auto"))
+        src = str(self.store.get(MAP_DATA_SOURCE, "auto"))
         src = src.strip().lower()
 
         if src == "manual":
@@ -1530,7 +1280,7 @@ class AutoHideDataPanel(AutoHidePanel):
             self.cmb_source.setCurrentIndex(0)
             self.stack.setCurrentWidget(self.page_auto)
 
-        sel = self.store.get("map.selected_files", [])
+        sel = self.store.get(MAP_SELECTED_FILES, [])
         paths = unique_str(sel or [])
         self._selected = set(paths)
 
@@ -1540,7 +1290,7 @@ class AutoHideDataPanel(AutoHidePanel):
 
     def _emit_selection(self) -> None:
         paths = sorted(self._selected)
-        self.store.set("map.selected_files", paths)
+        self.store.set(MAP_SELECTED_FILES, paths)
         self.selection_changed.emit(paths)
      
     def _on_guess(self) -> None:
@@ -1558,10 +1308,10 @@ class AutoHideDataPanel(AutoHidePanel):
         self._set_combo_data(self.cmb_tval, "")
 
         with self.store.batch():
-            self.store.set("map.time_col", t)
-            self.store.set("map.step_col", s)
-            self.store.set("map.value_col", v)
-            self.store.set("map.time_value", "")
+            self.store.set(MAP_TIME_COL, t)
+            self.store.set(MAP_STEP_COL, s)
+            self.store.set(MAP_VALUE_COL, v)
+            self.store.set(MAP_TIME_VALUE, "")
 
         self._update_details_status(meta)
 
@@ -1574,7 +1324,7 @@ class AutoHideDataPanel(AutoHidePanel):
 
 
     def _on_active_item_changed(self) -> None:
-        src = str(self.store.get("map.data_source", "auto"))
+        src = str(self.store.get(MAP_DATA_SOURCE, "auto"))
         src = src.strip().lower()
     
         if src == "manual":
@@ -1597,7 +1347,7 @@ class AutoHideDataPanel(AutoHidePanel):
             return
 
         self._active_path = p
-        self.store.set("map.active_file", str(p))
+        self.store.set(MAP_ACTIVE_FILE, str(p))
         self.ed_active.setText(p.name)
         self.ed_active.setToolTip(str(p))
 
@@ -1617,8 +1367,8 @@ class AutoHideDataPanel(AutoHidePanel):
 
     def _colmap_from_store(self) -> dict:
         return {
-            "time": str(self.store.get("map.time_col", "")),
-            "step": str(self.store.get("map.step_col", "")),
+            "time": str(self.store.get(MAP_TIME_COL, "")),
+            "step": str(self.store.get(MAP_STEP_COL, "")),
         }
     
 
@@ -1757,22 +1507,22 @@ class AutoHideDataPanel(AutoHidePanel):
     def _on_details_changed(self) -> None:
         if self.cmb_time.count() > 0:
             self.store.set(
-                "map.time_value",
+                MAP_TIME_VALUE,
                 self.cmb_time.currentText(),
             )
     
         if self.cmb_value.count() > 0:
             col = self.cmb_value.currentData()
-            self.store.set("map.value_col", str(col))
+            self.store.set(MAP_VALUE_COL, str(col))
             
     def _apply_defaults_from_store(
         self,
         meta: ForecastMeta,
     ) -> None:
-        t0 = str(self.store.get("map.time_col", "")).strip()
-        s0 = str(self.store.get("map.step_col", "")).strip()
-        v0 = str(self.store.get("map.value_col", "")).strip()
-        tv = str(self.store.get("map.time_value", "")).strip()
+        t0 = str(self.store.get(MAP_TIME_COL, "")).strip()
+        s0 = str(self.store.get(MAP_STEP_COL, "")).strip()
+        v0 = str(self.store.get(MAP_VALUE_COL, "")).strip()
+        tv = str(self.store.get(MAP_TIME_VALUE, "")).strip()
 
         if not t0:
             t0 = str(meta.time_col or "")
@@ -1928,7 +1678,7 @@ class AutoHideDataPanel(AutoHidePanel):
         try:
             self.tree_manual.clear()
 
-            files = self.store.get("map.manual_files", [])
+            files = self.store.get(MAP_MANUAL_FILES, [])
             paths = [Path(p) for p in unique_str(files or [])]
 
             if not paths:
@@ -1979,12 +1729,12 @@ class AutoHideDataPanel(AutoHidePanel):
         if not kept:
             return
     
-        old = self.store.get("map.manual_files", [])
+        old = self.store.get(MAP_MANUAL_FILES, [])
         merged = unique_str(list(old or []) + kept)
     
         with self.store.batch():
-            self.store.set("map.manual_files", merged)
-            self.store.set("map.data_source", "manual")
+            self.store.set(MAP_MANUAL_FILES, merged)
+            self.store.set(MAP_DATA_SOURCE, "manual")
     
         self._sync_from_store()
 
@@ -2016,12 +1766,12 @@ class AutoHideDataPanel(AutoHidePanel):
         if not kept:
             return
     
-        old = self.store.get("map.manual_files", [])
+        old = self.store.get(MAP_MANUAL_FILES, [])
         merged = unique_str(list(old or []) + kept)
     
         with self.store.batch():
-            self.store.set("map.manual_files", merged)
-            self.store.set("map.data_source", "manual")
+            self.store.set(MAP_MANUAL_FILES, merged)
+            self.store.set(MAP_DATA_SOURCE, "manual")
     
         self._sync_from_store()
         
@@ -2060,10 +1810,10 @@ class AutoHideDataPanel(AutoHidePanel):
             if p:
                 remove.add(str(p))
 
-        old = unique_str(self.store.get("map.manual_files", []) or [])
+        old = unique_str(self.store.get(MAP_MANUAL_FILES, []) or [])
         kept = [p for p in old if p not in remove]
 
-        self.store.set("map.manual_files", kept)
+        self.store.set(MAP_MANUAL_FILES, kept)
 
         for p in remove:
             self._selected.discard(p)
@@ -2097,7 +1847,7 @@ class AutoHideDataPanel(AutoHidePanel):
     # -------------------------------------------------
     def _on_source_changed(self, idx: int) -> None:
         src = "manual" if idx == 1 else "auto"
-        self.store.set("map.data_source", src)
+        self.store.set(MAP_DATA_SOURCE, src)
 
         if src == "auto":
             self.stack.setCurrentWidget(self.page_auto)
@@ -2107,7 +1857,7 @@ class AutoHideDataPanel(AutoHidePanel):
             self._load_manual_list()
 
     def _on_refresh(self) -> None:
-        src = str(self.store.get("map.data_source", "auto"))
+        src = str(self.store.get(MAP_DATA_SOURCE, "auto"))
         if src.strip().lower() == "manual":
             self._load_manual_list()
         else:
@@ -2115,25 +1865,25 @@ class AutoHideDataPanel(AutoHidePanel):
             
     def _on_tcol_changed(self, _idx: int) -> None:
         v = str(self.cmb_tcol.currentData() or "")
-        self.store.set("map.time_col", v)
+        self.store.set(MAP_TIME_COL, v)
 
     def _on_scol_changed(self, _idx: int) -> None:
         v = str(self.cmb_scol.currentData() or "")
-        self.store.set("map.step_col", v)
+        self.store.set(MAP_STEP_COL, v)
 
     def _on_vcol_changed(self, _idx: int) -> None:
         v = str(self.cmb_vcol.currentData() or "")
-        self.store.set("map.value_col", v)
+        self.store.set(MAP_VALUE_COL, v)
 
     def _on_tval_changed(self, _idx: int) -> None:
         v = self.cmb_tval.currentData()
         if v in ("", None):
-            self.store.set("map.time_value", "")
+            self.store.set(MAP_TIME_VALUE, "")
             return
         try:
-            self.store.set("map.time_value", str(int(v)))
+            self.store.set(MAP_TIME_VALUE, str(int(v)))
         except Exception:
-            self.store.set("map.time_value", "")
+            self.store.set(MAP_TIME_VALUE, "")
 
     # -------------------------------------------------
     # Helpers
