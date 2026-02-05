@@ -116,6 +116,7 @@ MAP_ACTIVE_FILE = "map.active_file"
 MAP_TIME_COL = "map.time_col"
 MAP_STEP_COL = "map.step_col"
 MAP_VALUE_COL = "map.value_col"
+MAP_VALUE_UNIT = "map.value_unit"
 MAP_TIME_VALUE = "map.time_value"
 MAP_ID_COL = "map.id_col"
 MAP_OBS_COL = "map.obs_col"
@@ -128,6 +129,7 @@ MAP_MEASURE_MODE = "map.measure_mode"
 # -------------------------
 # Produced by ui/map/controller.py
 # Consumed by analytics_panel.py (and optionally MapTab)
+
 MAP_DF_ALL = "map.df_all"
 MAP_DF_FRAME = "map.df_frame"
 MAP_DF_POINTS = "map.df_points"
@@ -212,6 +214,26 @@ K_PROP_MODE = "map.view.prop.mode"              # absolute | differential | risk
 K_PROP_VECTORS = "map.view.prop.show_vectors"   # bool (show expansion arrows)
 K_PROP_LOOP = "map.view.prop.loop"              # bool
 
+# Extra derived (canonical full-history points)
+MAP_DF_ALL_POINTS = "map.df_all_points"
+
+# Propagation derived (controller writes these)
+MAP_PROP_BUILD_ID = "map.prop.build_id"   # int nonce
+MAP_PROP_YEAR = "map.prop.year"          # int
+MAP_PROP_TIMELINE = "map.prop.timeline"  # list[int]
+
+MAP_PROP_DF_ALL = "map.prop.df_all"
+MAP_PROP_DF_FRAME = "map.prop.df_frame"
+MAP_PROP_DF_POINTS = "map.prop.df_points"
+
+MAP_PROP_VMIN = "map.prop.vmin"
+MAP_PROP_VMAX = "map.prop.vmax"
+MAP_PROP_VECTORS = "map.prop.vectors"
+
+# Legend policy (view key)
+K_PROP_LEGEND = "map.view.prop.legend"   # global|frame|fixed
+
+
 # --- Alert System Keys ---
 K_ALERT_ENABLED = "map.view.alerts.enabled"
 K_ALERT_TRIGGER = "map.view.alerts.trigger"
@@ -267,6 +289,7 @@ _MAP_DEFAULTS = {
     MAP_TIME_COL: "",
     MAP_STEP_COL: "",
     MAP_VALUE_COL: "",
+    MAP_VALUE_UNIT: "",
     MAP_TIME_VALUE: "",
     MAP_ID_COL: "sample_idx",
     MAP_OBS_COL: "",
@@ -309,6 +332,20 @@ _MAP_DEFAULTS = {
     MAP_SELECT_IDS: [],
     MAP_SELECT_OPEN: False,
     MAP_SELECT_PINNED: False,
+    
+    K_PROP_LEGEND: "global",
+    
+    MAP_DF_ALL_POINTS: None,
+    MAP_PROP_BUILD_ID: 0,
+    MAP_PROP_YEAR: None,
+    MAP_PROP_TIMELINE: [],
+    MAP_PROP_DF_ALL: None,
+    MAP_PROP_DF_FRAME: None,
+    MAP_PROP_DF_POINTS: None,
+    MAP_PROP_VMIN: None,
+    MAP_PROP_VMAX: None,
+    MAP_PROP_VECTORS: [],
+
 
 }
 

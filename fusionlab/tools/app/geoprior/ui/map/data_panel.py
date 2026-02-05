@@ -88,7 +88,8 @@ from .keys  import (
     MAP_ACTIVE_FILE, 
     MAP_TIME_COL, 
     MAP_STEP_COL, 
-    MAP_VALUE_COL, 
+    MAP_VALUE_COL,
+    MAP_VALUE_UNIT, 
     MAP_TIME_VALUE, 
     MAP_SAMPLING_MODE,
     MAP_SAMPLING_METHOD, 
@@ -1360,6 +1361,7 @@ class AutoHideDataPanel(AutoHidePanel):
             return
 
         self._active_meta = meta
+        self.store.set( MAP_VALUE_UNIT, str(meta.unit or ""))
         self._details_apply_meta(meta)
         self.active_changed.emit(str(p))
         self.columns_changed.emit(list(meta.cols))

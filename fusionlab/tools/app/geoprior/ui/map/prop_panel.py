@@ -167,8 +167,18 @@ class PropagationPanel(QFrame):
     def set_timeline(self, years: List[int]):
         """Call this when data is ready."""
         if not years:
+            self._timer.stop()
+            self._playing = False
+            self._years = []
+            self.slider.setRange(0, 0)
+            self.slider.setValue(0)
+            self.slider.setEnabled(False)
+            self.lb_year.setText("----")
+            self.player_frame.setEnabled(False)
             return
+
         self._years = sorted(years)
+        self.slider.setEnabled(True)
         self.slider.setRange(0, len(self._years) - 1)
         self.slider.setValue(0)
         self.lb_year.setText(str(self._years[0]))

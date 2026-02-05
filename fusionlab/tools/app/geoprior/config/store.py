@@ -98,21 +98,6 @@ class GeoConfigStore(QObject):
 
         return default
 
-    # def set(
-    #     self,
-    #     key: str,
-    #     value: Any,
-    # ) -> bool:
-    #     fkey, extra_key = self._parse_key_str(key)
-    #     if fkey is None:
-    #         old = self._extra.get(extra_key, None)
-    #         if old != value:
-    #             self._extra[extra_key] = value
-    #             self._mark_changed({extra_key})
-    #         return True
-
-    #     return self.set_value_by_key(fkey, value)
-    
     def set(
         self,
         key: str,
@@ -276,7 +261,7 @@ class GeoConfigStore(QObject):
             try:
                 value = self._coerce_value(key, raw)
                 old = getattr(self._cfg, key)
-                if old != value:
+                if not _values_equal(old, value):
                     setattr(self._cfg, key, value)
                     changed.add(key)
             except Exception as exc:
@@ -324,7 +309,7 @@ class GeoConfigStore(QObject):
             new = dict(base)
             new.update(updates or {})
 
-        if new != cur:
+        if not _values_equal(new, cur):
             setattr(self._cfg, field, new)
             if emit:
                 self._mark_changed({field})

@@ -44,6 +44,7 @@ from .hotspots import (
     build_points,
     compute_hotspots,
     hotspots_payload,
+    decorate_hotspots_from_store,
 )
 from .coord_utils import ( 
     ensure_lonlat,
@@ -65,6 +66,7 @@ from .keys import (
     K_ALERT_TRIGGER,
     K_PROP_VECTORS,
     K_ALERT_ENABLED,
+    MAP_DATA_SOURCE, 
     MAP_DF_ALL,
     MAP_DF_POINTS,
     MAP_X_COL, 
@@ -73,6 +75,7 @@ from .keys import (
     MAP_VIEW_HOTSPOTS_ENABLED, 
     MAP_TIME_COL, 
     MAP_VALUE_COL, 
+    MAP_VALUE_UNIT, 
     MAP_COORD_MODE, 
     MAP_UTM_EPSG, 
     MAP_SHOW_ANALYTICS, 
@@ -112,6 +115,15 @@ from .keys import (
     MAP_SRC_EPSG, 
     MAP_COORD_EPSG,
     MAP_ENGINE,
+    MAP_PROP_BUILD_ID,
+    MAP_PROP_TIMELINE, 
+    MAP_PROP_DF_POINTS,
+    MAP_PROP_VMIN, 
+    MAP_PROP_VMAX, 
+    MAP_PROP_DF_ALL, 
+    MAP_DF_ALL_POINTS,
+    MAP_PROP_YEAR,
+    MAP_PROP_VECTORS,
     MAP_GOOGLE_API_KEY,
     map_view_key, 
     
@@ -123,13 +135,17 @@ from .sampling import (
 
 from .prop_panel import PropagationPanel
 from .prop_utils import ( 
-    compute_propagation_vectors, 
+    # compute_propagation_vectors, 
     detect_time_col, 
     process_simulation, 
 )
 from .overlay_dock import SideDrawer, FloatingDockWindow
 from .selection_panel import SelectionPanel
 from .selection_router import SelectionRouter
+from .selection_worker import (
+    SelectionWorker,
+    SelectionRequest,
+)
 
 class _OverlayHost(QWidget):
     def __init__(
@@ -172,6 +188,8 @@ class MapTab(QWidget):
         
         self._sim_time_col = ""
         self._sim_value_col = ""
+        self._sim_vmin_global = None
+        self._sim_vmax_global = None
 
         self._engine_applied = ""
         self._google_key_applied = ""
@@ -295,9 +313,52 @@ class MapTab(QWidget):
             parent=self,
         )
 
+        self.sel_worker = SelectionWorker(parent=self)
+        self.sel_worker.result_ready.connect(
+            self._on_sel_result
+        )
+        self.sel_worker.error.connect(
+            self._on_sel_error
+        )
+        self.sel_worker.busy_changed.connect(
+            self._on_sel_busy
+        )
 
     def set_available_columns(self, cols: Sequence[str]) -> None:
         self.head.set_available_columns(cols)
+        
+    def _format_label(
+        self,
+        name: str,
+        unit: Optional[str] = None,
+    ) -> str:
+        n = str(name or "").strip()
+    
+        # Strip quantile / prob suffix: *_q50, *_q05, *_p90.
+        for suf in ("_q", "_p"):
+            if suf in n:
+                left, right = n.rsplit(suf, 1)
+                if right.isdigit():
+                    n = left
+                    break
+    
+        n = n.replace(".", " ").replace("_", " ").strip()
+        while "  " in n:
+            n = n.replace("  ", " ")
+    
+        if n:
+            parts = [p for p in n.split(" ") if p]
+            n = " ".join(
+                p[:1].upper() + p[1:]
+                for p in parts
+            )
+    
+        u = unit
+        if u is None and self.store is not None:
+            u = self.store.get(MAP_VALUE_UNIT, "")
+    
+        u = str(u or "").strip()
+        return f"{n} ({u})" if u else n
 
 
     def _build_ui(self) -> None:
@@ -381,6 +442,37 @@ class MapTab(QWidget):
         # Hover tooltab (top-center).
         if getattr(self, "tooltab", None) is not None:
             self.tooltab.relayout(w, h)
+            
+        if sp is not None:
+            if self.sel_panel.isVisible():
+                spw = int(
+                    self.store.get(
+                        "map.select.width",
+                        520,
+                    ) or 520
+                )
+                sph = int(
+                    self.store.get(
+                        "map.select.height",
+                        320,
+                    ) or 320
+                )
+                spw = max(360, min(spw, w - 40))
+                sph = max(240, min(sph, h - 40))
+
+                right_pad = 10
+                if self._dock_c.isVisible():
+                    right_pad += int(
+                        self._dock_c.drawer.width()
+                    )
+
+                x0 = max(10, w - right_pad - spw)
+                y0 = 10
+                self.sel_panel.setGeometry(
+                    x0, y0, spw, sph
+                )
+                self.sel_panel.raise_()
+                
 
     def _apply_defaults(self) -> None:
         cfg = self.store.cfg
@@ -546,17 +638,127 @@ class MapTab(QWidget):
         self.store.config_changed.connect(
             self._on_map_derived_changed
         )
+        if getattr(self, "sel_panel", None) is not None:
+            self.sel_panel.request_close.connect(
+                self._on_sel_close
+            )
 
         # Connect AlertGroup signals
         ag = self.nav_c.alert_group
         ag.focus_requested.connect(self._on_focus_critical)
         ag.report_requested.connect(self._on_issue_warning)
         
+        self.store.config_changed.connect(
+            self._on_selection_changed
+        )
+
     def _on_sel_close(self) -> None:
         with self.store.batch():
-            self.store.set(MAP_SELECT_OPEN, False)
             self.store.set(MAP_SELECT_PINNED, False)
+        self._set_select_mode("off")
+        self._clear_selection()
+        if getattr(self, "sel_worker", None) is not None:
+            self.sel_worker.cancel()
+
+    def _on_sel_busy(self, on: bool) -> None:
+        if getattr(self, "sel_panel", None) is None:
+            return
+        self.sel_panel.set_busy(bool(on))
+
+    def _on_sel_error(self, msg: str) -> None:
+        if getattr(self, "sel_panel", None) is None:
+            return
+        self.sel_panel.set_error(str(msg))
+
+    def _on_sel_result(self, res: object) -> None:
+        if getattr(self, "sel_panel", None) is None:
+            return
+        self.sel_panel.set_result(res)
         self._layout_overlays()
+
+    # def _on_sel_close(self) -> None:
+    #     with self.store.batch():
+    #         self.store.set(MAP_SELECT_OPEN, False)
+    #         self.store.set(MAP_SELECT_PINNED, False)
+    #     self._layout_overlays()
+    
+    def _on_selection_changed(self, keys) -> None:
+        ks = set(keys or [])
+        watch = {
+            MAP_SELECT_MODE,
+            MAP_SELECT_IDS,
+            MAP_SELECT_OPEN,
+            MAP_SELECT_PINNED,
+        }
+        if not ks.intersection(watch):
+            return
+
+        mode = str(
+            self.store.get(MAP_SELECT_MODE, "off")
+            or "off"
+        ).strip().lower()
+
+        ids = list(
+            self.store.get(MAP_SELECT_IDS, []) or []
+        )
+        open_ = bool(
+            self.store.get(MAP_SELECT_OPEN, False)
+        )
+        pin = bool(
+            self.store.get(MAP_SELECT_PINNED, False)
+        )
+
+        self._layout_overlays()
+
+        if mode not in ("point", "group"):
+            if getattr(self, "sel_worker", None) is not None:
+                self.sel_worker.cancel()
+            return
+
+        if (not ids) or (not (open_ or pin)):
+            if getattr(self, "sel_worker", None) is not None:
+                self.sel_worker.cancel()
+            return
+
+        b = None
+        if getattr(self, "controller", None) is not None:
+            try:
+                b = self.controller.get_bundle()
+            except Exception:
+                b = None
+
+        df_all = getattr(b, "df_all", None)
+        df_frame = getattr(b, "df_frame", None)
+
+        t_col = "t"
+        z_col = "v"
+        if isinstance(df_all, pd.DataFrame) and not df_all.empty:
+            if "t" not in df_all.columns:
+                t_col = str(
+                    self.store.get("map.time_col", "t")
+                )
+            if "v" not in df_all.columns:
+                z_col = str(
+                    self.store.get("map.value_col", "v")
+                )
+
+        p = str(
+            self.store.get("map.active_file", "")
+        ).strip()
+        path = Path(p) if p else None
+
+        req = SelectionRequest(
+            mode=mode,
+            ids=[int(i) for i in ids],
+            id_col="sample_idx",
+            t_col=str(t_col),
+            z_col=str(z_col),
+            df_all=df_all,
+            df_frame=df_frame,
+            path=path,
+        )
+        if getattr(self, "sel_worker", None) is not None:
+            self.sel_worker.request(req)
 
     def _on_tooltab_triggered(
         self,
@@ -604,7 +806,11 @@ class MapTab(QWidget):
             if prev != m:
                 self.store.set(MAP_SELECT_IDS, [])
             self.store.set(MAP_SELECT_MODE, m)
-            self.store.set(MAP_SELECT_OPEN, m != "off")
+            # Open only when a selection occurs (router sets it)
+            if m == "off":
+                self.store.set(MAP_SELECT_OPEN, False)
+            else:
+                self.store.set(MAP_SELECT_OPEN, False)
 
         if getattr(self, "tooltab", None) is None:
             return
@@ -724,9 +930,42 @@ class MapTab(QWidget):
             self.prop_panel.setVisible(enabled)
             # If disabled, restore original data view
             if not enabled:
-                self._refresh_points() 
-                self.canvas.set_vectors([])
-                
+                # self._refresh_points() 
+                # self.canvas.set_vectors([])
+                # Clear any cached scenario state.
+                self._sim_df = pd.DataFrame()
+                self._sim_years = []
+                self._sim_time_col = ""
+                self._sim_value_col = ""
+                self._sim_vmin_global = None
+                self._sim_vmax_global = None
+    
+                try:
+                    if self.prop_panel is not None:
+                        self.prop_panel.set_timeline([])
+                except Exception:
+                    pass
+    
+                # Restore header dataset label.
+                try:
+                    p = str(
+                        self.store.get(MAP_ACTIVE_FILE, "")
+                        or ""
+                    )
+                    if p:
+                        self._on_active_file(p)
+                except Exception:
+                    pass
+    
+                # Restore main rendering & clear overlays.
+                self._refresh_points()
+                try:
+                    self.canvas.set_vectors([])
+                    self.canvas.set_hotspots([])
+                except Exception:
+                    pass
+                return
+            
     def _close_analytics(self) -> None:
         if self._win_d.isVisible():
             self._unpin_analytics()
@@ -767,21 +1006,13 @@ class MapTab(QWidget):
         show_d = bool(self.store.get(MAP_SHOW_ANALYTICS, False))
         self._set_analytics_visible(show_d)
 
-    def _on_run_simulation(self, years_to_add: int):
-        """
-        1. Get current active dataframe (clean)
-        2. Run extrapolation
-        3. Update UI timeline
-        """
-        df_clean = self._get_current_clean_df() 
-        if df_clean.empty:
-            return
 
-        self.head.set_active_dataset(
-            "Running simulation...", tooltip="Please wait"
-            )
-        QTimer.singleShot(100, lambda: self._process_simulation(
-            df_clean, years_to_add))
+    def _on_run_simulation(self, years_to_add: int):
+        self.store.set(K_PROP_ENABLED, True)
+    
+        # years already stored by spinbox
+        bid = int(self.store.get(MAP_PROP_BUILD_ID, 0) or 0)
+        self.store.set(MAP_PROP_BUILD_ID, bid + 1)
 
     def _check_alerts(self) -> None:
         # 1. Check if enabled
@@ -825,7 +1056,7 @@ class MapTab(QWidget):
         self.nav_c.alert_group.set_status(warn, count)
         
     def _process_simulation(self, df, years):
-        sim, ys, t_used, v_used = process_simulation(
+        df_sim, ys, t_used, v_used = process_simulation(
             df,
             years_to_add=int(years),
             time_col=str(self.store.get(
@@ -835,46 +1066,354 @@ class MapTab(QWidget):
                 MAP_VALUE_COL, ""
             )),
         )
-        self._sim_df = sim
+        self._sim_df = df_sim
         self._sim_time_col = t_used
         self._sim_value_col = v_used
-    
+        self._sim_years = ys
+        self._sim_vmin_global = None
+        self._sim_vmax_global = None
+        
+        try:
+            s = pd.to_numeric(
+                df_sim[v_used],
+                errors="coerce",
+            )
+            s = s[s.notna()]
+            if len(s) > 0:
+                self._sim_vmin_global = float(s.min())
+                self._sim_vmax_global = float(s.max())
+        except Exception:
+            pass
+        
         if ys:
             self.prop_panel.set_timeline(ys)
-    
+            
         self.head.set_active_dataset(
             f"Simulated (+{years} yrs)",
             tooltip="Simulation active",
         )
+        
+    def _on_sim_frame_changed(self, year: int):
+        self.store.set(MAP_PROP_YEAR, int(year))
 
-    def _on_sim_frame_changed(self, year: int) -> None:
-        if self._sim_df.empty:
+    def _refresh_hotspots_for_points(
+        self,
+        out: pd.DataFrame,
+        df_all: pd.DataFrame,
+        *,
+        t: Optional[int] = None,
+    ) -> None:
+        k_en = MAP_VIEW_HOTSPOTS_ENABLED
+        hot_on = bool(self.store.get(k_en, False))
+    
+        if not hot_on:
+            try:
+                self.canvas.clear_hotspots()
+            except Exception:
+                pass
+            self._last_hs_payload = []
+            self._last_hs_ctx = {}
             return
     
-        t_col = str(self._sim_time_col or "").strip()
-        if not t_col:
-            t_col = str(
-                self.store.get(MAP_TIME_COL, "")
+        if out is None or out.empty:
+            try:
+                self.canvas.clear_hotspots()
+            except Exception:
+                pass
+            self._last_hs_payload = []
+            self._last_hs_ctx = {}
+            return
+    
+        # -------------------------
+        # Keys (same as _refresh_points)
+        # -------------------------
+        k = "map.view.hotspots."
+    
+        hs_mode = str(
+            self.store.get(k + "mode", "auto")
+        ).lower()
+    
+        method = str(
+            self.store.get(k + "method", "grid")
+        ).lower()
+    
+        metric = str(
+            self.store.get(k + "metric", "high")
+        ).lower()
+    
+        thr_mode = str(
+            self.store.get(k + "thr_mode", "quantile")
+        ).lower()
+    
+        q = float(
+            self.store.get(k + "quantile", 0.98) or 0.98
+        )
+        q = max(0.0, min(1.0, q))
+    
+        abs_thr = self.store.get(k + "abs_thr", None)
+    
+        time_agg = str(
+            self.store.get(k + "time_agg", "current")
+        ).lower()
+    
+        time_win = int(
+            self.store.get(k + "time_window", 0) or 0
+        )
+    
+        cell_km = float(
+            self.store.get(k + "cell_km", 1.0) or 1.0
+        )
+    
+        min_pts = int(
+            self.store.get(k + "min_pts", 20) or 20
+        )
+    
+        max_n = int(
+            self.store.get(k + "max_n", 8) or 8
+        )
+    
+        min_sep = float(
+            self.store.get(k + "min_sep_km", 2.0) or 2.0
+        )
+    
+        if method not in ("grid", "quantile"):
+            method = "grid"
+    
+        # Prefer scenario columns if present, else fall back.
+        t_src = str(self._sim_time_col or "").strip()
+        if not t_src:
+            t_src = str(self.store.get(MAP_TIME_COL, "")).strip()
+    
+        v_src = str(self._sim_value_col or "").strip()
+        if not v_src:
+            v_src = str(self.store.get(MAP_VALUE_COL, "")).strip()
+        if not v_src:
+            v_src = str(self.store.get(MAP_Z_COL, "")).strip()
+    
+        # -------------------------
+        # Build pts_for_hs
+        # -------------------------
+        hs_payload = []
+    
+        if hs_mode not in ("auto", "merge"):
+            # Phase-1: keep it simple (manual/other modes ignored).
+            hs_mode = "auto"
+    
+        # Current frame: compute from what is displayed
+        if time_agg == "current":
+            if ("lon" in out.columns) and ("lat" in out.columns):
+                if "v" in out.columns:
+                    pts_for_hs = out[["lon", "lat", "v"]].copy()
+                elif v_src and (v_src in out.columns):
+                    pts_for_hs = out[["lon", "lat", v_src]].copy()
+                    pts_for_hs = pts_for_hs.rename(columns={v_src: "v"})
+                else:
+                    pts_for_hs = pd.DataFrame(
+                        columns=["lon", "lat", "v"]
+                    )
+            else:
+                pts_for_hs = pd.DataFrame(
+                    columns=["lon", "lat", "v"]
+                )
+    
+        # History aggregation: compute on full df_all
+        else:
+            dfh = df_all if isinstance(df_all, pd.DataFrame) else pd.DataFrame()
+    
+            # Optional: make trends evolve with playback by slicing
+            # history up to current frame time (if possible).
+            if (
+                t is not None
+                and (not dfh.empty)
+                and t_src
+                and (t_src in dfh.columns)
+            ):
+                yy = pd.to_numeric(
+                    dfh[t_src], errors="coerce"
+                )
+                if yy.isna().all():
+                    try:
+                        dt = pd.to_datetime(
+                            dfh[t_src], errors="coerce"
+                        )
+                        yy = dt.dt.year
+                    except Exception:
+                        yy = yy
+    
+                if yy.notna().any():
+                    dfh = dfh.loc[yy <= int(t)].copy()
+    
+            # Choose columns for build_points
+            x0 = "lon" if "lon" in dfh.columns else str(
+                self.store.get(MAP_X_COL, "")
+            ).strip()
+            y0 = "lat" if "lat" in dfh.columns else str(
+                self.store.get(MAP_Y_COL, "")
             ).strip()
     
-        if (not t_col) or (t_col not in self._sim_df.columns):
-            return
+            v0 = v_src
+            if (not v0) or (v0 not in dfh.columns):
+                v0 = "v" if "v" in dfh.columns else v0
     
-        frame = self._sim_df[self._sim_df[t_col] == year]
-        if frame.empty:
-            return
+            t0 = t_src
+            if (not t0) or (t0 not in dfh.columns):
+                t0 = "t" if "t" in dfh.columns else ""
     
-        self._render_frame_points(frame)
+            if (
+                (not dfh.empty)
+                and x0 and y0 and v0
+                and (x0 in dfh.columns)
+                and (y0 in dfh.columns)
+                and (v0 in dfh.columns)
+            ):
+                try:
+                    pts_for_hs = build_points(
+                        dfh,
+                        x=x0,
+                        y=y0,
+                        v=v0,
+                        t=t0,
+                    )
+                except TypeError:
+                    pts_for_hs = build_points(
+                        dfh,
+                        x=x0,
+                        y=y0,
+                        v=v0,
+                    )
+            else:
+                pts_for_hs = pd.DataFrame(
+                    columns=["lon", "lat", "v"]
+                )
     
-        if bool(self.store.get(K_PROP_VECTORS, True)):
-            v_col = str(self._sim_value_col or "").strip()
-            vecs = compute_propagation_vectors(
-                frame,
-                value_col=v_col,
+            # Ensure lon/lat (same logic style as _refresh_points)
+            if not pts_for_hs.empty:
+                mode = str(
+                    self.store.get(MAP_COORD_MODE, "lonlat")
+                ).strip().lower()
+    
+                utm_epsg = parse_epsg(
+                    self.store.get(MAP_UTM_EPSG, None)
+                )
+                src_epsg = parse_epsg(
+                    self.store.get(MAP_COORD_EPSG, None)
+                )
+    
+                try:
+                    pts_for_hs, ok2, _m2 = ensure_lonlat(
+                        pts_for_hs,
+                        mode=mode,
+                        utm_epsg=utm_epsg,
+                        src_epsg=src_epsg,
+                    )
+                except Exception:
+                    pts_for_hs = df_to_lonlat(
+                        pts_for_hs,
+                        x="lon",
+                        y="lat",
+                        mode=mode,
+                        utm_epsg=utm_epsg,
+                        src_epsg=src_epsg,
+                    )
+                    ok2 = not pts_for_hs.empty
+    
+                if (not ok2) or pts_for_hs.empty:
+                    pts_for_hs = pd.DataFrame(
+                        columns=["lon", "lat", "v"]
+                    )
+    
+        # -------------------------
+        # Compute hotspots
+        # -------------------------
+        if thr_mode == "absolute" and abs_thr is None:
+            hs_payload = []
+        elif not pts_for_hs.empty:
+            scfg = samp_cfg_from_get(self.store.get)
+            if scfg.apply_hotspots:
+                pts_for_hs = sample_points(
+                    pts_for_hs,
+                    scfg,
+                    lon="lon",
+                    lat="lat",
+                )
+    
+            # build_points writes time into column "t"
+            t_col = "t" if (time_agg != "current") else ""
+    
+            cfg = HotspotCfg(
+                method=method,
+                metric=metric,
+                quantile=q,
+                thr_mode=thr_mode,
+                abs_thr=None
+                if abs_thr is None
+                else float(abs_thr),
+                max_n=max_n,
+                min_sep_km=min_sep,
+                cell_km=cell_km,
+                min_pts=min_pts,
+                time_col=t_col,
+                time_agg=time_agg,
+                time_window=time_win,
             )
-            self.canvas.set_vectors(vecs)
-        else:
-            self.canvas.set_vectors([])
+    
+            hs = compute_hotspots(
+                pts_for_hs,
+                cfg=cfg,
+                coord_mode="lonlat",
+            )
+            hs_payload = hotspots_payload(hs)
+    
+        # -------------------------
+        # Interpretation + Canvas rendering
+        # -------------------------
+        style = str(
+            self.store.get(k + "style", "pulse") or "pulse"
+        )
+        pulse = bool(self.store.get(k + "pulse", True))
+    
+        spd = float(
+            self.store.get(k + "pulse_speed", 1.0) or 1.0
+        )
+        spd = max(0.2, min(3.0, spd))
+    
+        ring_km = float(
+            self.store.get(k + "ring_km", 0.8) or 0.8
+        )
+        ring_km = max(0.01, ring_km)
+    
+        icfg = cfg_from_get(self.store.get)
+    
+        hs_payload = apply_interp(
+            hs_payload,
+            cfg=icfg,
+            basis=time_agg,
+            metric=metric,
+            unit= str(self.store.get(MAP_VALUE_UNIT, ""))
+        )
+    
+        labels = bool(self.store.get(k + "labels", True))
+        if icfg.enabled and icfg.callouts:
+            labels = True
+    
+        self._last_hs_payload = list(hs_payload or [])
+        self._last_hs_ctx = {
+            "basis": time_agg,
+            "metric": metric,
+        }
+    
+        try:
+            self.canvas.set_hotspots(
+                hs_payload,
+                show=True,
+                style=style,
+                pulse=pulse,
+                pulse_speed=spd,
+                ring_km=ring_km,
+                labels=labels,
+            )
+        except Exception:
+            pass
 
 
     def _get_current_clean_df(self) -> pd.DataFrame:
@@ -986,7 +1525,16 @@ class MapTab(QWidget):
         auto = bool(snap.get("autoscale", True))
         vmin = None if auto else snap.get("vmin", None)
         vmax = None if auto else snap.get("vmax", None)
-    
+
+        # Propagation: autoscale means a stable
+        # global range across the whole scenario.
+        if auto and bool(
+            self.store.get(K_PROP_ENABLED, False)
+        ):
+            if self._sim_vmin_global is not None:
+                vmin = float(self._sim_vmin_global)
+                vmax = float(self._sim_vmax_global)
+
         cmap = str(snap.get("colormap", "viridis"))
         inv = bool(snap.get("cmap_invert", False))
     
@@ -997,7 +1545,9 @@ class MapTab(QWidget):
             ).strip()
         if not label:
             label = str(self.store.get(MAP_Z_COL, "")).strip()
-    
+            
+        label = self._format_label(label)
+
         # pts = df.to_dict("records")
     
         # Build minimal payload for Leaflet:
@@ -1182,7 +1732,11 @@ class MapTab(QWidget):
             self._last_hs_payload,
             basis=str(self._last_hs_ctx.get("basis", "")),
             metric=str(self._last_hs_ctx.get("metric", "")),
+            unit= str(
+                self.store.get(MAP_VALUE_UNIT, "") or ""
+            ).strip()
         )
+        
         df = pd.DataFrame(rows)
         df.to_csv(str(path), index=False)
 
@@ -1203,6 +1757,9 @@ class MapTab(QWidget):
             self._last_hs_payload,
             basis=str(self._last_hs_ctx.get("basis", "")),
             metric=str(self._last_hs_ctx.get("metric", "")),
+            unit= str(
+                self.store.get(MAP_VALUE_UNIT, "") or ""
+            ).strip()
         )
         gj = geojson_from_rows(rows)
         txt = dump_geojson(gj)
@@ -1229,6 +1786,9 @@ class MapTab(QWidget):
             self._last_hs_payload,
             basis=str(self._last_hs_ctx.get("basis", "")),
             metric=str(self._last_hs_ctx.get("metric", "")),
+            unit= str(
+                self.store.get(MAP_VALUE_UNIT, "") or ""
+            ).strip()
         )
 
         md = policy_brief_md(
@@ -1413,7 +1973,11 @@ class MapTab(QWidget):
         if not ks:
             return
 
-        if MAP_DF_POINTS in ks:
+        if MAP_PROP_TIMELINE in ks:
+            tl = self.store.get(MAP_PROP_TIMELINE, []) or []
+            self.prop_panel.set_timeline(tl)
+        
+        if MAP_DF_POINTS in ks or MAP_PROP_DF_POINTS in ks:
             self._refresh_points()
 
     def _on_map_cols(self, cols) -> None:
@@ -1461,16 +2025,35 @@ class MapTab(QWidget):
         # ---------------------------------------------
         # PATCH: Use controller-derived frames
         # ---------------------------------------------
-        out = self.store.get(MAP_DF_POINTS, None)
+        prop_on = bool(self.store.get(K_PROP_ENABLED, False))
+
+        if prop_on:
+            out = self.store.get(MAP_PROP_DF_POINTS, None)
+            df_all = self.store.get(MAP_PROP_DF_ALL, None)
+        else:
+            out = self.store.get(MAP_DF_POINTS, None)
+            df_all = self.store.get(MAP_DF_ALL, None)
+
         if (not isinstance(out, pd.DataFrame)) or out.empty:
             _clear_all()
             return
 
+        if prop_on and bool(self.store.get(K_PROP_VECTORS, True)):
+            vec = self.store.get(MAP_PROP_VECTORS, []) or []
+            self.canvas.set_vectors(vec)
+        else:
+            self.canvas.set_vectors([])
+
+
         # label uses current value mapping (for legend text)
         z0 = str(self.store.get(MAP_Z_COL, "")).strip()
         v0 = str(self.store.get(MAP_VALUE_COL, "")).strip()
-        vlab = v0 or z0 or "value"
-
+        vlab = v0 or z0 or "Z"
+        
+        unit = str(
+            self.store.get(MAP_VALUE_UNIT, "") or ""
+        ).strip()
+        
         snap = self._view_snapshot()
         leg = bool(snap.get("show_colorbar", True))
 
@@ -1480,6 +2063,16 @@ class MapTab(QWidget):
 
         cmap = str(snap.get("colormap", "viridis"))
         inv = bool(snap.get("cmap_invert", False))
+
+        if auto and prop_on:
+            pvmin = self.store.get(MAP_PROP_VMIN, None)
+            pvmax = self.store.get(MAP_PROP_VMAX, None)
+            if pvmin is not None and pvmax is not None:
+                try:
+                    vmin = float(pvmin)
+                    vmax = float(pvmax)
+                except Exception:
+                    pass
 
         payload = self._vf.build_layer(out, "main")
         if payload is None:
@@ -1510,6 +2103,8 @@ class MapTab(QWidget):
                         continue
         except Exception:
             pass
+        
+        label = self._format_label(vlab, unit=unit)
 
         self.canvas.set_layer(
             payload.kind,
@@ -1517,7 +2112,7 @@ class MapTab(QWidget):
             opts=payload.opts,
             vmin=vmin,
             vmax=vmax,
-            label=vlab,
+            label=label,
             show_legend=leg,
             cmap=cmap,
             invert=inv,
@@ -1700,6 +2295,23 @@ class MapTab(QWidget):
                 cfg=icfg,
                 basis=time_agg,
                 metric=metric,
+                unit=unit
+            )
+            # Prefer canonical lon/lat/v/t history for decorators.
+            if prop_on:
+                hist = self.store.get(MAP_PROP_DF_ALL, None)
+            else:
+                hist = self.store.get(MAP_DF_ALL_POINTS, None)
+
+            if not isinstance(hist, pd.DataFrame):
+                hist = pd.DataFrame()
+
+            hs_payload = decorate_hotspots_from_store(
+                self.store.get,
+                hs_payload,
+                out,
+                hist,
+                coord_mode="lonlat",
             )
 
             labels = bool(self.store.get(k + "labels", True))
@@ -1710,6 +2322,7 @@ class MapTab(QWidget):
             self._last_hs_ctx = {
                 "basis": time_agg,
                 "metric": metric,
+                "unit": unit,
             }
 
             try:
@@ -1799,6 +2412,10 @@ class MapTab(QWidget):
 
     def _on_store_changed(self, keys) -> None:
         keys = set(keys or [])
+        
+        if not keys:
+            return
+        
         sel_keys = {
             MAP_SELECT_MODE,
             MAP_SELECT_OPEN,
@@ -1809,10 +2426,7 @@ class MapTab(QWidget):
             self._layout_overlays()
             return
 
-        if not keys:
-            return
-    
-        if "map.data_source" in keys:
+        if MAP_DATA_SOURCE in keys:
             self._freeze_hover(ms=250)
     
         ui_keys = {

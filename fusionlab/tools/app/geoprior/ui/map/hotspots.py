@@ -20,8 +20,14 @@ rendered as a separate layer (rings, labels).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional
-
+from typing import ( 
+    Dict, 
+    Iterable, 
+    List, 
+    Optional, 
+    Callable, 
+    Any
+)
 import math
 
 import numpy as np
@@ -439,6 +445,100 @@ def _apply_min_sep(
 
     return c.iloc[keep].copy()
 
+def _dist_km_vec(
+    lon1: float,
+    lat1: float,
+    lons: np.ndarray,
+    lats: np.ndarray,
+    *,
+    coord_mode: str,
+) -> np.ndarray:
+    if str(coord_mode).lower() != "lonlat":
+        dx = lons - float(lon1)
+        dy = lats - float(lat1)
+        return np.sqrt(dx * dx + dy * dy) / 1000.0
+
+    return _haversine_km_vec(lon1, lat1, lons, lats)
+
+
+def _haversine_km_vec(
+    lon1: float,
+    lat1: float,
+    lons: np.ndarray,
+    lats: np.ndarray,
+) -> np.ndarray:
+    r = 6371.0
+    p = math.pi / 180.0
+
+    a1 = float(lat1) * p
+    a2 = lats * p
+    dlat = (lats - float(lat1)) * p
+    dlon = (lons - float(lon1)) * p
+
+    s1 = np.sin(dlat / 2.0)
+    s2 = np.sin(dlon / 2.0)
+
+    a = (s1 * s1) + np.cos(a1) * np.cos(a2) * (s2 * s2)
+    c = 2.0 * np.arctan2(np.sqrt(a), np.sqrt(1.0 - a))
+    return r * c
+
+
+def _to_time_axis(s: pd.Series) -> np.ndarray:
+    try:
+        dt = pd.to_datetime(s, errors="coerce")
+        if dt.notna().any():
+            x = dt.astype("int64").to_numpy(dtype=float)
+            return x / 1e9
+    except Exception:
+        pass
+
+    x2 = pd.to_numeric(s, errors="coerce")
+    return x2.to_numpy(dtype=float)
+
+
+def _fit_slope(
+    x: np.ndarray,
+    y: np.ndarray,
+) -> tuple[
+    Optional[float],
+    Optional[float],
+    Optional[float],
+]:
+    if x.size < 2:
+        return None, None, None
+
+    xx = x.astype(float)
+    yy = y.astype(float)
+
+    m = np.isfinite(xx) & np.isfinite(yy)
+    xx = xx[m]
+    yy = yy[m]
+    if xx.size < 2:
+        return None, None, None
+
+    vx = xx - float(xx.mean())
+    vy = yy - float(yy.mean())
+
+    den = float(np.sum(vx * vx))
+    if den <= 0.0:
+        return None, None, None
+
+    slope = float(np.sum(vx * vy) / den)
+
+    i0 = int(np.argmin(xx))
+    i1 = int(np.argmax(xx))
+    dv = float(yy[i1] - yy[i0])
+
+    yhat = (slope * vx) + float(yy.mean())
+    ssr = float(np.sum((yy - yhat) ** 2))
+    sst = float(np.sum((yy - float(yy.mean())) ** 2))
+
+    if sst <= 0.0:
+        r2 = None
+    else:
+        r2 = float(1.0 - (ssr / sst))
+
+    return slope, dv, r2
 
 def _dist_km(
     lon1: float,
@@ -531,3 +631,401 @@ def _to_hotspots(c: pd.DataFrame) -> List[Hotspot]:
 
     return out
 
+def hotspot_extremes(
+    hs: Iterable[Dict[str, object]],
+    pts: pd.DataFrame,
+    *,
+    v_col: str = "v",
+    t_col: str = "t",
+    lon_col: str = "lon",
+    lat_col: str = "lat",
+    radius_km: float = 1.0,
+    min_n: int = 10,
+    coord_mode: str = "lonlat",
+) -> List[Dict[str, object]]:
+    """
+    Decorate hotspot payload with local extremes.
+
+    Adds keys:
+      - n_local
+      - v_min, v_max, v_mean, v_std
+      - t_min, t_max (if t_col exists)
+    """
+    if not hs:
+        return []
+
+    if pts is None or pts.empty:
+        return [dict(h) for h in hs]
+
+    need = [lon_col, lat_col, v_col]
+    for c in need:
+        if c not in pts.columns:
+            return [dict(h) for h in hs]
+
+    cols = [lon_col, lat_col, v_col]
+    has_t = bool(t_col and (t_col in pts.columns))
+    if has_t:
+        cols.append(t_col)
+
+    p = pts[cols].copy()
+    p[lon_col] = pd.to_numeric(p[lon_col], errors="coerce")
+    p[lat_col] = pd.to_numeric(p[lat_col], errors="coerce")
+    p[v_col] = pd.to_numeric(p[v_col], errors="coerce")
+    p = p.dropna(subset=[lon_col, lat_col, v_col])
+
+    if p.empty:
+        return [dict(h) for h in hs]
+
+    lons = p[lon_col].to_numpy(dtype=float)
+    lats = p[lat_col].to_numpy(dtype=float)
+    vals = p[v_col].to_numpy(dtype=float)
+
+    tt = None
+    if has_t:
+        tt = _to_time_axis(p[t_col])
+
+    r = max(0.0, float(radius_km))
+    k = max(1, int(min_n))
+
+    out: List[Dict[str, object]] = []
+    for h in hs:
+        hh = dict(h)
+        try:
+            lon0 = float(hh.get("lon"))  # type: ignore[arg-type]
+            lat0 = float(hh.get("lat"))  # type: ignore[arg-type]
+        except Exception:
+            out.append(hh)
+            continue
+
+        d = _dist_km_vec(
+            lon0,
+            lat0,
+            lons,
+            lats,
+            coord_mode=str(coord_mode),
+        )
+
+        if r > 0.0:
+            idx = np.where(d <= r)[0]
+        else:
+            idx = np.arange(d.size, dtype=int)
+
+        if idx.size == 0:
+            idx = np.argsort(d)[:k]
+
+        vv = vals[idx]
+        vv = vv[np.isfinite(vv)]
+        if vv.size == 0:
+            out.append(hh)
+            continue
+
+        hh["n_local"] = int(vv.size)
+        hh["v_min"] = float(np.min(vv))
+        hh["v_max"] = float(np.max(vv))
+        hh["v_mean"] = float(np.mean(vv))
+        hh["v_std"] = float(np.std(vv))
+
+        if tt is not None:
+            t0 = tt[idx]
+            t0 = t0[np.isfinite(t0)]
+            if t0.size > 0:
+                hh["t_min"] = float(np.min(t0))
+                hh["t_max"] = float(np.max(t0))
+
+        out.append(hh)
+
+    return out
+
+
+def hotspot_trends(
+    hs: Iterable[Dict[str, object]],
+    pts: pd.DataFrame,
+    *,
+    v_col: str = "v",
+    t_col: str = "t",
+    lon_col: str = "lon",
+    lat_col: str = "lat",
+    radius_km: float = 1.0,
+    min_n: int = 10,
+    coord_mode: str = "lonlat",
+) -> List[Dict[str, object]]:
+    """
+    Decorate hotspot payload with local time trends.
+
+    Uses points within radius_km around each hotspot,
+    groups by time, and fits slope(v) vs time.
+
+    Adds keys:
+      - trend_slope
+      - trend_dv
+      - trend_r2
+      - trend_n_t
+      - trend_n
+      - trend_dir  (up|down|flat)
+    """
+    if not hs:
+        return []
+
+    if pts is None or pts.empty:
+        return [dict(h) for h in hs]
+
+    need = [lon_col, lat_col, v_col, t_col]
+    for c in need:
+        if c not in pts.columns:
+            return [dict(h) for h in hs]
+
+    p = pts[[lon_col, lat_col, v_col, t_col]].copy()
+    p[lon_col] = pd.to_numeric(p[lon_col], errors="coerce")
+    p[lat_col] = pd.to_numeric(p[lat_col], errors="coerce")
+    p[v_col] = pd.to_numeric(p[v_col], errors="coerce")
+    p = p.dropna(subset=[lon_col, lat_col, v_col, t_col])
+    if p.empty:
+        return [dict(h) for h in hs]
+
+    lons = p[lon_col].to_numpy(dtype=float)
+    lats = p[lat_col].to_numpy(dtype=float)
+    vals = p[v_col].to_numpy(dtype=float)
+    tx = _to_time_axis(p[t_col])
+
+    r = max(0.0, float(radius_km))
+    k = max(1, int(min_n))
+
+    out: List[Dict[str, object]] = []
+    for h in hs:
+        hh = dict(h)
+        try:
+            lon0 = float(hh.get("lon"))  # type: ignore[arg-type]
+            lat0 = float(hh.get("lat"))  # type: ignore[arg-type]
+        except Exception:
+            out.append(hh)
+            continue
+
+        d = _dist_km_vec(
+            lon0,
+            lat0,
+            lons,
+            lats,
+            coord_mode=str(coord_mode),
+        )
+
+        if r > 0.0:
+            idx = np.where(d <= r)[0]
+        else:
+            idx = np.arange(d.size, dtype=int)
+
+        if idx.size == 0:
+            idx = np.argsort(d)[:k]
+
+        tt = tx[idx]
+        vv = vals[idx]
+
+        m2 = np.isfinite(tt) & np.isfinite(vv)
+        tt = tt[m2]
+        vv = vv[m2]
+        if tt.size < 2:
+            out.append(hh)
+            continue
+
+        df0 = pd.DataFrame({"t": tt, "v": vv})
+        g = df0.groupby("t", sort=True)["v"].mean()
+
+        x = g.index.to_numpy(dtype=float)
+        y = g.to_numpy(dtype=float)
+
+        slope, dv, r2 = _fit_slope(x, y)
+
+        hh["trend_slope"] = (
+            None if slope is None else float(slope)
+        )
+        hh["trend_dv"] = None if dv is None else float(dv)
+        hh["trend_r2"] = None if r2 is None else float(r2)
+        hh["trend_n_t"] = int(x.size)
+        hh["trend_n"] = int(tt.size)
+
+        if slope is None or slope == 0.0:
+            hh["trend_dir"] = "flat"
+        elif slope > 0.0:
+            hh["trend_dir"] = "up"
+        else:
+            hh["trend_dir"] = "down"
+
+        out.append(hh)
+
+    return out
+
+def decorate_hotspots(
+    hs_payload: Iterable[Dict[str, object]],
+    df_frame: Optional[pd.DataFrame],
+    df_all: Optional[pd.DataFrame],
+    *,
+    add_extremes: bool = True,
+    add_trends: bool = False,
+    v_col: str = "v",
+    t_col: str = "t",
+    lon_col: str = "lon",
+    lat_col: str = "lat",
+    extremes_radius_km: float = 1.0,
+    trends_radius_km: float = 1.0,
+    min_n: int = 10,
+    coord_mode: str = "lonlat",
+) -> List[Dict[str, object]]:
+    """
+    Apply common hotspot payload decorators.
+
+    Parameters
+    ----------
+    hs_payload
+        JSON-friendly hotspot payload (dicts with lon/lat).
+    df_frame
+        Current frame points dataframe (lon/lat/v[/t]).
+        Used for local extremes.
+    df_all
+        Full history points dataframe (lon/lat/v/t).
+        Used for trends (and extremes fallback).
+    add_extremes
+        If True, add local v_min/v_max/v_mean/v_std/n_local.
+    add_trends
+        If True, add local trend_slope/trend_dv/trend_r2/...
+    v_col, t_col, lon_col, lat_col
+        Column names for points frames. Defaults match
+        the normalized controller schema (lon,lat,v,t).
+    extremes_radius_km, trends_radius_km
+        Neighborhood radius for extremes/trends.
+    min_n
+        Fallback minimum number of nearest points.
+    coord_mode
+        "lonlat" uses haversine km; otherwise euclid/1000.
+
+    Returns
+    -------
+    list of dict
+        Decorated hotspot payload.
+    """
+    base = [dict(h) for h in (hs_payload or [])]
+    if not base:
+        return []
+
+    out = base
+
+    if add_extremes:
+        src = df_frame
+        if src is None or src.empty:
+            src = df_all
+
+        if src is not None and not src.empty:
+            out = hotspot_extremes(
+                out,
+                src,
+                v_col=v_col,
+                t_col=t_col,
+                lon_col=lon_col,
+                lat_col=lat_col,
+                radius_km=float(extremes_radius_km),
+                min_n=int(min_n),
+                coord_mode=str(coord_mode),
+            )
+
+    if add_trends:
+        src2 = df_all
+        if src2 is not None and not src2.empty:
+            out = hotspot_trends(
+                out,
+                src2,
+                v_col=v_col,
+                t_col=t_col,
+                lon_col=lon_col,
+                lat_col=lat_col,
+                radius_km=float(trends_radius_km),
+                min_n=int(min_n),
+                coord_mode=str(coord_mode),
+            )
+
+    return list(out or [])
+
+def decorate_hotspots_from_store(
+    get: Callable[[str, Any], Any],
+    hs_payload: Iterable[Dict[str, object]],
+    df_frame: Optional[pd.DataFrame],
+    df_all: Optional[pd.DataFrame],
+    *,
+    base_key: str = "map.view.hotspots.",
+    coord_mode: str = "lonlat",
+    v_col: str = "v",
+    t_col: str = "t",
+    lon_col: str = "lon",
+    lat_col: str = "lat",
+) -> List[Dict[str, object]]:
+    """
+    Decorate hotspots using map.view.hotspots.* keys.
+
+    Reads (with safe fallbacks):
+      - map.view.hotspots.decorate_extremes        (bool)
+      - map.view.hotspots.decorate_trends          (bool)
+      - map.view.hotspots.extremes_radius_km       (float)
+      - map.view.hotspots.trends_radius_km         (float)
+      - map.view.hotspots.decorate_min_n           (int)
+
+    Also accepts common aliases (in case your UI used
+    different names while iterating).
+    """
+    def _g(name: str, default: Any) -> Any:
+        try:
+            return get(base_key + name, default)
+        except Exception:
+            return default
+
+    # toggles (aliases supported)
+    add_ext = bool(
+        _g(
+            "decorate_extremes",
+            _g("extremes", True),
+        )
+    )
+    add_tr = bool(
+        _g(
+            "decorate_trends",
+            _g("trends", False),
+        )
+    )
+
+    # radii (aliases supported)
+    ext_r = _g("extremes_radius_km", None)
+    if ext_r is None:
+        ext_r = _g("decorate_radius_km", 1.0)
+    try:
+        ext_r = float(ext_r)
+    except Exception:
+        ext_r = 1.0
+
+    tr_r = _g("trends_radius_km", None)
+    if tr_r is None:
+        tr_r = _g("decorate_trends_radius_km", ext_r)
+    try:
+        tr_r = float(tr_r)
+    except Exception:
+        tr_r = float(ext_r)
+
+    # min_n (aliases supported)
+    mn = _g("decorate_min_n", None)
+    if mn is None:
+        mn = _g("min_n", 10)
+    try:
+        mn = int(mn)
+    except Exception:
+        mn = 10
+
+    return decorate_hotspots(
+        hs_payload,
+        df_frame,
+        df_all,
+        add_extremes=bool(add_ext),
+        add_trends=bool(add_tr),
+        v_col=str(v_col),
+        t_col=str(t_col),
+        lon_col=str(lon_col),
+        lat_col=str(lat_col),
+        extremes_radius_km=float(ext_r),
+        trends_radius_km=float(tr_r),
+        min_n=int(mn),
+        coord_mode=str(coord_mode),
+    )

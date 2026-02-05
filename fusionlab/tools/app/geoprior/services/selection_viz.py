@@ -18,8 +18,9 @@ from enum import Enum
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
+import numpy as np
 
-from PyQt5.QtCore import QObject, QTimer
+from PyQt5.QtCore import Qt, QObject, QTimer
 from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -28,6 +29,7 @@ from PyQt5.QtWidgets import (
     QTableView,
     QVBoxLayout,
     QWidget,
+    QScrollArea,
 )
 
 try:
@@ -44,17 +46,21 @@ except Exception as exc:  # pragma: no cover
 # ---------------------------------------------------------------------
 # Plot recipes
 # ---------------------------------------------------------------------
+
 class PlotKind(str, Enum):
     NONE = "none"
     HIST_1D = "hist_1d"
+    OUTLIERS_1D = "outliers_1d"
+    ECDF_1D = "ecdf_1d"
     BAR_1D = "bar_1d"
     SCATTER_2D = "scatter_2d"
+    HEXBIN_2D = "hexbin_2d"
     LINE_2D = "line_2d"
     BOX_BY_CAT = "box_by_cat"
     HEATMAP_CATCAT = "heatmap_catcat"
     HEATMAP_CORR = "heatmap_corr"
+    MISSINGNESS_BAR = "missingness_bar"
     SUMMARY = "summary"
-
 
 @dataclass(frozen=True)
 class PlotRecipe:
@@ -72,6 +78,53 @@ def _is_numeric(s: pd.Series) -> bool:
         return pd.api.types.is_numeric_dtype(s.dtype)
     except Exception:
         return False
+    
+def _compact_label(s: str, max_len: int) -> str:
+    t = str(s)
+    if len(t) <= max_len:
+        return t
+    if max_len <= 1:
+        return "…"
+    return t[: max_len - 1] + "…"
+
+def _suggest_plot_min(
+    recipe: PlotRecipe,
+    df: pd.DataFrame,
+) -> tuple[int, int]:
+    k = recipe.kind
+
+    base_w = 520
+    base_h = 240
+    
+    if k == PlotKind.OUTLIERS_1D:
+        return (base_w, base_h + 80)
+
+    if k in (
+        PlotKind.HEATMAP_CORR,
+        PlotKind.HEATMAP_CATCAT,
+    ):
+        labs = [str(x) for x in recipe.cols]
+        ml = max((len(x) for x in labs), default=0)
+        w = base_w + min(360, ml * 8)
+        h = base_h + min(260, ml * 6)
+        return (w, max(h, 280))
+
+    if k == PlotKind.MISSINGNESS_BAR:
+        labs = [str(x) for x in recipe.cols]
+        ml = max((len(x) for x in labs), default=0)
+        w = base_w + min(420, ml * 10)
+        h = base_h + 180
+        return (w, h)
+
+    if k in (PlotKind.BAR_1D, PlotKind.BOX_BY_CAT):
+        c = recipe.cols[0] if recipe.cols else ""
+        ml = len(str(c))
+        w = base_w + min(280, ml * 6)
+        h = base_h + 140
+        return (w, h)
+
+    # ECDF/HEXBIN stay compact
+    return (base_w, base_h)
 
 
 def _is_categorical(s: pd.Series) -> bool:
@@ -233,11 +286,42 @@ def infer_recipe(df: pd.DataFrame) -> PlotRecipe:
         c0 = cols[0]
         s0 = df[c0]
         if _is_numeric(s0):
+            nn = int(s0.dropna().shape[0])
+            if nn >= 1500:
+                return PlotRecipe(
+                    kind=PlotKind.ECDF_1D,
+                    cols=(str(c0),),
+                    title=str(c0),
+                    note="ECDF",
+                )
+            # Prefer outliers view when outliers exist.
+            if nn >= 25:
+                v = s0.dropna()
+                try:
+                    q1 = float(v.quantile(0.25))
+                    q3 = float(v.quantile(0.75))
+                    iqr = q3 - q1
+                except Exception:
+                    iqr = 0.0
+            
+                if iqr > 0.0:
+                    lo = q1 - 1.5 * iqr
+                    hi = q3 + 1.5 * iqr
+                    out = v[(v < lo) | (v > hi)]
+                    if not out.empty:
+                        return PlotRecipe(
+                            kind=PlotKind.OUTLIERS_1D,
+                            cols=(str(c0),),
+                            title=str(c0),
+                            note="Top outliers",
+                        )
+                    
             return PlotRecipe(
                 kind=PlotKind.HIST_1D,
                 cols=(str(c0),),
                 title=str(c0),
             )
+        
         if _is_categorical(s0):
             return PlotRecipe(
                 kind=PlotKind.BAR_1D,
@@ -268,11 +352,20 @@ def infer_recipe(df: pd.DataFrame) -> PlotRecipe:
         c0, c1 = cols[0], cols[1]
         s0, s1 = df[c0], df[c1]
         if _is_numeric(s0) and _is_numeric(s1):
+            d = df[[c0, c1]].dropna()
+            if len(d) >= 1500:
+                return PlotRecipe(
+                    kind=PlotKind.HEXBIN_2D,
+                    cols=(str(c0), str(c1)),
+                    title=f"{c1} vs {c0}",
+                    note="Density",
+                )
             return PlotRecipe(
                 kind=PlotKind.SCATTER_2D,
                 cols=(str(c0), str(c1)),
                 title=f"{c1} vs {c0}",
             )
+            
         if _is_categorical(s0) and _is_numeric(s1):
             return PlotRecipe(
                 kind=PlotKind.BOX_BY_CAT,
@@ -296,6 +389,21 @@ def infer_recipe(df: pd.DataFrame) -> PlotRecipe:
             cols=(str(c0), str(c1)),
             title="Mixed selection",
         )
+    # 3+ columns: missingness overview if meaningful missing exists.
+    if len(cols) >= 3:
+        try:
+            miss = float(df.isna().mean().mean()) * 100.0
+        except Exception:
+            miss = 0.0
+    
+        if miss >= 0.5:  # tweak threshold if you want
+            keep = cols[:20]
+            return PlotRecipe(
+                kind=PlotKind.MISSINGNESS_BAR,
+                cols=tuple(str(x) for x in keep),
+                title="Missingness (%)",
+                note="Per-column missing rate",
+            )
 
     # 3+ columns: if many numeric -> corr heatmap.
     num_cols = [c for c in cols if _is_numeric(df[c])]
@@ -402,7 +510,20 @@ class MatplotlibPane(QWidget):
                 transform=ax.transAxes,
             )
 
-        self.fig.tight_layout()
+        if recipe.kind in (
+            PlotKind.HEATMAP_CORR,
+            PlotKind.HEATMAP_CATCAT,
+            PlotKind.MISSINGNESS_BAR,
+        ):
+            self.fig.subplots_adjust(
+                left=0.18,
+                right=0.92,
+                bottom=0.28,
+                top=0.88,
+            )
+        else:
+            self.fig.tight_layout()
+
         self.canvas.draw_idle()
 
     def _draw_impl(
@@ -419,6 +540,106 @@ class MatplotlibPane(QWidget):
             ax.hist(s.values, bins=30)
             ax.set_xlabel(c)
             ax.set_ylabel("count")
+            return
+        
+        if k == PlotKind.OUTLIERS_1D:
+            c = recipe.cols[0]
+            s = df[c].dropna()
+            if s.empty:
+                ax.axis("off")
+                ax.text(
+                    0.5,
+                    0.5,
+                    "Not enough data for outliers.",
+                    ha="center",
+                    va="center",
+                    transform=ax.transAxes,
+                )
+                return
+        
+            v = s.astype(float)
+        
+            try:
+                q1 = float(v.quantile(0.25))
+                q3 = float(v.quantile(0.75))
+                iqr = q3 - q1
+            except Exception:
+                iqr = 0.0
+        
+            if iqr <= 0.0:
+                ax.hist(v.values, bins=30)
+                ax.set_xlabel(c)
+                ax.set_ylabel("count")
+                return
+        
+            lo = q1 - 1.5 * iqr
+            hi = q3 + 1.5 * iqr
+        
+            out = v[(v < lo) | (v > hi)].sort_values()
+            n_out = int(out.shape[0])
+        
+            ax.boxplot(
+                [v.values],
+                vert=False,
+                showfliers=False,
+            )
+        
+            ax.set_yticks([])
+            ax.set_xlabel(c)
+        
+            ax.text(
+                0.99,
+                0.92,
+                f"n={len(v)}  out={n_out}",
+                transform=ax.transAxes,
+                ha="right",
+                va="top",
+                fontsize=8,
+            )
+        
+            if n_out <= 0:
+                return
+        
+            out_vals = out.values.astype(float)
+            if n_out == 1:
+                jit = np.array([0.0], dtype=float)
+            else:
+                jit = np.linspace(-0.10, 0.10, n_out)
+        
+            yy = 1.0 + jit
+            ax.scatter(out_vals, yy, s=18)
+        
+            # Annotate a few extremes: 3 lowest + 3 highest.
+            k_each = 3
+            picks = []
+            for idx, val in out.iloc[:k_each].items():
+                picks.append((idx, float(val)))
+            for idx, val in out.iloc[-k_each:].items():
+                picks.append((idx, float(val)))
+        
+            seen = set()
+            for idx, val in picks:
+                if idx in seen:
+                    continue
+                seen.add(idx)
+        
+                try:
+                    pos = int(np.where(out_vals == val)[0][0])
+                except Exception:
+                    pos = 0
+        
+                lab = str(idx)
+                if len(lab) > 10:
+                    lab = lab[:9] + "…"
+        
+                ax.annotate(
+                    f"{lab}\n{val:.3g}",
+                    (val, float(yy[pos])),
+                    textcoords="offset points",
+                    xytext=(6, 6),
+                    fontsize=8,
+                )
+        
             return
 
         if k == PlotKind.BAR_1D:
@@ -478,6 +699,79 @@ class MatplotlibPane(QWidget):
             ax.set_xlabel(cat)
             ax.set_ylabel(num)
             return
+        
+        if k == PlotKind.ECDF_1D:
+            c = recipe.cols[0]
+            s = df[c].dropna()
+            if s.empty:
+                ax.axis("off")
+                ax.text(
+                    0.5,
+                    0.5,
+                    "Not enough data for ECDF.",
+                    ha="center",
+                    va="center",
+                    transform=ax.transAxes,
+                )
+                return
+        
+            x = np.sort(s.values.astype(float))
+            n = x.size
+            y = (np.arange(1, n + 1) / float(n))
+        
+            ax.plot(x, y)
+            ax.set_xlabel(c)
+            ax.set_ylabel("ECDF")
+            ax.set_ylim(0.0, 1.0)
+            return
+        
+        if k == PlotKind.HEXBIN_2D:
+            x, y = recipe.cols[0], recipe.cols[1]
+            d = df[[x, y]].dropna()
+            if d.empty:
+                ax.axis("off")
+                ax.text(
+                    0.5,
+                    0.5,
+                    "Not enough data for density plot.",
+                    ha="center",
+                    va="center",
+                    transform=ax.transAxes,
+                )
+                return
+        
+            # gridsize adapts a bit to sample size
+            gs = 35
+            if len(d) >= 4000:
+                gs = 50
+        
+            hb = ax.hexbin(
+                d[x].values.astype(float),
+                d[y].values.astype(float),
+                gridsize=gs,
+                mincnt=1,
+            )
+            self.fig.colorbar(hb, ax=ax, fraction=0.046, pad=0.04)
+            ax.set_xlabel(x)
+            ax.set_ylabel(y)
+            return
+        
+        if k == PlotKind.MISSINGNESS_BAR:
+            cols = list(recipe.cols)
+            if not cols:
+                ax.axis("off")
+                return
+        
+            d = df.loc[:, cols]
+            miss = d.isna().mean() * 100.0
+            miss = miss.sort_values(ascending=False)
+        
+            labs = [_compact_label(x, 18) for x in miss.index.astype(str)]
+            ax.bar(labs, miss.values)
+            ax.tick_params(axis="x", labelrotation=35)
+            ax.set_ylabel("% missing")
+            ax.set_ylim(0.0, max(1.0, float(miss.max()) * 1.05))
+            return
 
         if k == PlotKind.HEATMAP_CATCAT:
             c0, c1 = recipe.cols[0], recipe.cols[1]
@@ -514,13 +808,50 @@ class MatplotlibPane(QWidget):
                     transform=ax.transAxes,
                 )
                 return
+            # corr = d.corr(numeric_only=True)
+            # im = ax.imshow(corr.values, vmin=-1.0, vmax=1.0)
+            # ax.set_xticks(range(len(corr.columns)))
+            # ax.set_yticks(range(len(corr.index)))
+            # ax.set_xticklabels(corr.columns, rotation=45)
+            # ax.set_yticklabels(corr.index)
+            # self.fig.colorbar(im, ax=ax, fraction=0.046)
+            
             corr = d.corr(numeric_only=True)
-            im = ax.imshow(corr.values, vmin=-1.0, vmax=1.0)
-            ax.set_xticks(range(len(corr.columns)))
-            ax.set_yticks(range(len(corr.index)))
-            ax.set_xticklabels(corr.columns, rotation=45)
-            ax.set_yticklabels(corr.index)
-            self.fig.colorbar(im, ax=ax, fraction=0.046)
+            n = len(corr.columns)
+            labs = [_compact_label(x, 18) for x in corr.columns]
+            
+            aspect = "equal" if n <= 8 else "auto"
+            im = ax.imshow(
+                corr.values,
+                vmin=-1.0,
+                vmax=1.0,
+                aspect=aspect,
+            )
+            
+            ax.set_anchor("C")
+            
+            ax.set_xticks(range(n))
+            ax.set_yticks(range(n))
+            ax.set_xticklabels(labs, rotation=35, ha="right")
+            ax.set_yticklabels(labs)
+            
+            ax.tick_params(axis="both", labelsize=8)
+            
+            self.fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            
+            # Optional: annotate small matrices (nice for 3x3)
+            if n <= 6:
+                for i in range(n):
+                    for j in range(n):
+                        ax.text(
+                            j,
+                            i,
+                            f"{corr.iat[i, j]:.2f}",
+                            ha="center",
+                            va="center",
+                            fontsize=8,
+                        )
+
             return
 
         ax.axis("off")
@@ -562,8 +893,25 @@ class SelectionInsightsPane(QFrame):
         self.lbl_summary.setWordWrap(True)
         outer.addWidget(self.lbl_summary, 0)
 
+        # self.plot = MatplotlibPane(self)
+        # outer.addWidget(self.plot, 1)
+
         self.plot = MatplotlibPane(self)
-        outer.addWidget(self.plot, 1)
+        self.plot.setMinimumSize(520, 260)
+        
+        self._plot_scroll = QScrollArea(self)
+        self._plot_scroll.setFrameShape(QFrame.NoFrame)
+        self._plot_scroll.setWidget(self.plot)
+        self._plot_scroll.setWidgetResizable(True)
+        self._plot_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarAsNeeded
+        )
+        self._plot_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarAsNeeded
+        )
+        self._plot_scroll.setAlignment(Qt.AlignCenter)
+
+        outer.addWidget(self._plot_scroll, 1)
 
     def set_summary(
         self,
@@ -659,7 +1007,13 @@ class SelectionVizController(QObject):
         summ = build_quick_summary(sub)
         meta = f"sel: {sig[0]}x{sig[1]}"
 
+        # self._pane.set_summary(summ, meta=meta)
+        # self._pane.plot.draw_recipe(rec, sub)
         self._pane.set_summary(summ, meta=meta)
+        
+        w, h = _suggest_plot_min(rec, sub)
+        self._pane.plot.setMinimumSize(w, h)
+        
         self._pane.plot.draw_recipe(rec, sub)
 
     # -----------------------------------------------------------------

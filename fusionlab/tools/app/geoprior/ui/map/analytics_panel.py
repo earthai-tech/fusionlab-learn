@@ -84,6 +84,8 @@ from .keys import (
     MAP_OBS_COL,
     MAP_ID_COL,
     MAP_VALUE_COL,
+    MAP_VALUE_COL,
+    MAP_VALUE_UNIT,
     MAP_TIME_VALUE,
     MAP_STEP_COL,
     MAP_CLICK_SAMPLE_IDX,
@@ -113,6 +115,45 @@ def pick_id_col(cols: Sequence[str]) -> str:
             return name
     return ""
 
+def _strip_q_suffix(name: str) -> str:
+    n = str(name or "").strip()
+    for suf in ("_q", "_p"):
+        if suf in n:
+            left, right = n.rsplit(suf, 1)
+            if right.isdigit():
+                return left
+    return n
+
+
+def _human_label(name: str) -> str:
+    n = _strip_q_suffix(name)
+    n = n.replace(".", " ").replace("_", " ").strip()
+    while "  " in n:
+        n = n.replace("  ", " ")
+    if not n:
+        return ""
+    parts = [p for p in n.split(" ") if p]
+    return " ".join(
+        p[:1].upper() + p[1:]
+        for p in parts
+    )
+
+
+def _label_with_unit(name: str, unit: str) -> str:
+    base = _human_label(name)
+    u = str(unit or "").strip()
+    return f"{base} ({u})" if u else base
+
+
+def _q_tag(col: str) -> str:
+    c = str(col or "").strip()
+    for suf in ("_q", "_p"):
+        if suf in c:
+            _l, right = c.rsplit(suf, 1)
+            if right.isdigit():
+                tag = suf[1:]
+                return f"{tag}{right.zfill(2)}"
+    return c
 
 @dataclass
 class MapAnaCtx:
@@ -168,7 +209,12 @@ class CollapsibleAnalyticsPanel(QFrame):
             parent=self,
         )
         self._insp = InspectorTab(parent=self)
-
+        
+        # provide store access for unit labels
+        self._spatial.store = self.store
+        self._sharp.store = self.store
+        self._insp.store = self.store
+        
         self._build_ui()
         self._build_tabs()
 
@@ -646,6 +692,22 @@ class _TabBase(QWidget):
     def refresh(self) -> None:
         return
     
+    def _value_unit(self) -> str:
+        s = self.store
+        if s is None:
+            return ""
+        return str(
+            s.get(MAP_VALUE_UNIT, "")
+            or ""
+        ).strip()
+    
+    
+    def _value_label(self, name: str) -> str:
+        return _label_with_unit(
+            name,
+            self._value_unit(),
+        )
+
     def _install_scroll(self, ctrl: QWidget, plot: QWidget) -> None:
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -1132,9 +1194,11 @@ class SelectionTab(_TabBase):
                 hi=hi,
                 agg=agg,
             )
-
+            
         ax.set_xlabel(str(t))
+        ax.set_ylabel(self._value_label(z))
         ax.grid(True, alpha=0.25)
+        
         self.plot.draw()
 
     def _plot_fan(
@@ -1154,14 +1218,14 @@ class SelectionTab(_TabBase):
                 df[lo].to_numpy(),
                 df[hi].to_numpy(),
                 alpha=0.25,
-                label=f"{lo}..{hi}",
+                label=f"{_q_tag(lo)}..{_q_tag(hi)}",
             )
         if mid in df.columns:
             ax.plot(
                 x,
                 df[mid].to_numpy(),
                 linewidth=2.0,
-                label=str(mid),
+                label=_q_tag(mid),
             )
         ax.set_title("Quantile fan (single point)")
         ax.legend(loc="best")
@@ -1498,9 +1562,9 @@ class SpatialTab(_TabBase):
                 s=8,
                 alpha=0.85,
             )
-            ax.set_xlabel(x)
-            ax.set_ylabel(y)
-            ax.set_zlabel(z)
+            ax.set_xlabel(_human_label(x))
+            ax.set_ylabel(_human_label(y))
+            ax.set_zlabel(self._value_label(z))
             self.plot.ax = ax
             self.plot.draw()
             return
@@ -1515,11 +1579,18 @@ class SpatialTab(_TabBase):
             s=10,
             alpha=0.85,
         )
-        ax.set_xlabel(x)
-        ax.set_ylabel(y)
-        ax.set_title("Colored by Z")
         
-        self.plot.fig.colorbar(sc, ax=ax, fraction=0.03, pad=0.02)
+        zlab = self._value_label(z)
+        ax.set_xlabel(_human_label(x))
+        ax.set_ylabel(_human_label(y))
+        ax.set_title(f"Colored by {zlab}")
+        
+        cb =self.plot.fig.colorbar(
+            sc, ax=ax, 
+            fraction=0.03, 
+            pad=0.02
+        )
+        cb.set_label(zlab)
         self.plot.draw()
 
 class SharpnessTab(_TabBase):
@@ -1658,8 +1729,13 @@ class SharpnessTab(_TabBase):
 
         ax.plot(g.index.values, g.values)
         ax.set_xlabel(t)
-        ax.set_ylabel("Median width")
-        ax.set_title(f"{lo_q} .. {hi_q}")
+        u = self._value_unit()
+        yl = "Median width"
+        if u:
+            yl = f"{yl} ({u})"
+        
+        ax.set_ylabel(yl)
+        ax.set_title(f"{_q_tag(lo_q)}..{_q_tag(hi_q)}")
 
         self.plot.draw()
 
@@ -2577,8 +2653,8 @@ class InspectorTab(_TabBase):
         yz = d[z].values
 
         ax.plot(xs, yz, linewidth=1.5)
-        ax.set_xlabel(t)
-        ax.set_ylabel(z)
+        ax.set_xlabel(_human_label(t))
+        ax.set_ylabel(self._value_label(z))
 
         sid = None
         if self._ids and i < len(self._ids):

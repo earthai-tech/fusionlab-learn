@@ -27,6 +27,7 @@ We only generate shorter display labels for the UI.
 from __future__ import annotations
 
 import re
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -355,6 +356,7 @@ def load_forecast_meta(
     samp_col = cm.get("sample") or _pick(cols, ["sample_idx"])
     unit_col = cm.get("unit") or _pick(cols, _UNIT_CAND)
 
+        
     x_col = cm.get("x") or _pick(cols, _X_CAND)
     y_col = cm.get("y") or _pick(cols, _Y_CAND)
 
@@ -383,7 +385,10 @@ def load_forecast_meta(
     if unit_col and unit_col in df.columns:
         s = df[unit_col].dropna()
         unit = str(s.iloc[0]) if len(s) else None
-
+        
+    if not unit:
+        unit = _infer_unit_from_eval_json(p) 
+        
     items, qlab = build_value_items(
         cols=cols,
         actual=actual,
@@ -533,3 +538,32 @@ def _value_items(
         out.append((k.upper(), qcols[k]))
 
     return tuple(out)
+
+
+def _infer_unit_from_eval_json(p: Path) -> Optional[str]:
+    
+
+    pats = (
+        "geoprior_eval*_interpretable.json",
+        "geoprior_eval*.json",
+    )
+
+    for d in (p.parent, p.parent.parent):
+        if d is None or not d.exists():
+            continue
+
+        for pat in pats:
+            for jf in d.glob(pat):
+                try:
+                    with open(jf, "r", encoding="utf-8") as f:
+                        obj = json.load(f)
+
+                    units = obj.get("units") or {}
+                    u = units.get("subs_metrics_unit") or ""
+                    u = str(u).strip()
+                    if u:
+                        return u
+                except Exception:
+                    continue
+
+    return None

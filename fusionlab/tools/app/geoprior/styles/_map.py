@@ -252,6 +252,94 @@ QFrame#mapHeadGroup QComboBox:disabled::drop-down {
   background: rgba(255, 255, 255, 0.05);
 }
 """
+MAP_SELECTION_LIGHT = """
+/* ===== Selection drawer (Light) ===== */
 
+QFrame#gpSelectionPanel {
+  margin: 8px;
+  border: 1px solid rgba(46,49,145,0.22);
+  border-radius: 16px;
+  background: rgba(255,255,255,0.92);
+}
+
+QFrame#gpSelectionPanel:hover {
+  border-color: rgba(51,153,255,0.34);
+}
+
+/* Title */
+QLabel#gpSelTitle {
+  font-weight: 800;
+  color: rgba(46,49,145,0.92);
+  padding: 2px 4px;
+}
+
+/* Hint / summary */
+QLabel#gpSelHint {
+  color: rgba(30,30,30,0.76);
+}
+
+QLabel#gpSelSummary {
+  color: rgba(30,30,30,0.90);
+  padding: 2px 2px;
+}
+
+QLabel#gpSelBusy {
+  color: rgba(46,49,145,0.78);
+  padding: 4px 2px;
+}
+
+/* Plot card (SelectionPlot root) */
+QWidget#gpSelPlot {
+  border: 1px solid rgba(46,49,145,0.16);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.70);
+  padding: 6px;
+}
+"""
+
+MAP_SELECTION_DARK = """
+/* ===== Selection drawer (Dark) ===== */
+
+QFrame#gpSelectionPanel {
+  margin: 8px;
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 16px;
+  background: rgba(2,6,23,0.55);
+}
+
+QFrame#gpSelectionPanel:hover {
+  border-color: rgba(51,153,255,0.26);
+}
+
+QLabel#gpSelTitle {
+  font-weight: 800;
+  color: rgba(226,232,240,0.95);
+  padding: 2px 4px;
+}
+
+QLabel#gpSelHint {
+  color: rgba(226,232,240,0.72);
+}
+
+QLabel#gpSelSummary {
+  color: rgba(226,232,240,0.88);
+  padding: 2px 2px;
+}
+
+QLabel#gpSelBusy {
+  color: rgba(148,163,184,0.92);
+  padding: 4px 2px;
+}
+
+QWidget#gpSelPlot {
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 12px;
+  background: rgba(2,6,23,0.34);
+  padding: 6px;
+}
+"""
+
+MAP_DOCK_LIGHT += MAP_SELECTION_LIGHT
+MAP_DOCK_DARK  += MAP_SELECTION_DARK
 MAP_DOCK_LIGHT += MAP_HEAD_LIGHT
 MAP_DOCK_DARK  += MAP_HEAD_DARK

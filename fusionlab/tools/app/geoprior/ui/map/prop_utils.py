@@ -205,20 +205,14 @@ def extrapolate_scenarios(
     # Safely convert time to integer years (Fix for TypeError: Timestamp vs int)
     d["_t"] = _coerce_year(d[use_t])
 
-    # if pd.api.types.is_datetime64_any_dtype(d[use_t]):
-    #     d["_t"] = d[use_t].dt.year
-    # else:
-    #     # Try numeric first (float/int)
-    #     d["_t"] = pd.to_numeric(d[use_t], errors="coerce")
-        
-    #     # If numeric failed (e.g. object column with Dates), try datetime parse
-    #     if d["_t"].isna().any():
-    #         try:
-    #             dt_series = pd.to_datetime(d[use_t], errors='coerce')
-    #             mask = d["_t"].isna() & dt_series.notna()
-    #             d.loc[mask, "_t"] = dt_series.loc[mask].dt.year
-    #         except Exception:
-    #             pass
+    # Baseline guard: never extend a scenario using
+    # already-simulated rows.
+    if "_is_simulated" in d.columns:
+        m = ~pd.to_numeric(
+            d["_is_simulated"],
+            errors="coerce",
+        ).fillna(0).astype(bool)
+        d = d.loc[m].copy()
 
     # Drop invalid rows (missing time or value)
     d = d.dropna(subset=["_t", use_v])

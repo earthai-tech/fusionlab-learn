@@ -17,9 +17,9 @@ We will later plug in:
 from __future__ import annotations
 
 from typing import Optional, Sequence
+import pandas as pd 
 
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -38,6 +38,7 @@ from .keys import (
     MAP_SELECT_PINNED,
 )
 
+from .selection_plot import SelectionPlot
 
 class SelectionPanel(QFrame):
     """Right-side insights drawer for current selection."""
@@ -109,10 +110,141 @@ class SelectionPanel(QFrame):
         self.lb_hint.setAlignment(Qt.AlignCenter)
         self.lb_hint.setMinimumHeight(140)
         root.addWidget(self.lb_hint, 1)
+        
+        self.plot = SelectionPlot(parent=self)
+        self.plot.setVisible(False)
+        root.addWidget(self.plot, 1)
 
-        self._apply_style()
+        self.lb_summary = QLabel("", self)
+        self.lb_summary.setObjectName("gpSelSummary")
+        self.lb_summary.setWordWrap(True)
+        self.lb_summary.setAlignment(
+            Qt.AlignLeft | Qt.AlignTop
+        )
+        self.lb_summary.setVisible(False)
+        root.addWidget(self.lb_summary, 0)
+
+        self.lb_busy = QLabel("", self)
+        self.lb_busy.setObjectName("gpSelBusy")
+        self.lb_busy.setAlignment(
+            Qt.AlignCenter
+        )
+        self.lb_busy.setVisible(False)
+        root.addWidget(self.lb_busy, 0)
+
         self._connect()
         self._sync_from_store()
+        
+    def set_busy(self, on: bool) -> None:
+        on = bool(on)
+        self.lb_busy.setVisible(on)
+        if on:
+            self.lb_busy.setText("Computing…")
+        else:
+            self.lb_busy.setText("")
+
+    def set_error(self, msg: str) -> None:
+        m = str(msg or "").strip()
+        if not m:
+            return
+        self.lb_summary.setVisible(True)
+        self.lb_hint.setVisible(False)
+        self.lb_summary.setText(f"Error:\n{m}")
+        
+        if getattr(self, "plot", None) is not None:
+            self.plot.setVisible(False)
+            self.plot.clear("Error")
+
+
+    def set_result(self, res: object) -> None:
+        if not isinstance(res, dict):
+            self.lb_summary.setVisible(False)
+            self.lb_hint.setVisible(True)
+            return
+
+        mode = str(res.get("mode", "off")).strip().lower()
+        ids = list(res.get("ids", []) or [])
+        summ = res.get("summary", {}) or {}
+
+        if res.get("empty", False):
+            self.lb_summary.setVisible(False)
+            self.lb_hint.setVisible(True)
+            self.set_selection(mode, ids)
+            return
+
+        n = summ.get("n_points", None)
+        t0 = summ.get("t_min", None)
+        t1 = summ.get("t_max", None)
+        z0 = summ.get("z_min", None)
+        z1 = summ.get("z_max", None)
+        zm = summ.get("z_mean", None)
+
+        lines = []
+
+        if mode == "point" and ids:
+            lines.append(f"Point: {ids[0]}")
+        elif mode == "group":
+            lines.append(f"Group: {len(ids)} points")
+
+        if n is not None:
+            lines.append(f"n_points: {n}")
+        if t0 is not None or t1 is not None:
+            lines.append(f"t: {t0} → {t1}")
+        if z0 is not None or z1 is not None:
+            lines.append(f"z: {z0} → {z1}")
+        if zm is not None:
+            lines.append(f"z_mean: {zm}")
+
+        cur = res.get("current", None)
+        if isinstance(cur, dict):
+            lines.append("")
+            lines.append("Current frame:")
+            for k in ("n", "min", "max", "mean", "median"):
+                if k in cur:
+                    lines.append(f"  {k}: {cur[k]}")
+
+        rp = res.get("risk_p", None)
+        if rp is not None:
+            lines.append("")
+            lines.append(f"Risk P(Z > thr): {rp}")
+
+        self.lb_summary.setText("\n".join(lines))
+        self.lb_summary.setVisible(True)
+        self.lb_hint.setVisible(False)
+        
+        t_col = str(res.get("t_col", "t") or "t")
+        z_col = str(res.get("z_col", "v") or "v")
+        
+        if getattr(self, "plot", None) is None:
+            return
+        
+        if mode == "point":
+            d1 = res.get("series", None)
+            if isinstance(d1, pd.DataFrame) and (not d1.empty):
+                self.plot.setVisible(True)
+                self.plot.plot_point(
+                    d1,
+                    t_col=t_col,
+                    z_col=z_col,
+                    band=None,
+                )
+            else:
+                self.plot.setVisible(False)
+                self.plot.clear("No series")
+        
+        elif mode == "group":
+            tr = res.get("trend", None)
+            if isinstance(tr, pd.DataFrame) and (not tr.empty):
+                self.plot.setVisible(True)
+                self.plot.plot_group(tr, t_col=t_col)
+            else:
+                self.plot.setVisible(False)
+                self.plot.clear("No trend")
+        
+        else:
+            self.plot.setVisible(False)
+            self.plot.clear("")
+
 
     def set_selection(
         self,
@@ -185,21 +317,6 @@ class SelectionPanel(QFrame):
 
         self.setVisible(open_ or pin)
         self.set_selection(str(m), ids)
-
-    def _apply_style(self) -> None:
-        c = self.palette().window().color()
-        bg = QColor(c.red(), c.green(), c.blue(), 235)
-        bd = QColor(c.red(), c.green(), c.blue(), 160)
-
-        self.setStyleSheet(
-            "QFrame#gpSelectionPanel{"
-            f"background:{bg.name(QColor.HexArgb)};"
-            f"border:1px solid {bd.name(QColor.HexArgb)};"
-            "border-radius:16px;"
-            "}"
-            "QLabel#gpSelTitle{font-weight:600;}"
-            "QLabel#gpSelHint{opacity:0.85;}"
-        )
 
     @staticmethod
     def _set_icon(

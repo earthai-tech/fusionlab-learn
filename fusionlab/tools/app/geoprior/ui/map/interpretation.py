@@ -87,6 +87,7 @@ def apply_interp(
     cfg: InterpCfg,
     basis: str,
     metric: str,
+    unit : str =""
 ) -> List[Dict[str, Any]]:
     """Enrich hotspot payload with interpretation fields."""
     if not payload:
@@ -118,6 +119,7 @@ def apply_interp(
                 cfg=cfg,
                 basis=basis,
                 metric=metric,
+                unit=unit, 
             )
 
         out.append(hh)
@@ -130,6 +132,7 @@ def rows_for_export(
     *,
     basis: str,
     metric: str,
+    unit: str=""
 ) -> List[Dict[str, Any]]:
     """Convert payload into flat rows for CSV export."""
     rows: List[Dict[str, Any]] = []
@@ -148,6 +151,7 @@ def rows_for_export(
                 "action": str(h.get("action", "")),
                 "basis": str(basis),
                 "metric": str(metric),
+                "unit": unit
             }
         )
     return rows
@@ -196,7 +200,11 @@ def policy_brief_md(
     ctx = dict(ctx or {})
     basis = str(ctx.get("basis", "current"))
     metric = str(ctx.get("metric", "high"))
-
+    
+    unit = ""
+    if ctx:
+        unit = str(ctx.get("unit", "") or "").strip()
+    
     n = len(rows or [])
     worst = _worst_sev(rows)
 
@@ -208,6 +216,8 @@ def policy_brief_md(
     lines.append(f"- Basis: **{basis}**")
     lines.append(f"- Metric: **{metric}**")
     lines.append(f"- Scheme: **{cfg.scheme}**")
+    if unit:
+        lines.append(f"- Unit: **{unit}**")
     lines.append("")
 
     if not rows:
@@ -327,10 +337,13 @@ def _callout_label(
     cfg: InterpCfg,
     basis: str,
     metric: str,
+    unit: str=""
 ) -> str:
     sev = str(h.get("sev", "")) or "low"
     rk = int(h.get("rank", 0) or 0)
     n = int(h.get("n", 0) or 0)
+    u = f" {unit}" if unit else ""
+    
     conf = str(h.get("conf_tag", ""))
 
     lvl = str(cfg.callout_level or "standard").lower()
@@ -347,7 +360,7 @@ def _callout_label(
         bits = [
             f"{sev} · #{rk}",
             f"n={n} · conf={conf}",
-            f"v={v} · {b} · {m}",
+            f"v={v}{u} · {b} · {m}",
         ]
         if cfg.callout_actions and act:
             bits.append(act)

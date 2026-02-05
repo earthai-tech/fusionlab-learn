@@ -311,3 +311,88 @@ def exceed_prob_from_quantiles(
                 cdf = p0 + a * (p1 - p0)
             return float(1.0 - cdf)
     return float("nan")
+
+def load_series_for_ids(
+    *,
+    path: Path,
+    id_col: str,
+    ids: Sequence[int],
+    t: str,
+    z: str,
+    q_cols: Sequence[str],
+    chunksize: int = 200_000,
+    max_rows: int = 2_000_000,
+) -> pd.DataFrame:
+    """
+    Load all (t, z, q*) rows matching selected point ids.
+
+    Returns
+    -------
+    DataFrame with columns:
+    - id_col, t, z, (q*)
+    - _pid : stable point id string (id)
+    """
+    if path is None:
+        return pd.DataFrame()
+    p = Path(path)
+    if not p.exists():
+        return pd.DataFrame()
+
+    ids = [int(i) for i in (ids or [])]
+    if not ids:
+        return pd.DataFrame()
+
+    use = [c for c in (id_col, t, z) if c]
+    use = list(dict.fromkeys(use))
+    for qc in q_cols or []:
+        qc = str(qc)
+        if qc and qc not in use:
+            use.append(qc)
+
+    parts: list[pd.DataFrame] = []
+    n_out = 0
+
+    try:
+        it = pd.read_csv(
+            p,
+            usecols=use,
+            chunksize=int(chunksize),
+        )
+    except Exception:
+        return pd.DataFrame()
+
+    want = set(ids)
+
+    for ch in it:
+        if id_col not in ch.columns:
+            continue
+
+        try:
+            sid = pd.to_numeric(
+                ch[id_col],
+                errors="coerce",
+            ).astype("Int64")
+        except Exception:
+            continue
+
+        m = sid.isin(want)
+        if not bool(m.any()):
+            continue
+
+        sub = ch.loc[m].copy()
+        sub[id_col] = (
+            pd.to_numeric(sub[id_col], errors="coerce")
+            .astype("Int64")
+        )
+        sub["_pid"] = sub[id_col].astype(str)
+
+        parts.append(sub)
+        n_out += int(sub.shape[0])
+        if n_out >= int(max_rows):
+            break
+
+    if not parts:
+        return pd.DataFrame()
+
+    out = pd.concat(parts, axis=0, ignore_index=True)
+    return out

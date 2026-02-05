@@ -50,6 +50,8 @@ from ..view.factory import ViewFactory
 from .coord_utils import ensure_lonlat, parse_epsg, df_to_lonlat
 from .sampling import cfg_from_get as samp_cfg_from_get
 from .sampling import sample_points
+from .prop_cache import PropagationScenarioCache
+from .hotspots import build_points
 from .keys import (
     MAP_ACTIVE_FILE,
     MAP_COORD_MODE,
@@ -75,6 +77,22 @@ from .keys import (
     MAP_UTM_EPSG, 
     MAP_COORD_EPSG, 
     MAP_SRC_EPSG, 
+    
+    MAP_DF_ALL_POINTS,
+    MAP_PROP_BUILD_ID,
+    MAP_PROP_YEAR,
+    MAP_PROP_TIMELINE,
+    MAP_PROP_DF_ALL,
+    MAP_PROP_DF_FRAME,
+    MAP_PROP_DF_POINTS,
+    MAP_PROP_VMIN,
+    MAP_PROP_VMAX,
+    MAP_PROP_VECTORS,
+    K_PROP_ENABLED,
+    K_PROP_YEARS,
+    K_PROP_MODE,
+    K_PROP_VECTORS,
+    K_PROP_LEGEND,
 )
 
 
@@ -83,6 +101,10 @@ class MapDataBundle:
     df_all: Optional[pd.DataFrame] = None
     df_frame: Optional[pd.DataFrame] = None
     df_points: Optional[pd.DataFrame] = None
+    
+    # optional: canonical lon/lat/v/t for full history
+    df_all_points: Optional[pd.DataFrame] = None
+    
     ok: bool = False
     err: str = ""
 
@@ -114,6 +136,10 @@ class MapController(QObject):
         self.store = store
         self.canvas = canvas
         self.vf = view_factory
+        
+        self._prop_cache = PropagationScenarioCache()
+        self._prop_sig = None
+
 
         self._bundle = MapDataBundle()
 
@@ -126,6 +152,15 @@ class MapController(QObject):
             MAP_DF_ALL,
             MAP_DF_FRAME,
             MAP_DF_POINTS,
+            
+            MAP_DF_ALL_POINTS,
+            MAP_PROP_TIMELINE,
+            MAP_PROP_DF_ALL,
+            MAP_PROP_DF_FRAME,
+            MAP_PROP_DF_POINTS,
+            MAP_PROP_VECTORS,
+            MAP_PROP_VMIN,
+            MAP_PROP_VMAX,
         }
 
         self._data_keys = {
@@ -148,6 +183,14 @@ class MapController(QObject):
             MAP_SAMPLING_CELL_KM,
             MAP_SAMPLING_MAX_PER_CELL,
             MAP_SAMPLING_APPLY_HOTSPOTS,
+        }
+        
+        self._prop_keys = {
+            K_PROP_ENABLED,
+            K_PROP_YEARS,
+            K_PROP_MODE,
+            K_PROP_LEGEND,
+            K_PROP_VECTORS,
         }
 
         self.store.config_changed.connect(
@@ -176,14 +219,54 @@ class MapController(QObject):
     # -------------------------
     # Store events
     # -------------------------
+    # def _on_store_changed(self, keys) -> None:
+    #     ks = set(keys or [])
+    #     if not ks:
+    #         return
+    #     if ks.issubset(self._ignore_keys):
+    #         return
+    #     if MAP_CLICK_SAMPLE_IDX in ks:
+    #         return
+    #     if ks.intersection(self._data_keys):
+    #         self.request_rebuild()
+            
+    #     if ks == {MAP_PROP_YEAR}:
+    #         self._update_prop_frame()
+    #         return
+        
+    #     if ks == {MAP_PROP_BUILD_ID}:
+    #         self._rebuild_prop_scenario()
+    #         return
+        
     def _on_store_changed(self, keys) -> None:
         ks = set(keys or [])
         if not ks:
             return
+
         if ks.issubset(self._ignore_keys):
             return
+
         if MAP_CLICK_SAMPLE_IDX in ks:
             return
+
+        # Prop: timeline frame switch
+        if ks == {MAP_PROP_YEAR}:
+            self._update_prop_frame()
+            return
+
+        # Prop: explicit rebuild request
+        if ks == {MAP_PROP_BUILD_ID}:
+            self._rebuild_prop_scenario()
+            return
+
+        # Prop: settings changed
+        if ks.intersection(self._prop_keys):
+            if bool(self.store.get(K_PROP_ENABLED, False)):
+                self._rebuild_prop_scenario()
+            else:
+                self._clear_prop_store()
+            return
+
         if ks.intersection(self._data_keys):
             self.request_rebuild()
 
@@ -210,6 +293,9 @@ class MapController(QObject):
             self.store.set(MAP_DF_ALL, b.df_all)
             self.store.set(MAP_DF_FRAME, b.df_frame)
             self.store.set(MAP_DF_POINTS, b.df_points)
+            # Keep propagation scenario consistent with base data
+            if bool(self.store.get(K_PROP_ENABLED, False)):
+                self._rebuild_prop_scenario()
 
             cur_id = str(
                 self.store.get(MAP_ID_COL, "") or ""
@@ -221,6 +307,30 @@ class MapController(QObject):
         b = MapDataBundle()
 
         path = self._active_path()
+        
+        # after: path = self._active_path()
+        
+        try:
+            cols = list(pd.read_csv(path, nrows=0).columns)
+        except Exception:
+            cols = []
+        
+        t = self._get_key(MAP_TIME_COL)
+        if not t:
+            for c in ("coord_t", "t", "year", "date"):
+                if c in cols:
+                    self.store.set(MAP_TIME_COL, c)
+                    t = c
+                    break
+        
+        step = self._get_key(MAP_STEP_COL)
+        if not step:
+            for c in ("forecast_step", "step", "horizon"):
+                if c in cols:
+                    self.store.set(MAP_STEP_COL, c)
+                    step = c
+                    break
+
         if path is None:
             b.err = "no active file"
             return b
@@ -228,9 +338,9 @@ class MapController(QObject):
         x = self._get_key(MAP_X_COL)
         y = self._get_key(MAP_Y_COL)
         z = self._get_value_col()
-        t = self._get_key(MAP_TIME_COL)
         step = self._get_key(MAP_STEP_COL)
         tv = self._get_key(MAP_TIME_VALUE)
+        epsg = self._get_key (MAP_COORD_EPSG)
 
         if not (x and y and z):
             b.err = "mapping incomplete (x/y/z)"
@@ -244,15 +354,23 @@ class MapController(QObject):
             t=t,
             step=step,
         )
+        
         if df_all is None or df_all.empty:
             b.err = "failed to load csv"
             return b
-
+        
         df_all = self._ensure_sample_idx(
             df_all,
             x=x,
             y=y,
         )
+        
+        df_all_points = self._df_all_to_points(
+            df_all, x, y, z, t, epsg
+            )
+        
+        b.df_all_points = df_all_points
+        self.store.set(MAP_DF_ALL_POINTS, b.df_all_points)
 
         df_view = self._slice_time(
             df_all,
@@ -548,3 +666,402 @@ class MapController(QObject):
         
         return out
 
+    def _df_all_to_points(
+        self,
+        df_all: pd.DataFrame,
+        x: str,
+        y: str,
+        v: str,
+        t: str,
+        _epsg: str = "",
+    ) -> pd.DataFrame:
+        """
+        Build canonical lon/lat/v/t (+sample_idx) for full history.
+
+        This is the stable "points history" used by propagation,
+        hotspot trend decorators, and any future time analytics.
+        """
+        if df_all is None or df_all.empty:
+            return pd.DataFrame(
+                columns=["lon", "lat", "v", "t", "sample_idx"]
+            )
+        
+        t_col = str(t or "").strip()
+        if (not t_col) or (t_col not in df_all.columns):
+            for c in ("coord_t", "t", "year", "date"):
+                if c in df_all.columns:
+                    t_col = c
+                    break
+        try:
+            pts = build_points(
+                df_all,
+                x=str(x),
+                y=str(y),
+                v=str(v),
+                t=str(t or ""),
+            )
+        except TypeError:
+            pts = build_points(
+                df_all,
+                x=str(x),
+                y=str(y),
+                v=str(v),
+            )
+
+        if pts is None or pts.empty:
+            return pd.DataFrame(
+                columns=["lon", "lat", "v", "t", "sample_idx"]
+            )
+
+        # attach stable id if available
+        if "sample_idx" in df_all.columns:
+            try:
+                pts["sample_idx"] = df_all.loc[
+                    pts.index, "sample_idx"
+                ]
+            except Exception:
+                pass
+
+        mode = str(
+            self.store.get(MAP_COORD_MODE, "lonlat")
+            or "lonlat"
+        ).strip().lower()
+
+        utm_epsg = parse_epsg(
+            self.store.get(MAP_UTM_EPSG)
+        )
+        src_epsg = parse_epsg(
+            self.store.get(MAP_COORD_EPSG)
+        )
+        if src_epsg is None:
+            src_epsg = parse_epsg(
+                self.store.get(MAP_SRC_EPSG)
+            )
+
+        try:
+            out, ok, _msg = ensure_lonlat(
+                pts,
+                mode=mode,
+                utm_epsg=utm_epsg,
+                src_epsg=src_epsg,
+            )
+        except Exception:
+            out = df_to_lonlat(
+                pts,
+                x="lon",
+                y="lat",
+                mode=mode,
+                utm_epsg=utm_epsg,
+                src_epsg=src_epsg,
+            )
+            ok = out is not None and (not out.empty)
+
+        if (not ok) or out is None or out.empty:
+            return pd.DataFrame(
+                columns=["lon", "lat", "v", "t", "sample_idx"]
+            )
+
+        # # If time is missing, try to build it from
+        # # base-year + forecast-step.
+        # try:
+        #     if "t" in out.columns and out["t"].isna().all():
+        #         base = None
+        #         if "coord_t" in df_all.columns:
+        #             base = pd.to_numeric(
+        #                 df_all.loc[out.index, "coord_t"],
+        #                 errors="coerce",
+        #             )
+        
+        #         step = None
+        #         for c in ("forecast_step", "step", "horizon"):
+        #             if c in df_all.columns:
+        #                 step = pd.to_numeric(
+        #                     df_all.loc[out.index, c],
+        #                     errors="coerce",
+        #                 )
+        #                 break
+        
+        #         if base is not None and step is not None:
+        #             out["t"] = base + step
+        #         elif step is not None:
+        #             out["t"] = step
+        # except Exception:
+        #     pass
+
+        # Ensure canonical cols exist
+        if "t" not in out.columns:
+            out["t"] = pd.NA
+        if "sample_idx" not in out.columns:
+            out["sample_idx"] = pd.NA
+
+        return out
+
+    def _clear_prop_store(self) -> None:
+        with self.store.batch():
+            self.store.set(MAP_PROP_TIMELINE, [])
+            self.store.set(MAP_PROP_DF_ALL, None)
+            self.store.set(MAP_PROP_DF_FRAME, None)
+            self.store.set(MAP_PROP_DF_POINTS, None)
+            self.store.set(MAP_PROP_VECTORS, [])
+            self.store.set(MAP_PROP_VMIN, None)
+            self.store.set(MAP_PROP_VMAX, None)
+
+        self._prop_sig = None
+        try:
+            self._prop_cache = PropagationScenarioCache()
+        except Exception:
+            pass
+
+    def _rebuild_prop_scenario(self) -> None:
+        """
+        Build (or reuse) the propagation scenario cache from
+        MAP_DF_ALL_POINTS (canonical lon/lat/v/t history).
+        """
+        if not bool(self.store.get(K_PROP_ENABLED, False)):
+            self._clear_prop_store()
+            return
+
+        base = self.store.get(MAP_DF_ALL_POINTS, None)
+        if (not isinstance(base, pd.DataFrame)) or base.empty:
+            # Try build from current bundle as fallback
+            b = getattr(self, "_bundle", None)
+            df_all = getattr(b, "df_all", None)
+            if not isinstance(df_all, pd.DataFrame):
+                self._clear_prop_store()
+                return
+
+            x = self._get_key(MAP_X_COL)
+            y = self._get_key(MAP_Y_COL)
+            v = self._get_value_col()
+            t = self._get_key(MAP_TIME_COL)
+
+            base = self._df_all_to_points(
+                df_all,
+                x,
+                y,
+                v,
+                t,
+            )
+
+        if (not isinstance(base, pd.DataFrame)) or base.empty:
+            self._clear_prop_store()
+            return
+
+        years = int(self.store.get(K_PROP_YEARS, 0) or 0)
+        mode = str(
+            self.store.get(K_PROP_MODE, "linear") or "linear"
+        ).strip().lower()
+        leg = str(
+            self.store.get(K_PROP_LEGEND, "global") or "global"
+        ).strip().lower()
+
+        sig = (
+            str(self.store.get(MAP_ACTIVE_FILE, "") or ""),
+            int(years),
+            str(mode),
+            str(leg),
+        )
+
+        # Avoid rebuilding if nothing material changed.
+        if self._prop_sig == sig:
+            self._update_prop_frame()
+            return
+
+        try:
+            self._prop_cache.build(
+                base,
+                years_to_add=int(years),
+                time_col="t",
+                value_col="v",
+                mode=str(mode),
+                legend_policy=str(leg),
+            )
+        except Exception:
+            self._clear_prop_store()
+            return
+
+        self._prop_sig = sig
+
+        # timeline
+        tl = []
+        try:
+            tlf = getattr(self._prop_cache, "timeline", None)
+            if callable(tlf):
+                tl = list(tlf() or [])
+            else:
+                tl = list(getattr(self._prop_cache, "timeline", []) or [])
+        except Exception:
+            tl = []
+
+        # scenario all-df (optional)
+        df_prop_all = None
+        try:
+            af = getattr(self._prop_cache, "df_all", None)
+            if callable(af):
+                df_prop_all = af()
+            elif isinstance(af, pd.DataFrame):
+                df_prop_all = af
+        except Exception:
+            df_prop_all = None
+
+        # global vmin/vmax (best-effort)
+        vmin = None
+        vmax = None
+        try:
+            rr = getattr(self._prop_cache, "legend_range", None)
+            if callable(rr):
+                vmin, vmax = rr("global")
+        except Exception:
+            vmin, vmax = None, None
+
+        if (
+            (vmin is None or vmax is None)
+            and isinstance(df_prop_all, pd.DataFrame)
+            and (not df_prop_all.empty)
+            and ("v" in df_prop_all.columns)
+        ):
+            s = pd.to_numeric(
+                df_prop_all["v"], errors="coerce"
+            )
+            s = s[s.notna()]
+            if len(s) > 0:
+                vmin = float(s.min())
+                vmax = float(s.max())
+
+        # choose initial year: prefer current time slice
+        y0 = self.store.get(MAP_PROP_YEAR, None)
+        try:
+            y0 = int(y0)
+        except Exception:
+            y0 = None
+
+        if tl and (y0 not in set(tl)):
+            tv = self.store.get(MAP_TIME_VALUE, None)
+            y1 = None
+            try:
+                y1 = int(float(tv))
+            except Exception:
+                y1 = None
+            if y1 in set(tl):
+                y0 = y1
+            else:
+                y0 = int(tl[-1])
+
+        with self.store.batch():
+            self.store.set(MAP_PROP_TIMELINE, tl)
+
+            if isinstance(df_prop_all, pd.DataFrame):
+                self.store.set(MAP_PROP_DF_ALL, df_prop_all)
+            else:
+                self.store.set(MAP_PROP_DF_ALL, None)
+
+            self.store.set(MAP_PROP_VMIN, vmin)
+            self.store.set(MAP_PROP_VMAX, vmax)
+
+            if y0 is not None:
+                self.store.set(MAP_PROP_YEAR, int(y0))
+
+        self._update_prop_frame()
+
+    def _update_prop_frame(self) -> None:
+        """
+        Push the current propagation year frame into the store:
+          - MAP_PROP_DF_FRAME
+          - MAP_PROP_DF_POINTS (sampled)
+          - MAP_PROP_VECTORS (optional)
+          - MAP_PROP_VMIN/VMAX (if per-frame legend policy)
+        """
+        if not bool(self.store.get(K_PROP_ENABLED, False)):
+            return
+
+        year = self.store.get(MAP_PROP_YEAR, None)
+        try:
+            year = int(year)
+        except Exception:
+            return
+
+        try:
+            df_y = self._prop_cache.frame(int(year))
+        except Exception:
+            df_y = None
+
+        if (not isinstance(df_y, pd.DataFrame)) or df_y.empty:
+            with self.store.batch():
+                self.store.set(MAP_PROP_DF_FRAME, None)
+                self.store.set(MAP_PROP_DF_POINTS, None)
+                self.store.set(MAP_PROP_VECTORS, [])
+            return
+
+        # Ensure canonical cols exist
+        need = {"lon", "lat", "v"}
+        if not need.issubset(set(df_y.columns)):
+            with self.store.batch():
+                self.store.set(MAP_PROP_DF_FRAME, None)
+                self.store.set(MAP_PROP_DF_POINTS, None)
+                self.store.set(MAP_PROP_VECTORS, [])
+            return
+
+        scfg = samp_cfg_from_get(self.store.get)
+
+        pts = df_y.copy()
+        pts["lon"] = pd.to_numeric(pts["lon"], errors="coerce")
+        pts["lat"] = pd.to_numeric(pts["lat"], errors="coerce")
+        pts["v"] = pd.to_numeric(pts["v"], errors="coerce")
+        pts = pts.dropna(subset=["lon", "lat", "v"])
+
+        if pts.empty:
+            with self.store.batch():
+                self.store.set(MAP_PROP_DF_FRAME, None)
+                self.store.set(MAP_PROP_DF_POINTS, None)
+                self.store.set(MAP_PROP_VECTORS, [])
+            return
+
+        pts_s = sample_points(
+            pts,
+            scfg,
+            lon="lon",
+            lat="lat",
+        )
+
+        # vectors (optional, cache-provided)
+        vec = []
+        if bool(self.store.get(K_PROP_VECTORS, True)):
+            try:
+                vf = getattr(self._prop_cache, "vectors", None)
+                if callable(vf):
+                    vec = list(vf(int(year)) or [])
+            except Exception:
+                vec = []
+
+        # per-frame legend range (optional)
+        leg = str(
+            self.store.get(K_PROP_LEGEND, "global") or "global"
+        ).strip().lower()
+
+        vmin = None
+        vmax = None
+        if leg in ("frame", "per_frame", "year"):
+            try:
+                rr = getattr(self._prop_cache, "legend_range", None)
+                if callable(rr):
+                    vmin, vmax = rr(int(year))
+            except Exception:
+                vmin, vmax = None, None
+
+            if vmin is None or vmax is None:
+                s = pd.to_numeric(
+                    pts_s["v"], errors="coerce"
+                )
+                s = s[s.notna()]
+                if len(s) > 0:
+                    vmin = float(s.min())
+                    vmax = float(s.max())
+
+        with self.store.batch():
+            self.store.set(MAP_PROP_DF_FRAME, pts_s)
+            self.store.set(MAP_PROP_DF_POINTS, pts_s)
+            self.store.set(MAP_PROP_VECTORS, vec)
+
+            if leg in ("frame", "per_frame", "year"):
+                self.store.set(MAP_PROP_VMIN, vmin)
+                self.store.set(MAP_PROP_VMAX, vmax)
