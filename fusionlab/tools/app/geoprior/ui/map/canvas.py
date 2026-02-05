@@ -57,6 +57,7 @@ except Exception:  # pragma: no cover
 
 try:
     from PyQt5.QtWebChannel import QWebChannel
+
 except Exception:  # pragma: no cover
     QWebChannel = None  # type: ignore
 
