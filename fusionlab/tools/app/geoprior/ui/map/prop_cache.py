@@ -17,6 +17,64 @@ def _to_int_year(s: pd.Series) -> pd.Series:
     x = pd.to_numeric(s, errors="coerce")
     return x.round().astype("Int64")
 
+
+def _fallback_extend_years(
+    df0: pd.DataFrame,
+    *,
+    years_to_add: int,
+    id_cols: List[str],
+) -> pd.DataFrame:
+    if years_to_add <= 0:
+        return df0
+
+    tmax = pd.to_numeric(df0["t"], errors="coerce").max()
+    if pd.isna(tmax):
+        return df0
+
+    y0 = int(tmax)
+    fut = list(range(y0 + 1, y0 + years_to_add + 1))
+    rows = []
+
+    g = df0.sort_values("t").groupby(id_cols, dropna=False)
+    for _, gg in g:
+        gg = gg.dropna(subset=["v", "t"])
+        if gg.empty:
+            continue
+
+        last = gg.iloc[-1]
+        v_last = float(last["v"])
+        lon = float(last["lon"])
+        lat = float(last["lat"])
+
+        slope = 0.0
+        if len(gg) >= 2:
+            prev = gg.iloc[-2]
+            dt = float(last["t"]) - float(prev["t"])
+            if dt != 0:
+                slope = (v_last - float(prev["v"])) / dt
+
+        for k, yy in enumerate(fut, start=1):
+            rows.append(
+                {
+                    "lon": lon,
+                    "lat": lat,
+                    "t": int(yy),
+                    "v": v_last + slope * float(k),
+                    "_is_simulated": True,
+                }
+            )
+
+    if not rows:
+        return df0
+
+    df_sim = pd.DataFrame(rows)
+    for c in id_cols:
+        if c in df0.columns:
+            df_sim[c] = pd.NA
+
+    return pd.concat([df0, df_sim], ignore_index=True)
+
+
 @dataclass
 class PropScenarioInfo:
     timeline: List[int]
@@ -89,6 +147,14 @@ class PropagationScenarioCache:
         df1["t"] = _to_int_year(df1["t"])
         df1["v"] = pd.to_numeric(df1["v"], errors="coerce")
         df1 = df1.dropna(subset=["lon", "lat", "t"])
+        
+        df1 = extrapolate_scenarios(
+            df0,
+            years_to_add=int(years_to_add),
+            time_col="t",
+            value_col="v",
+            id_cols=id_cols,
+        )
 
         self._df = df1
 
@@ -145,10 +211,55 @@ class PropagationScenarioCache:
             self._vectors[y] = []
             return []
 
+        # Use year-to-year change to make vectors
+        # visually react at every step.
+        use = fr
+        try:
+            tl = list(self.timeline or [])
+            p = None
+            if y in tl:
+                i = tl.index(y)
+                if i > 0:
+                    p = tl[i - 1]
+            else:
+                p = max([t for t in tl if t < y])
+
+            if p is not None:
+                fp = self.frame(int(p))
+                if not fp.empty:
+                    if (
+                        "sample_idx" in fr.columns
+                        and "sample_idx" in fp.columns
+                    ):
+                        use = fr.merge(
+                            fp[["sample_idx", "v"]],
+                            on="sample_idx",
+                            how="left",
+                            suffixes=("", "_p"),
+                        )
+                    else:
+                        use = fr.merge(
+                            fp[["lon", "lat", "v"]],
+                            on=["lon", "lat"],
+                            how="left",
+                            suffixes=("", "_p"),
+                        )
+
+                    use["dv"] = use["v"] - use[
+                        "v_p"
+                    ].fillna(use["v"])
+        except Exception:
+            use = fr
+
+        vcol = "dv" if "dv" in use.columns else "v"
         vec = compute_propagation_vectors(
-            fr,
-            time_col="t",
-            value_col="v",
+            use,
+            value_col=vcol,
         )
+        if not vec and vcol != "v":
+            vec = compute_propagation_vectors(
+                fr,
+                value_col="v",
+            )
         self._vectors[y] = list(vec or [])
         return list(self._vectors[y])

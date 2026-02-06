@@ -5,7 +5,9 @@
 from __future__ import annotations
 
 import os
-from typing import Iterable, List, Tuple
+from typing import Iterable, List, Tuple, Callable
+
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -74,38 +76,211 @@ def _linfit_stats(
     x: np.ndarray,
     y: np.ndarray,
 ) -> Tuple[float, float, float]:
+    x = np.asarray(x, float)
+    y = np.asarray(y, float)
+
     m = np.isfinite(x) & np.isfinite(y)
-    if m.sum() < 3:
+    if int(m.sum()) < 3:
         return float("nan"), float("nan"), float("nan")
-    slope, inter = np.polyfit(x[m], y[m], 1)
-    yhat = inter + slope * x[m]
-    ss_res = float(np.nansum((y[m] - yhat) ** 2))
-    ss_tot = float(np.nansum((y[m] - np.nanmean(y[m])) ** 2))
+
+    xx = x[m]
+    yy = y[m]
+
+    # Degenerate x => slope undefined
+    if float(np.nanstd(xx)) == 0.0:
+        return float("nan"), float("nan"), float("nan")
+
+    # NumPy compatibility:
+    # - some builds have np.RankWarning
+    # - others expose it via numpy.polynomial.polyutils
+    try:
+        rank_warn = np.RankWarning
+    except Exception:
+        try:
+            from numpy.polynomial.polyutils import (
+                RankWarning as rank_warn,
+            )
+        except Exception:
+            rank_warn = Warning
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", rank_warn)
+        try:
+            slope, inter = np.polyfit(xx, yy, 1)
+        except Exception:
+            return float("nan"), float("nan"), float("nan")
+
+    yhat = inter + slope * xx
+    ss_res = float(np.nansum((yy - yhat) ** 2))
+    ss_tot = float(np.nansum((yy - np.nanmean(yy)) ** 2))
     r2 = float("nan") if ss_tot <= 0 else 1.0 - ss_res / ss_tot
+
     return float(slope), float(inter), float(r2)
 
 
+def _mask_pair(
+    x: np.ndarray,
+    y: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    x = np.asarray(x, float)
+    y = np.asarray(y, float)
+    m = np.isfinite(x) & np.isfinite(y)
+    return x[m], y[m]
+
+
+def _boot_ci(
+    a: np.ndarray,
+    *,
+    ci: float = 0.95,
+) -> tuple[float, float]:
+    a = np.asarray(a, float)
+    a = a[np.isfinite(a)]
+    if a.size == 0:
+        return float("nan"), float("nan")
+
+    alpha = (1.0 - float(ci)) / 2.0
+    lo = float(np.quantile(a, alpha))
+    hi = float(np.quantile(a, 1.0 - alpha))
+    return lo, hi
+
+
+def _bootstrap_pair(
+    x: np.ndarray,
+    y: np.ndarray,
+    fn: Callable[[np.ndarray, np.ndarray], float],
+    *,
+    n_boot: int = 2000,
+    seed: int = 0,
+) -> np.ndarray:
+    x, y = _mask_pair(x, y)
+    n = int(x.size)
+    if n < 2:
+        return np.full((int(n_boot),), np.nan)
+
+    rng = np.random.default_rng(int(seed))
+    out = np.empty((int(n_boot),), float)
+
+    for b in range(int(n_boot)):
+        idx = rng.integers(0, n, size=n)
+        out[b] = float(fn(x[idx], y[idx]))
+
+    return out
+def _fmt_ci(
+    est: float,
+    lo: float,
+    hi: float,
+    *,
+    nd: int = 2,
+) -> str:
+    """
+    Format an estimate with an optional CI.
+
+    If CI bounds are not finite, returns only the estimate.
+    """
+    ok = (
+        np.isfinite(est)
+        and np.isfinite(lo)
+        and np.isfinite(hi)
+    )
+    if not ok:
+        return f"{est:.{nd}f}"
+    return f"{est:.{nd}f} [{lo:.{nd}f},{hi:.{nd}f}]"
 def plot_sm3_identifiability_v32(
     csv_path: str,
     outpath: str,
     *,
     show_prior: bool = True,
+    show_legend: bool = True,
+    show_stats_text: bool = True,
     tau_units: str = "year",
     metric: str = "ridge_resid",
-    k_from_tau: bool = True,
-    k_cl_source: str = "prior",  # "prior" | "true" | "est"
+    k_from_tau: bool | None = None,
+    k_cl_source: str = "prior",  # prior|true|est
+    only_identify: str | None = None,
+    nx_min: int | None = None,
+    n_boot: int = 2000,
+    ci: float = 0.95,
+    boot_seed: int = 0,
+    show_ci: bool = True,
 ) -> None:
     """
-    metric:
-      - "ridge_resid" (recommended for identifiability)
-      - "eps_prior_rms"
-      - "closure_consistency_rms"
+    Plot identifiability diagnostics (v3.2).
+
+    Notes
+    -----
+    - If k_from_tau is None:
+        * default False when identify includes "both"
+        * else default True
+    - Bootstrap CIs are computed over rows. At small n,
+      intervals will be wide / unstable.
+    - show_stats_text controls the metric annotation
+      blocks inside panels (a-d).
+    - show_legend controls the shared legend at the top.
     """
     df = pd.read_csv(csv_path)
+
+    # -------------------------
+    # Filters (strict)
+    # -------------------------
+    if only_identify is not None:
+        if "identify" not in df.columns:
+            raise KeyError(
+                "only_identify set but missing "
+                "'identify' column."
+            )
+        want = str(only_identify).strip().lower()
+        got = (
+            df["identify"]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+        )
+        df = df.loc[got == want].copy()
+
+    if nx_min is not None:
+        if "nx" not in df.columns:
+            raise KeyError(
+                "nx_min set but missing 'nx' column."
+            )
+        nxv = df["nx"].astype(int)
+        df = df.loc[nxv >= int(nx_min)].copy()
+
+    if df.empty:
+        raise ValueError("No rows left after filtering.")
+
+    # -------------------------
+    # Decide k_from_tau default
+    # -------------------------
+    if k_from_tau is None:
+        if "identify" in df.columns:
+            modes = (
+                df["identify"]
+                .astype(str)
+                .str.strip()
+                .str.lower()
+                .unique()
+                .tolist()
+            )
+            k_from_tau = "both" not in set(modes)
+        else:
+            k_from_tau = True
+
+    src = str(k_cl_source).strip().lower()
+    if src not in ("prior", "true", "est"):
+        raise ValueError(
+            "k_cl_source must be prior|true|est."
+        )
 
     tau_units = str(tau_units).strip().lower()
     if tau_units not in ("year", "sec"):
         raise ValueError("tau_units must be year/sec.")
+
+    if metric not in (
+        "ridge_resid",
+        "eps_prior_rms",
+        "closure_consistency_rms",
+    ):
+        raise ValueError("metric not supported.")
 
     base = [
         "lith_idx",
@@ -134,15 +309,68 @@ def plot_sm3_identifiability_v32(
     ]
     _require_cols(df, base, ctx="v3.2")
 
-    if metric not in (
-        "ridge_resid",
-        "eps_prior_rms",
-        "closure_consistency_rms",
-    ):
-        raise ValueError("metric not supported.")
-
     ln10 = float(np.log(10.0))
     eps = 1e-12
+
+    # -------------------------
+    # Metric helpers (for CI)
+    # -------------------------
+    def _mae(a: np.ndarray, b: np.ndarray) -> float:
+        return float(np.nanmean(np.abs(a - b)))
+
+    def _r2(a: np.ndarray, b: np.ndarray) -> float:
+        # Avoid corrcoef warnings when std == 0
+        a, b = _mask_pair(a, b)
+        if a.size < 2:
+            return float("nan")
+        if float(np.nanstd(a)) == 0.0:
+            return float("nan")
+        if float(np.nanstd(b)) == 0.0:
+            return float("nan")
+
+        with np.errstate(invalid="ignore", divide="ignore"):
+            r = float(np.corrcoef(a, b)[0, 1])
+
+        if not np.isfinite(r):
+            return float("nan")
+        return r * r
+
+    def _rho(a: np.ndarray, b: np.ndarray) -> float:
+        return float(_spearman(a, b))
+
+    def _slope(a: np.ndarray, b: np.ndarray) -> float:
+        s, _, _ = _linfit_stats(a, b)
+        return float(s)
+
+    def _stat_ci_text(
+        x: np.ndarray,
+        y: np.ndarray,
+        fn: Callable[[np.ndarray, np.ndarray], float],
+        *,
+        nd: int,
+        seed_off: int,
+        est: float | None = None,
+    ) -> tuple[float, tuple[float, float], str]:
+        if est is None:
+            est_v = float(fn(x, y))
+        else:
+            est_v = float(est)
+
+        lo = float("nan")
+        hi = float("nan")
+
+        if show_ci:
+            bt = _bootstrap_pair(
+                x,
+                y,
+                fn,
+                n_boot=int(n_boot),
+                seed=int(boot_seed + seed_off),
+            )
+            lo, hi = _boot_ci(bt, ci=float(ci))
+
+        txt = _fmt_ci(est_v, lo, hi, nd=int(nd))
+        return est_v, (lo, hi), txt
 
     # -----------------
     # (a) tau recovery
@@ -151,19 +379,30 @@ def plot_sm3_identifiability_v32(
         t_true = np.clip(df["tau_true_year"], eps, None)
         t_est = np.clip(df["tau_est_med_year"], eps, None)
         t_pri = np.clip(df["tau_prior_year"], eps, None)
-        xlab = r"$\log_{10}\,\tau_{\mathrm{true}}$ (yr)"
-        ylab = r"$\log_{10}\,\hat{\tau}$ (yr)"
+        xlab = (
+            r"$\log_{10}\,\tau_{\mathrm{true}}$ "
+            r"(yr)"
+        )
+        ylab = (
+            r"$\log_{10}\,\hat{\tau}$ "
+            r"(yr)"
+        )
     else:
         t_true = np.clip(df["tau_true_sec"], eps, None)
         t_est = np.clip(df["tau_est_med_sec"], eps, None)
         t_pri = np.clip(df["tau_prior_sec"], eps, None)
-        xlab = r"$\log_{10}\,\tau_{\mathrm{true}}$ (s)"
-        ylab = r"$\log_{10}\,\hat{\tau}$ (s)"
+        xlab = (
+            r"$\log_{10}\,\tau_{\mathrm{true}}$ "
+            r"(s)"
+        )
+        ylab = (
+            r"$\log_{10}\,\hat{\tau}$ "
+            r"(s)"
+        )
 
     x_tau = np.log10(t_true.to_numpy(float))
     y_tau = np.log10(t_est.to_numpy(float))
 
-    # closure tau from inferred K,Ss,Hd
     kappa = np.clip(df["kappa_b"].to_numpy(float), eps, None)
     K_est = np.clip(df["K_est_med_mps"].to_numpy(float), eps, None)
     Ss_est = np.clip(df["Ss_est_med"].to_numpy(float), eps, None)
@@ -182,40 +421,45 @@ def plot_sm3_identifiability_v32(
     mae_tau = float(np.nanmean(np.abs(y_tau - x_tau)))
     slope_tau, _, r2_tau = _linfit_stats(x_tau, y_tau)
 
-    # # -----------------
-    # # (b) K recovery (m/yr)
-    # # -----------------
-    # K_true = np.clip(df["K_true_mps"].to_numpy(float), eps, None)
-    # x_K = np.log10(K_true * SEC_PER_YEAR)
-    # y_K = np.log10(
-    #     np.clip(
-    #         df["K_est_med_m_per_year"].to_numpy(float),
-    #         eps,
-    #         None,
-    #     )
-    # )
-    # mae_K = float(np.nanmean(np.abs(y_K - x_K)))
-    # slope_K, _, r2_K = _linfit_stats(x_K, y_K)
+    _, _, mae_txt = _stat_ci_text(
+        x_tau,
+        y_tau,
+        _mae,
+        nd=2,
+        seed_off=11,
+        est=mae_tau,
+    )
+    _, _, r2_txt = _stat_ci_text(
+        x_tau,
+        y_tau,
+        _r2,
+        nd=3,
+        seed_off=12,
+        est=r2_tau,
+    )
+    _, _, sl_txt = _stat_ci_text(
+        x_tau,
+        y_tau,
+        _slope,
+        nd=2,
+        seed_off=13,
+        est=slope_tau,
+    )
+
     # -----------------
     # (b) K recovery (m/yr)
-    # Option A: K implied by tau via closure:
-    #   K = Hd^2 * Ss / (pi^2 * kappa * tau)
     # -----------------
-    K_true = np.clip(
-        df["K_true_mps"].to_numpy(float),
-        eps,
-        None,
-    )
+    K_true = np.clip(df["K_true_mps"].to_numpy(float), eps, None)
     x_K = np.log10(K_true * SEC_PER_YEAR)
 
-    if k_from_tau:
+    if bool(k_from_tau):
         tau_est = np.clip(
             df["tau_est_med_sec"].to_numpy(float),
             eps,
             None,
         )
 
-        if k_cl_source == "true":
+        if src == "true":
             Ss_use = np.clip(
                 df["Ss_true"].to_numpy(float),
                 eps,
@@ -226,7 +470,7 @@ def plot_sm3_identifiability_v32(
                 eps,
                 None,
             )
-        elif k_cl_source == "est":
+        elif src == "est":
             Ss_use = np.clip(
                 df["Ss_est_med"].to_numpy(float),
                 eps,
@@ -262,7 +506,10 @@ def plot_sm3_identifiability_v32(
             np.clip(K_cl_mps * SEC_PER_YEAR, eps, None)
         )
         k_title = "Permeability from closure"
-        ylabK = r"$\log_{10}\,K_{cl}(\hat{\tau})$ (m/yr)"
+        ylabK = (
+            r"$\log_{10}\,K_{cl}(\hat{\tau})$ "
+            r"(m/yr)"
+        )
     else:
         y_K = np.log10(
             np.clip(
@@ -273,44 +520,37 @@ def plot_sm3_identifiability_v32(
         )
         k_title = "Permeability recovery"
         ylabK = r"$\log_{10}\,\hat{K}$ (m/yr)"
-    
-    # if k_from_tau:
-    #     # Prefer precomputed columns if present
-    #     if "log10K_from_tau_m_per_year" in df.columns:
-    #         y_K = df["log10K_from_tau_m_per_year"].to_numpy(float)
-    #     elif "K_from_tau_m_per_year" in df.columns:
-    #         y_K = np.log10(
-    #             np.clip(
-    #                 df["K_from_tau_m_per_year"].to_numpy(float),
-    #                 eps,
-    #                 None,
-    #             )
-    #         )
-    #     else:
-    #         raise KeyError(
-    #             "k_from_tau=True but missing "
-    #             "'K_from_tau_m_per_year' (or log10K_...) in CSV."
-    #         )
-
-    #     k_title = "Permeability from closure"
-    #     ylabK = r"$\log_{10}\,K_{cl}(\hat{\tau})$ (m/yr)"
-    # else:
-    #     y_K = np.log10(
-    #         np.clip(
-    #             df["K_est_med_m_per_year"].to_numpy(float),
-    #             eps,
-    #             None,
-    #         )
-    #     )
-    #     k_title = "Permeability recovery"
-    #     ylabK = r"$\log_{10}\,\hat{K}$ (m/yr)"
 
     mae_K = float(np.nanmean(np.abs(y_K - x_K)))
     slope_K, _, r2_K = _linfit_stats(x_K, y_K)
 
+    _, _, maeK_txt = _stat_ci_text(
+        x_K,
+        y_K,
+        _mae,
+        nd=2,
+        seed_off=31,
+        est=mae_K,
+    )
+    _, _, r2K_txt = _stat_ci_text(
+        x_K,
+        y_K,
+        _r2,
+        nd=3,
+        seed_off=32,
+        est=r2_K,
+    )
+    _, _, slK_txt = _stat_ci_text(
+        x_K,
+        y_K,
+        _slope,
+        nd=2,
+        seed_off=33,
+        est=slope_K,
+    )
+
     # -----------------
-    # (c) ridge plot (degeneracy direction)
-    # offsets are ln => convert to log10
+    # (c) ridge plot
     # -----------------
     dK = df["vs_true_delta_K_q50"].to_numpy(float) / ln10
     dSs = df["vs_true_delta_Ss_q50"].to_numpy(float) / ln10
@@ -324,16 +564,25 @@ def plot_sm3_identifiability_v32(
     ridge_q50 = float(np.nanquantile(ridge_abs, 0.50))
     ridge_q95 = float(np.nanquantile(ridge_abs, 0.95))
 
+    _, _, rhoR_txt = _stat_ci_text(
+        ridge_x,
+        ridge_y,
+        _rho,
+        nd=2,
+        seed_off=41,
+        est=rho_ridge,
+    )
+
     # -----------------
-    # (d) error vs identifiability metric
+    # (d) err vs metric
     # -----------------
     err_tau = np.abs(y_tau - x_tau)
 
     if metric == "ridge_resid":
         y_m = np.log10(np.clip(ridge_abs, eps, None))
         ylab_m = (
-            r"$\log_{10}\,"
-            r"|\delta_K-(\delta_{S_s}+2\delta_{H_d})|$"
+            r"$\log_{10}\,|\delta_K-"
+            r"(\delta_{S_s}+2\delta_{H_d})|$"
         )
     else:
         m_raw = np.clip(df[metric].to_numpy(float), eps, None)
@@ -342,7 +591,18 @@ def plot_sm3_identifiability_v32(
 
     rho_id = _spearman(err_tau, y_m)
 
-    # lithology styling
+    _, _, rhoI_txt = _stat_ci_text(
+        err_tau,
+        y_m,
+        _rho,
+        nd=2,
+        seed_off=42,
+        est=rho_id,
+    )
+
+    # -----------------
+    # Styling + plotting
+    # -----------------
     lith = df["lith_idx"].to_numpy(int)
     lith_names = {0: "Fine", 1: "Mixed", 2: "Coarse", 3: "Rock"}
     markers = {0: "o", 1: "s", 2: "^", 3: "D"}
@@ -364,7 +624,15 @@ def plot_sm3_identifiability_v32(
             va="bottom",
         )
 
-    fig = plt.figure(figsize=(7.2, 4.2), constrained_layout=True)
+    nx_note = ""
+    if "nx" in df.columns:
+        nxu = sorted(set(df["nx"].astype(int).tolist()))
+        nx_note = f" (nx={nxu})"
+
+    fig = plt.figure(
+        figsize=(7.2, 4.2),
+        constrained_layout=True,
+    )
     gs = fig.add_gridspec(2, 2)
 
     # (a)
@@ -408,36 +676,37 @@ def plot_sm3_identifiability_v32(
             rasterized=True,
         )
 
-    lo = float(np.nanmin(np.r_[x_tau, y_tau, y_cl]))
-    hi = float(np.nanmax(np.r_[x_tau, y_tau, y_cl]))
-    pad = 0.06 * (hi - lo + 1e-9)
-    lo -= pad
-    hi += pad
-    axA.plot([lo, hi], [lo, hi], "--", linewidth=0.9)
-    axA.set_xlim(lo, hi)
-    axA.set_ylim(lo, hi)
-    axA.set_title("Timescale recovery", pad=2)
+    loA = float(np.nanmin(np.r_[x_tau, y_tau, y_cl]))
+    hiA = float(np.nanmax(np.r_[x_tau, y_tau, y_cl]))
+    padA = 0.06 * (hiA - loA + 1e-9)
+    loA -= padA
+    hiA += padA
+    axA.plot([loA, hiA], [loA, hiA], "--", linewidth=0.9)
+    axA.set_xlim(loA, hiA)
+    axA.set_ylim(loA, hiA)
+    axA.set_title("Timescale recovery" + nx_note, pad=2)
     axA.set_xlabel(xlab)
     axA.set_ylabel(ylab)
 
-    axA.text(
-        0.03,
-        0.97,
-        (
-            f"MAE = {mae_tau:.2f} (log10)\n"
-            f"$R^2$ = {r2_tau:.3f}\n"
-            f"slope = {slope_tau:.2f}"
-        ),
-        transform=axA.transAxes,
-        va="top",
-        ha="left",
-        bbox=dict(
-            boxstyle="round,pad=0.2",
-            facecolor="white",
-            alpha=0.85,
-            linewidth=0.0,
-        ),
-    )
+    if show_stats_text:
+        axA.text(
+            0.03,
+            0.97,
+            (
+                f"MAE = {mae_txt} (log10)\n"
+                f"$R^2$ = {r2_txt}\n"
+                f"slope = {sl_txt}"
+            ),
+            transform=axA.transAxes,
+            va="top",
+            ha="left",
+            bbox=dict(
+                boxstyle="round,pad=0.2",
+                facecolor="white",
+                alpha=0.85,
+                linewidth=0.0,
+            ),
+        )
 
     # (b)
     axB = fig.add_subplot(gs[0, 1])
@@ -455,41 +724,40 @@ def plot_sm3_identifiability_v32(
             rasterized=True,
         )
 
-    lo = float(np.nanmin(np.r_[x_K, y_K]))
-    hi = float(np.nanmax(np.r_[x_K, y_K]))
-    pad = 0.06 * (hi - lo + 1e-9)
-    lo -= pad
-    hi += pad
-    axB.plot([lo, hi], [lo, hi], "--", linewidth=0.9)
-    axB.set_xlim(lo, hi)
-    axB.set_ylim(lo, hi)
+    loB = float(np.nanmin(np.r_[x_K, y_K]))
+    hiB = float(np.nanmax(np.r_[x_K, y_K]))
+    padB = 0.06 * (hiB - loB + 1e-9)
+    loB -= padB
+    hiB += padB
+    axB.plot([loB, hiB], [loB, hiB], "--", linewidth=0.9)
+    axB.set_xlim(loB, hiB)
+    axB.set_ylim(loB, hiB)
 
-    axB.set_title(k_title, pad=2)
-    axB.set_ylabel(ylabK)
-    # axB.set_title("Permeability recovery", pad=2)
+    axB.set_title(k_title + nx_note, pad=2)
     axB.set_xlabel(r"$\log_{10}\,K_{true}$ (m/yr)")
-    # axB.set_ylabel(r"$\log_{10}\,\hat{K}$ (m/yr)")
+    axB.set_ylabel(ylabK)
 
-    axB.text(
-        0.03,
-        0.97,
-        (
-            f"MAE = {mae_K:.2f} (log10)\n"
-            f"$R^2$ = {r2_K:.3f}\n"
-            f"slope = {slope_K:.2f}"
-        ),
-        transform=axB.transAxes,
-        va="top",
-        ha="left",
-        bbox=dict(
-            boxstyle="round,pad=0.2",
-            facecolor="white",
-            alpha=0.85,
-            linewidth=0.0,
-        ),
-    )
+    if show_stats_text:
+        axB.text(
+            0.03,
+            0.97,
+            (
+                f"MAE = {maeK_txt} (log10)\n"
+                f"$R^2$ = {r2K_txt}\n"
+                f"slope = {slK_txt}"
+            ),
+            transform=axB.transAxes,
+            va="top",
+            ha="left",
+            bbox=dict(
+                boxstyle="round,pad=0.2",
+                facecolor="white",
+                alpha=0.85,
+                linewidth=0.0,
+            ),
+        )
 
-    # (c) ridge degeneracy plot
+    # (c)
     axC = fig.add_subplot(gs[1, 0])
     _beautify(axC)
     _panel(axC, "c")
@@ -505,34 +773,37 @@ def plot_sm3_identifiability_v32(
             rasterized=True,
         )
 
-    lo = float(np.nanmin(np.r_[ridge_x, ridge_y]))
-    hi = float(np.nanmax(np.r_[ridge_x, ridge_y]))
-    pad = 0.10 * (hi - lo + 1e-9)
-    lo -= pad
-    hi += pad
-    axC.plot([lo, hi], [lo, hi], "--", linewidth=0.9)
+    loC = float(np.nanmin(np.r_[ridge_x, ridge_y]))
+    hiC = float(np.nanmax(np.r_[ridge_x, ridge_y]))
+    padC = 0.10 * (hiC - loC + 1e-9)
+    loC -= padC
+    hiC += padC
+
+    axC.plot([loC, hiC], [loC, hiC], "--", linewidth=0.9)
     axC.axvline(0.0, linewidth=0.8)
     axC.axhline(0.0, linewidth=0.8)
-
-    axC.set_xlim(lo, hi)
-    axC.set_ylim(lo, hi)
+    axC.set_xlim(loC, hiC)
+    axC.set_ylim(loC, hiC)
 
     axC.set_title("Degeneracy ridge check", pad=2)
-    axC.set_xlabel(r"$\delta_{S_s}+2\,\delta_{H_d}$ (log$_{10}$)")
+    axC.set_xlabel(
+        r"$\delta_{S_s}+2\,\delta_{H_d}$ (log$_{10}$)"
+    )
     axC.set_ylabel(r"$\delta_K$ (log$_{10}$)")
 
-    axC.text(
-        0.03,
-        0.97,
-        (
-            f"Spearman r = {rho_ridge:.2f}\n"
-            f"|ridge| q50 = {ridge_q50:.2f}\n"
-            f"|ridge| q95 = {ridge_q95:.2f}"
-        ),
-        transform=axC.transAxes,
-        va="top",
-        ha="left",
-    )
+    if show_stats_text:
+        axC.text(
+            0.03,
+            0.97,
+            (
+                f"Spearman r = {rhoR_txt}\n"
+                f"|ridge| q50 = {ridge_q50:.2f}\n"
+                f"|ridge| q95 = {ridge_q95:.2f}"
+            ),
+            transform=axC.transAxes,
+            va="top",
+            ha="left",
+        )
 
     # (d)
     axD = fig.add_subplot(gs[1, 1])
@@ -553,60 +824,65 @@ def plot_sm3_identifiability_v32(
     axD.set_title("Error vs identifiability metric", pad=2)
     axD.set_xlabel(r"$|\Delta\log_{10}\tau|$")
     axD.set_ylabel(ylab_m)
-    axD.text(
-        0.03,
-        0.97,
-        f"Spearman r = {rho_id:.2f}",
-        transform=axD.transAxes,
-        va="top",
-        ha="left",
-    )
 
-    # Legend (top, shared)
-    handles: List = []
-    for i in sorted(np.unique(lith)):
-        handles.append(
-            Line2D(
-                [0],
-                [0],
-                marker=markers.get(i, "o"),
-                linestyle="none",
-                markersize=5,
-                label=lith_names.get(i, f"L{i}"),
+    if show_stats_text:
+        axD.text(
+            0.03,
+            0.97,
+            f"Spearman r = {rhoI_txt}",
+            transform=axD.transAxes,
+            va="top",
+            ha="left",
+        )
+
+    # Legend (shared)
+    if show_legend:
+        handles: List[Line2D] = []
+        for i in sorted(np.unique(lith)):
+            handles.append(
+                Line2D(
+                    [0],
+                    [0],
+                    marker=markers.get(i, "o"),
+                    linestyle="none",
+                    markersize=5,
+                    label=lith_names.get(i, f"L{i}"),
+                )
             )
-        )
-    handles.append(
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            linestyle="none",
-            markersize=5,
-            markerfacecolor="none",
-            markeredgecolor="k",
-            label=r"$\tau_{cl}$",
-        )
-    )
-    if show_prior:
+
         handles.append(
             Line2D(
                 [0],
                 [0],
-                marker="^",
+                marker="o",
                 linestyle="none",
                 markersize=5,
                 markerfacecolor="none",
-                markeredgecolor="0.4",
-                label="prior",
+                markeredgecolor="k",
+                label=r"$\tau_{cl}$",
             )
         )
 
-    fig.legend(
-        handles=handles,
-        loc="upper center",
-        ncol=min(len(handles), 6),
-        frameon=False,
-    )
+        if show_prior:
+            handles.append(
+                Line2D(
+                    [0],
+                    [0],
+                    marker="^",
+                    linestyle="none",
+                    markersize=5,
+                    markerfacecolor="none",
+                    markeredgecolor="0.4",
+                    label="prior",
+                )
+            )
+
+        fig.legend(
+            handles=handles,
+            loc="upper center",
+            ncol=min(len(handles), 6),
+            frameon=False,
+        )
 
     outdir = os.path.dirname(outpath) or "."
     os.makedirs(outdir, exist_ok=True)
@@ -614,15 +890,31 @@ def plot_sm3_identifiability_v32(
     plt.close(fig)
 
 
-if __name__ == "__main__":
-    base = r"results/sm3_synth"
-    csv = os.path.join(base, "sm3_synth_runs.csv")
 
+if __name__ == "__main__":
+    base = r"results/sm3_synth_1d"
+    csv = os.path.join(base, "sm3_synth_runs.csv")
+    # plot_sm3_identifiability_v32(
+    #     csv,
+    #     "figs/sm3_tau.png",
+    #     only_identify="tau",
+    #     k_from_tau=True,
+    # )
+
+    # plot_sm3_identifiability_v32(
+    #     csv,
+    #     "figs/sm3_ident_v32_year.png",
+    #     tau_units="year",
+    #     metric="ridge_resid",
+    #     k_from_tau=True ,
+    #     k_cl_source="est", #"est",   # <<< THIS makes panel (b) use Ss_est_med/Hd_est_med
+    # )
     plot_sm3_identifiability_v32(
         csv,
-        "figs/sm3_ident_v32_year.png",
-        tau_units="year",
-        metric="ridge_resid",
-        k_from_tau=True,
-        k_cl_source="est",   # <<< THIS makes panel (b) use Ss_est_med/Hd_est_med
+        "figs/sm3_both_clean.png",
+        only_identify="both",
+        nx_min=5,
+        k_from_tau=False,
+        show_stats_text=False,
+        show_legend=False,
     )

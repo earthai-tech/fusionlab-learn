@@ -15,16 +15,20 @@ Small Matplotlib widget + helpers for the SelectionPanel.
 from __future__ import annotations
 
 from typing import Optional, Tuple
-
+import re
+import numpy as np
 import pandas as pd
 
-from PyQt5.QtWidgets import QVBoxLayout, QWidget
+from PyQt5.QtWidgets import ( 
+    QVBoxLayout, QWidget, 
+    QSizePolicy
+)
 
 from matplotlib.backends.backend_qt5agg import (
     FigureCanvasQTAgg as FigureCanvas,
 )
 from matplotlib.figure import Figure
-
+from matplotlib import ticker as mticker
 
 def _as_numeric(s: pd.Series) -> pd.Series:
     try:
@@ -45,6 +49,78 @@ def _pick_col(df: pd.DataFrame, want: str) -> str:
     return w
 
 
+
+def _nice_label(name: str) -> str:
+    s = str(name or "").strip()
+    m = {
+        "coord_t": "Year",
+        "t": "Year",
+    }
+    if s in m:
+        return m[s]
+    s = re.sub(r"_q\d{1,2}$", "", s, flags=re.I)
+    s = re.sub(
+        r"_(actual|obs|observed|true)$",
+        "",
+        s,
+        flags=re.I,
+    )
+    s = s.replace("_", " ")
+    return s
+
+def _safe_layout(
+    fig: Figure,
+    canvas: FigureCanvas,
+    *,
+    pad: float,
+) -> None:
+    try:
+        w = int(canvas.width())
+        h = int(canvas.height())
+        if w < 16 or h < 16:
+            return
+        fig.tight_layout(pad=pad)
+    except:
+        fig.subplots_adjust(
+            left=0.18,
+            right=0.98,
+            bottom=0.28,
+            top=0.92,
+        )
+
+
+def _style_axis(ax, x: np.ndarray) -> None:
+    ax.grid(True, alpha=0.25)
+    ax.margins(x=0.02)
+    
+    xv = x[np.isfinite(x)]
+    if xv.size:
+        xr = np.round(xv).astype(int)
+        if np.allclose(xv, xr, atol=1e-3):
+            u = np.unique(xr)
+            if u.size <= 8:
+                ax.set_xticks(u.astype(float))
+            else:
+                ax.xaxis.set_major_locator(
+                    mticker.MaxNLocator(
+                        nbins=4,
+                        integer=True,
+                        prune="both",
+                    )
+                )
+            ax.xaxis.set_major_formatter(
+                mticker.FuncFormatter(
+                    lambda v, _p: f"{int(round(v))}"
+                )
+            )
+        else:
+            ax.xaxis.set_major_locator(
+                mticker.MaxNLocator(nbins=4, prune="both")
+            )
+
+    ax.tick_params(axis="x", labelsize=8)
+    ax.tick_params(axis="y", labelsize=8)
+
 class SelectionPlot(QWidget):
     """
     Tiny Matplotlib plot widget for SelectionPanel.
@@ -63,8 +139,19 @@ class SelectionPlot(QWidget):
         super().__init__(parent)
 
         self.setObjectName("gpSelPlot")
-        self.fig = Figure(figsize=(4.0, 2.4), dpi=100)
+        self.fig = Figure(figsize=(4.4, 2.2), dpi=100)
         self.canvas = FigureCanvas(self.fig)
+        
+        self.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding,
+        )
+        self.canvas.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding,
+        )
+        self.canvas.setMinimumSize(1, 1)
+
         self.ax = self.fig.add_subplot(111)
 
         lay = QVBoxLayout(self)
@@ -89,7 +176,11 @@ class SelectionPlot(QWidget):
                 va="center",
                 transform=self.ax.transAxes,
             )
-        self.fig.tight_layout(pad=1.0)
+        _safe_layout(
+            self.fig,
+            self.canvas,
+            pad=1.0,
+        )
         self.canvas.draw_idle()
 
     def plot_point(
@@ -99,6 +190,7 @@ class SelectionPlot(QWidget):
         t_col: str,
         z_col: str,
         band: Optional[Tuple[str, str]] = None,
+        overlay: Optional[str] = None,
     ) -> None:
         if df is None or df.empty:
             self.clear("No series")
@@ -126,8 +218,16 @@ class SelectionPlot(QWidget):
 
         x = d[tc].to_numpy()
         y = d[zc].to_numpy()
-        self.ax.plot(x, y)
-
+        # self.ax.plot(x, y)
+        line0 = self.ax.plot(
+            x,
+            y,
+            linewidth=2.0,
+            label=str(zc),
+            marker="o",
+            markersize=3.0,
+        )[0]
+        
         if band is not None:
             lo, hi = band
             lo = str(lo or "").strip()
@@ -158,10 +258,47 @@ class SelectionPlot(QWidget):
                         dd[hi].to_numpy(),
                         alpha=0.18,
                     )
+        ov = str(overlay or "").strip()
+        if ov and (ov in df.columns) and (ov != zc):
+            dd = df[[tc, ov]].copy()
+            dd[tc] = pd.to_numeric(
+                dd[tc],
+                errors="coerce",
+            )
+            dd[ov] = pd.to_numeric(
+                dd[ov],
+                errors="coerce",
+            )
+            dd = dd.dropna(subset=[tc, ov])
+            if not dd.empty:
+                dd = dd.sort_values(
+                    tc,
+                    kind="mergesort",
+                )
+                c0 = line0.get_color()
+                self.ax.plot(
+                    dd[tc].to_numpy(),
+                    dd[ov].to_numpy(),
+                    linewidth=1.0,
+                    alpha=0.85,
+                    linestyle="--",
+                    color=c0,
+                    label=str(ov),
+                )
+                self.ax.legend(
+                    frameon=False,
+                    fontsize=8,
+                )
 
-        self.ax.set_xlabel(str(tc))
-        self.ax.set_ylabel(str(zc))
-        self.fig.tight_layout(pad=1.0)
+        _style_axis(self.ax, x)
+        self.ax.set_xlabel(_nice_label(tc), fontsize=9)
+        self.ax.set_ylabel(_nice_label(zc), fontsize=9)
+        _safe_layout(
+            self.fig,
+            self.canvas,
+            pad=1.0,
+        )
+        
         self.canvas.draw_idle()
 
     def plot_group(
@@ -169,6 +306,7 @@ class SelectionPlot(QWidget):
         trend: pd.DataFrame,
         *,
         t_col: str,
+        y_label: str = "mid"
     ) -> None:
         if trend is None or trend.empty:
             self.clear("No trend")
@@ -192,7 +330,10 @@ class SelectionPlot(QWidget):
         self.ax.clear()
         self.ax.grid(True, alpha=0.25)
 
-        self.ax.plot(d[tc].to_numpy(), d["mid"].to_numpy())
+
+        x = d[tc].to_numpy()
+        y = d["mid"].to_numpy()
+        self.ax.plot(x, y, linewidth=2.0)
 
         # Optional spread band if present
         if "p10" in trend.columns and "p90" in trend.columns:
@@ -216,7 +357,12 @@ class SelectionPlot(QWidget):
                     alpha=0.18,
                 )
 
-        self.ax.set_xlabel(str(tc))
-        self.ax.set_ylabel("mid")
-        self.fig.tight_layout(pad=1.0)
+        _style_axis(self.ax, x)
+        self.ax.set_xlabel(_nice_label(tc), fontsize=9)
+        self.ax.set_ylabel(_nice_label(y_label), fontsize=9)
+        _safe_layout(
+            self.fig,
+            self.canvas,
+            pad=1.0,
+        )
         self.canvas.draw_idle()

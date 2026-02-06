@@ -59,11 +59,11 @@ DEFAULT_LABEL_MAP: Dict[str, str] = {
     "ss": "Specific storage Sₛ",
     "s_s": "Specific storage Sₛ",
     "specific_storage": "Specific storage Sₛ",
-    "tau": "Time constant τ",
-    "heff": "Effective thickness H_eff",
-    "h_eff": "Effective thickness H_eff",
-    "h": "Head h",
-    "u_star": "U*",
+    "tau": "Relaxation time τ",
+    "heff": "Effective thickness",
+    "h_eff": "Effective thickness",
+    "h": "Hydraulic head",
+    "u_star": "Pumping U*",
     "ustar": "U*",
     # Generic stats
     "mean": "Mean",
@@ -73,8 +73,52 @@ DEFAULT_LABEL_MAP: Dict[str, str] = {
     "var": "Variance",
     "min": "Minimum",
     "max": "Maximum",
+
+    # GeoPrior naming (extend freely)
+    "z_gwl": "GWL depth",
+    "z_surf": "Surface elevation",
+    "u_star": "Pumping U*",
+    # Physics fields / closures
+    "k": "Hydraulic conductivity K",
+    "ss": "Specific storage Sₛ",
+    "s_s": "Specific storage Sₛ",
+    "hd": "Drainage thickness H_d",
+    "tau": "Relaxation time τ",
+    "kappa": "Closure κ",
+    "mv": "Compressibility mᵥ",
+    # Priors (common spellings)
+    "k_prior": "K prior",
+    "ss_prior": "Sₛ prior",
+    "hd_prior": "H_d prior",
+    "tau_prior": "τ prior",
 }
 
+
+_Q_END = re.compile(
+    r"^(?P<base>.+?)[_\.](?P<kind>[qp])(?P<q>\d{2})$"
+)
+
+_Q_ONLY = re.compile(
+    r"^(?P<kind>[qp])(?P<q>\d{2})$"
+)
+
+
+DEFAULT_UNIT_MAP: Dict[str, str] = {
+    # Map/UI defaults
+    "subsidence": "mm",
+    "gwl": "m",
+    "z_gwl": "m",
+    "head": "m",
+    "h": "m",
+    "z_surf": "m",
+    "h_eff": "m",
+    # Physics defaults (from identifiability units)
+    "k": "m/s",
+    "ss": "1/m",
+    "s_s": "1/m",
+    "hd": "m",
+    "tau": "s",
+}
 
 def normalize_key(name: str) -> str:
     """
@@ -312,6 +356,138 @@ def pretty_band_label(
 # from geoprior.utils import pretty_band_label
 
 # lab = pretty_band_label(lo_q, hi_q, prefix="")
+
+
+def canon_key(name: str) -> str:
+    """
+    Normalize a column/field name to a stable lookup key.
+    """
+    s = str(name or "").strip()
+    s = s.replace(" ", "_")
+    s = s.replace("-", "_")
+    s = s.lower()
+    return s
+
+def split_quantile(
+    name: str,
+) -> Tuple[str, Optional[str], Optional[int]]:
+    """
+    Split quantile suffixes like *_q50 or *_p10.
+
+    Returns
+    -------
+    base : str
+        Base name without quantile suffix.
+    kind : {"q","p"} or None
+        Quantile kind.
+    q : int or None
+        Quantile in 0..99 (e.g. 50, 10, 90).
+    """
+    s = canon_key(name)
+    m = _Q_END.match(s)
+    if m is not None:
+        b = canon_key(m.group("base"))
+        k = str(m.group("kind"))
+        q = int(m.group("q"))
+        return b, k, q
+
+    m = _Q_ONLY.match(s)
+    if m is not None:
+        k = str(m.group("kind"))
+        q = int(m.group("q"))
+        return s, k, q
+
+    return s, None, None
+
+
+def resolve_unit(
+    name: str,
+    *,
+    unit_hint: str = "",
+    unit_map: Optional[Dict[str, str]] = None,
+) -> str:
+    """
+    Pick a unit string, preferring an explicit hint.
+    """
+    u = str(unit_hint or "").strip()
+    if u:
+        return u
+
+    um = DEFAULT_UNIT_MAP if unit_map is None else unit_map
+    base, _, _ = split_quantile(name)
+    return str(um.get(base, "") or "").strip()
+
+
+def resolve_label(
+    name: str,
+    *,
+    keep_quantile: bool = False,
+    label_map: Optional[Dict[str, str]] = None,
+) -> str:
+    """
+    Convert a column/field name into a UI-friendly label.
+    """
+    lm = DEFAULT_LABEL_MAP if label_map is None else label_map
+    base, k, q = split_quantile(name)
+
+    lab = lm.get(base, "")
+    if not lab:
+        lab = base.replace("_", " ").strip().title()
+
+    if keep_quantile and (k is not None) and (q is not None):
+        tag = f"{k}{q:02d}".upper()
+        lab = f"{lab} ({tag})"
+
+    return lab
+
+
+def format_label(
+    name: str,
+    *,
+    unit_hint: str = "",
+    keep_quantile: bool = False,
+    show_unit: bool = True,
+    label_map: Optional[Dict[str, str]] = None,
+    unit_map: Optional[Dict[str, str]] = None,
+) -> str:
+    """
+    Final UI label: nice name + optional unit.
+    """
+    lab = resolve_label(
+        name,
+        keep_quantile=keep_quantile,
+        label_map=label_map,
+    )
+
+    if not show_unit:
+        return lab
+
+    u = resolve_unit(
+        name,
+        unit_hint=unit_hint,
+        unit_map=unit_map,
+    )
+    if u:
+        return f"{lab} ({u})"
+
+    return lab
+
+
+def extend_maps(
+    label_map: Dict[str, str],
+    unit_map: Optional[Dict[str, str]] = None,
+) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """
+    Merge user additions onto the defaults (returns new dicts).
+    """
+    lm = dict(DEFAULT_LABEL_MAP)
+    lm.update({canon_key(k): v for k, v in (label_map or {}).items()})
+
+    um = dict(DEFAULT_UNIT_MAP)
+    if unit_map:
+        um.update({canon_key(k): v for k, v in unit_map.items()})
+
+    return lm, um
 
 
 def open_json_editor(

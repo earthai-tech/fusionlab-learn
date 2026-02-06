@@ -93,6 +93,7 @@ from .keys import (
     K_PROP_MODE,
     K_PROP_VECTORS,
     K_PROP_LEGEND,
+    MAP_VIEW_PLOT_KIND,
 )
 
 
@@ -136,6 +137,7 @@ class MapController(QObject):
         self.store = store
         self.canvas = canvas
         self.vf = view_factory
+        self._syncing = False
         
         self._prop_cache = PropagationScenarioCache()
         self._prop_sig = None
@@ -219,25 +221,6 @@ class MapController(QObject):
     # -------------------------
     # Store events
     # -------------------------
-    # def _on_store_changed(self, keys) -> None:
-    #     ks = set(keys or [])
-    #     if not ks:
-    #         return
-    #     if ks.issubset(self._ignore_keys):
-    #         return
-    #     if MAP_CLICK_SAMPLE_IDX in ks:
-    #         return
-    #     if ks.intersection(self._data_keys):
-    #         self.request_rebuild()
-            
-    #     if ks == {MAP_PROP_YEAR}:
-    #         self._update_prop_frame()
-    #         return
-        
-    #     if ks == {MAP_PROP_BUILD_ID}:
-    #         self._rebuild_prop_scenario()
-    #         return
-        
     def _on_store_changed(self, keys) -> None:
         ks = set(keys or [])
         if not ks:
@@ -249,26 +232,94 @@ class MapController(QObject):
         if MAP_CLICK_SAMPLE_IDX in ks:
             return
 
+        # --- NEW: sync view "look" <-> propagation enabled ---
+        self._sync_view_and_prop(ks)
+
         # Prop: timeline frame switch
-        if ks == {MAP_PROP_YEAR}:
+        if MAP_PROP_YEAR in ks:
             self._update_prop_frame()
             return
 
-        # Prop: explicit rebuild request
+        # Prop: explicit rebuild request (must FORCE)
         if ks == {MAP_PROP_BUILD_ID}:
-            self._rebuild_prop_scenario()
+            self._rebuild_prop_scenario(force=True)
             return
 
-        # Prop: settings changed
-        if ks.intersection(self._prop_keys):
+        # Prop: frame-only toggles (no rebuild)
+        if ks.intersection({K_PROP_VECTORS, K_PROP_LEGEND}):
             if bool(self.store.get(K_PROP_ENABLED, False)):
-                self._rebuild_prop_scenario()
+                self._update_prop_frame()
+            else:
+                self._clear_prop_store()
+            return
+
+        # Prop: settings that require scenario rebuild
+        if ks.intersection({K_PROP_ENABLED, K_PROP_YEARS, K_PROP_MODE}):
+            if bool(self.store.get(K_PROP_ENABLED, False)):
+                self._rebuild_prop_scenario(force=True)
             else:
                 self._clear_prop_store()
             return
 
         if ks.intersection(self._data_keys):
             self.request_rebuild()
+
+    def _sync_view_and_prop(self, ks: set) -> None:
+        if self._syncing:
+            return
+    
+        if (
+            (MAP_VIEW_PLOT_KIND not in ks)
+            and (K_PROP_ENABLED not in ks)
+        ):
+            return
+    
+        self._syncing = True
+        
+        try:
+            kind = str(
+                self.store.get(MAP_VIEW_PLOT_KIND, "")
+                or ""
+            ).strip().lower()
+    
+            prop_on = bool(
+                self.store.get(K_PROP_ENABLED, False)
+            )
+    
+            kind_changed = MAP_VIEW_PLOT_KIND in ks
+            en_changed = K_PROP_ENABLED in ks
+    
+            # 1) User toggled propagation enable -> update view,
+            #    but DO NOT apply "look => enable" back.
+            if en_changed and not kind_changed:
+                if prop_on and kind != "look":
+                    self.store.set(MAP_VIEW_PLOT_KIND, "look")
+                elif (not prop_on) and kind == "look":
+                    self.store.set(MAP_VIEW_PLOT_KIND, "points")
+                return
+    
+            # 2) User changed view kind -> update propagation.
+            if kind_changed:
+                if kind == "look" and not prop_on:
+                    with self.store.batch():
+                        self.store.set(K_PROP_ENABLED, True)
+    
+                        if self.store.get(K_PROP_YEARS, None) is None:
+                            self.store.set(K_PROP_YEARS, 5)
+    
+                        bid = int(
+                            self.store.get(MAP_PROP_BUILD_ID, 0)
+                            or 0
+                        )
+                        self.store.set(MAP_PROP_BUILD_ID, bid + 1)
+                    return
+    
+                if kind != "look" and prop_on:
+                    self.store.set(K_PROP_ENABLED, False)
+                return
+    
+        finally:
+            self._syncing = False
 
     # -------------------------
     # Click handling
@@ -761,33 +812,6 @@ class MapController(QObject):
                 columns=["lon", "lat", "v", "t", "sample_idx"]
             )
 
-        # # If time is missing, try to build it from
-        # # base-year + forecast-step.
-        # try:
-        #     if "t" in out.columns and out["t"].isna().all():
-        #         base = None
-        #         if "coord_t" in df_all.columns:
-        #             base = pd.to_numeric(
-        #                 df_all.loc[out.index, "coord_t"],
-        #                 errors="coerce",
-        #             )
-        
-        #         step = None
-        #         for c in ("forecast_step", "step", "horizon"):
-        #             if c in df_all.columns:
-        #                 step = pd.to_numeric(
-        #                     df_all.loc[out.index, c],
-        #                     errors="coerce",
-        #                 )
-        #                 break
-        
-        #         if base is not None and step is not None:
-        #             out["t"] = base + step
-        #         elif step is not None:
-        #             out["t"] = step
-        # except Exception:
-        #     pass
-
         # Ensure canonical cols exist
         if "t" not in out.columns:
             out["t"] = pd.NA
@@ -812,7 +836,7 @@ class MapController(QObject):
         except Exception:
             pass
 
-    def _rebuild_prop_scenario(self) -> None:
+    def _rebuild_prop_scenario(self, *, force: bool = False) -> None:
         """
         Build (or reuse) the propagation scenario cache from
         MAP_DF_ALL_POINTS (canonical lon/lat/v/t history).
@@ -847,7 +871,10 @@ class MapController(QObject):
             self._clear_prop_store()
             return
 
-        years = int(self.store.get(K_PROP_YEARS, 0) or 0)
+        years = int(self.store.get(K_PROP_YEARS, 5) or 5)
+        if years < 0:
+            years = 0
+            
         mode = str(
             self.store.get(K_PROP_MODE, "linear") or "linear"
         ).strip().lower()
@@ -863,7 +890,7 @@ class MapController(QObject):
         )
 
         # Avoid rebuilding if nothing material changed.
-        if self._prop_sig == sig:
+        if (not force) and (self._prop_sig == sig):
             self._update_prop_frame()
             return
 
@@ -910,7 +937,7 @@ class MapController(QObject):
         try:
             rr = getattr(self._prop_cache, "legend_range", None)
             if callable(rr):
-                vmin, vmax = rr("global")
+                vmin, vmax = rr(policy="global")
         except Exception:
             vmin, vmax = None, None
 
@@ -943,9 +970,9 @@ class MapController(QObject):
             except Exception:
                 y1 = None
             if y1 in set(tl):
-                y0 = y1
+                y0 = int(y1)
             else:
-                y0 = int(tl[-1])
+                y0 = int(tl[0])
 
         with self.store.batch():
             self.store.set(MAP_PROP_TIMELINE, tl)
@@ -1044,7 +1071,10 @@ class MapController(QObject):
             try:
                 rr = getattr(self._prop_cache, "legend_range", None)
                 if callable(rr):
-                    vmin, vmax = rr(int(year))
+                    vmin, vmax = rr(
+                        year=int(year),
+                        policy="frame",
+                    )
             except Exception:
                 vmin, vmax = None, None
 

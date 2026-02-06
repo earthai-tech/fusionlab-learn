@@ -214,6 +214,12 @@ K_PROP_MODE = "map.view.prop.mode"              # absolute | differential | risk
 K_PROP_VECTORS = "map.view.prop.show_vectors"   # bool (show expansion arrows)
 K_PROP_LOOP = "map.view.prop.loop"              # bool
 
+# Flow vectors styling
+K_PROP_VECTOR_COLOR_CUSTOM = (
+    "map.view.prop.vector_color_custom"
+)
+K_PROP_VECTOR_COLOR = "map.view.prop.vector_color"
+
 # Extra derived (canonical full-history points)
 MAP_DF_ALL_POINTS = "map.df_all_points"
 
@@ -269,6 +275,16 @@ MAP_SELECT_MODE = "map.select.mode"      # off|point|group
 MAP_SELECT_IDS = "map.select.ids"        # list[int]
 MAP_SELECT_OPEN = "map.select.open"      # bool
 MAP_SELECT_PINNED = "map.select.pinned"  # bool
+
+MAP_SELECT_ANCHOR_X = "map.select.anchor_x"
+MAP_SELECT_ANCHOR_Y = "map.select.anchor_y"
+
+MAP_SELECT_POS_X = "map.select.pos_x"
+MAP_SELECT_POS_Y = "map.select.pos_y"
+MAP_SELECT_MANUAL = "map.select.manual"
+
+# keys.py
+MAP_VIEW_LEGEND_ORIENT = "map.view.legend_orient"
 
 # # -------------------------
 # Map Core Defaults
@@ -345,6 +361,9 @@ _MAP_DEFAULTS = {
     MAP_PROP_VMIN: None,
     MAP_PROP_VMAX: None,
     MAP_PROP_VECTORS: [],
+    
+    MAP_SELECT_ANCHOR_X: -1,
+    MAP_SELECT_ANCHOR_Y: -1,
 
 
 }
@@ -410,6 +429,8 @@ VIEW_DEFAULTS: Dict[str, object] = {
     # Alerts
     K_ALERT_ENABLED: False,
     K_ALERT_TRIGGER: "Severity: Critical",
+    
+    MAP_VIEW_LEGEND_ORIENT: "vertical",
     
     # Render Defaults Merge
     **{

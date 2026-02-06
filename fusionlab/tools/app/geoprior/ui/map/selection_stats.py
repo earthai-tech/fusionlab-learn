@@ -232,7 +232,6 @@ def band_cols(
             hi = str(c)
     return lo, hi
 
-
 def group_trend(
     df: pd.DataFrame,
     *,
@@ -254,26 +253,28 @@ def group_trend(
     if t not in df.columns or mid not in df.columns:
         return pd.DataFrame()
 
-    g = df.groupby([t], as_index=False)
+    g = df.groupby(t)[mid]
+
     if str(agg) == "mean":
-        out = g[mid].mean().rename(columns={mid: "mid"})
+        mid_s = g.mean()
     else:
-        out = g[mid].median().rename(columns={mid: "mid"})
+        mid_s = g.median()
 
-    # point-spread envelope (10-90) across points
-    def _p(x: pd.Series, q: float) -> float:
-        try:
-            return float(x.quantile(q))
-        except Exception:
-            return float("nan")
+    out = mid_s.reset_index(name="mid")
 
-    p10 = g[mid].apply(lambda s: _p(s, 0.10))
-    p90 = g[mid].apply(lambda s: _p(s, 0.90))
-    out["p10"] = p10.values
-    out["p90"] = p90.values
+    try:
+        out["p10"] = g.quantile(0.10).to_numpy()
+        out["p90"] = g.quantile(0.90).to_numpy()
+    except :
+        out["p10"] = g.apply(
+            lambda s: float(s.quantile(0.10))
+        ).to_numpy()
+        out["p90"] = g.apply(
+            lambda s: float(s.quantile(0.90))
+        ).to_numpy()
+
     out = out.sort_values(by=t, kind="mergesort")
     return out
-
 
 def exceed_prob_from_quantiles(
     row: pd.Series,

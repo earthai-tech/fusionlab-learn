@@ -21,7 +21,8 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import math 
-
+import numpy as np
+from matplotlib import colormaps
 from typing import Any, Dict, List, Optional, Sequence
 
 from PyQt5.QtCore import (
@@ -736,8 +737,8 @@ class ForecastMapView(QFrame):
         radius = int(v.get("marker_size", 6))
         opacity = float(v.get("marker_opacity", 0.9))
     
-        show_leg = bool(v.get("show_colorbar", True))
-    
+        show_leg = bool(v.get("show_legend", False))
+
         autoscale = bool(v.get("autoscale", True))
         vmin = None if autoscale else v.get("vmin", None)
         vmax = None if autoscale else v.get("vmax", None)
@@ -789,6 +790,13 @@ class ForecastMapView(QFrame):
             return
 
         o = dict(self._last_layer_opts or {})
+        o["legendPos"] = str(
+            self._view.get("legend_pos", "br") or "br"
+        )
+        o["legendOrient"] = str(
+            self._view.get("legend_orient", "vertical")
+            or "vertical"
+        )
         o["radius"] = int(radius)
         o["opacity"] = float(opacity)
 
@@ -991,3 +999,27 @@ class ForecastMapView(QFrame):
             "  window.__GeoPriorMap.zoomOut();"
             "}",
         )
+
+def _mk_palette(
+    cmap: str,
+    invert: bool,
+    n: int = 64,
+) -> Optional[List[List[int]]]:
+
+    name = str(cmap or "viridis").strip()
+    inv = bool(invert)
+
+    if name.endswith("_r"):
+        name = name[:-2]
+        inv = not inv
+
+    try:
+        cm = colormaps.get_cmap(name)
+    except Exception:
+        cm = colormaps.get_cmap("viridis")
+
+    xs = np.linspace(0.0, 1.0, n)
+    rgb = cm(xs)[:, :3]
+    rgb = (rgb * 255.0).round().astype(int)
+    pal = rgb.tolist()
+    return pal[::-1] if inv else pal

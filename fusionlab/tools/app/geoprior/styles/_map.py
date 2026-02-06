@@ -295,6 +295,41 @@ QWidget#gpSelPlot {
   background: rgba(255,255,255,0.70);
   padding: 6px;
 }
+    
+QFrame#gpSelectionPanel {
+  background: transparent;
+}
+
+QFrame#gpSelCard {
+  background: rgba(255, 255, 255, 235);
+  border-radius: 14px;
+  border: 1px solid rgba(0, 0, 0, 28);
+}
+
+QScrollArea#gpSelDetails,
+QWidget#gpSelDetailsVp {
+  background: transparent;
+}
+
+QLabel#gpSelTitle {
+  font-weight: 600;
+}
+/* Drag header (popover handle) */
+QWidget#gpSelDragBar {
+  border-top-left-radius: 14px;
+  border-top-right-radius: 14px;
+  background: transparent;
+}
+
+QWidget#gpSelDragBar:hover {
+  background: rgba(0,0,0,0.03);   /* light hover */
+}
+
+/* Optional: make title + buttons align nicely */
+QWidget#gpSelDragBar QLabel#gpSelTitle {
+  padding: 2px 4px;
+}
+
 """
 
 MAP_SELECTION_DARK = """
@@ -336,6 +371,20 @@ QWidget#gpSelPlot {
   border-radius: 12px;
   background: rgba(2,6,23,0.34);
   padding: 6px;
+}
+QFrame#gpSelCard[theme="dark"] {
+  background: rgba(26, 26, 28, 235);
+  border: 1px solid rgba(255, 255, 255, 22);
+}
+/* Drag header (popover handle) */
+QWidget#gpSelDragBar {
+  border-top-left-radius: 14px;
+  border-top-right-radius: 14px;
+  background: transparent;
+}
+
+QWidget#gpSelDragBar:hover {
+  background: rgba(255,255,255,0.06);  /* dark hover */
 }
 """
 

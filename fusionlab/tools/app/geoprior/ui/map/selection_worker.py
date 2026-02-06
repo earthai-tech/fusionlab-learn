@@ -24,10 +24,46 @@ from .selection_stats import (
     summarize_series,
     exceed_prob_from_quantiles,
     pick_mid_col,
+    band_cols,
 )
 
 
 _Q_RE = re.compile(r"(?:^|_)q(\d{1,2})$", re.I)
+_BASE_STRIP = (
+    "_actual",
+    "_observed",
+    "_obs",
+    "_true",
+    "_target",
+)
+
+
+def _strip_base(z: str) -> str:
+    zz = str(z or "").strip()
+    low = zz.lower()
+    for suf in _BASE_STRIP:
+        if low.endswith(suf):
+            return zz[: -len(suf)]
+    return zz
+
+
+def _infer_q_family(
+    z: str,
+    cols: Sequence[str],
+) -> list[str]:
+    # 1) if z is already a quantile col, keep old logic
+    out = _q_family(z, cols)
+    if out:
+        return out
+
+    # 2) try base from *_actual, *_obs, ...
+    base = _strip_base(z)
+    base = str(base or "").strip()
+    if not base:
+        return []
+
+    probe = f"{base}_q50"
+    return _q_family(probe, cols)
 
 
 def _q_meta(cols: Sequence[str]) -> list[Tuple[float, str]]:
@@ -44,6 +80,8 @@ def _q_meta(cols: Sequence[str]) -> list[Tuple[float, str]]:
     out.sort(key=lambda it: it[0])
     return out
 
+def _is_quantile_col(name: str) -> bool:
+    return bool(_Q_RE.search(str(name or ""))) 
 
 def _q_family(
     z: str,
@@ -141,7 +179,11 @@ def _compute(req: SelectionRequest) -> Dict[str, Any]:
         cols = [req.id_col, req.t_col, req.z_col]
         cols = [c for c in cols if c in req.df_all.columns]
 
-        qcols = _q_family(req.z_col, req.df_all.columns)
+        # qcols = _q_family(req.z_col, req.df_all.columns)
+        qcols = _infer_q_family(
+            req.z_col,
+            req.df_all.columns,
+        )
         for qc in qcols:
             if qc not in cols:
                 cols.append(qc)
@@ -158,7 +200,13 @@ def _compute(req: SelectionRequest) -> Dict[str, Any]:
             return {"mode": mode, "ids": ids, "empty": True}
 
         p = Path(req.path)
-        qcols = []
+        qcols: list[str] = []
+        try:
+            hdr = pd.read_csv(p, nrows=0).columns
+            qcols = _q_family(req.z_col, hdr)
+        except:
+            qcols = []
+            
         df = load_series_for_ids(
             path=p,
             id_col=req.id_col,
@@ -195,10 +243,24 @@ def _compute(req: SelectionRequest) -> Dict[str, Any]:
     # -------------------------
     # Quantile metadata (if any)
     # -------------------------
-    qcols = _q_family(req.z_col, df.columns)
+    qcols = _infer_q_family(req.z_col, df.columns)
     qmeta = _q_meta(qcols)
     mid = pick_mid_col(req.z_col, qmeta)
 
+    # If user selected *_actual (not a quantile col),
+    # keep mid as actual. Only auto-pick q50 when
+    # z_col itself is from the quantile family.
+    mid = str(req.z_col)
+    if _Q_RE.search(str(req.z_col or "")):
+        mid = pick_mid_col(req.z_col, qmeta)
+
+    lo = hi = None
+    if qmeta:
+        lo, hi = band_cols(qmeta, band="80")
+
+    lo, hi = (None, None)
+    if qmeta:
+        lo, hi = band_cols(qmeta, band="80")
     # -------------------------
     # Point vs group outputs
     # -------------------------
@@ -208,6 +270,18 @@ def _compute(req: SelectionRequest) -> Dict[str, Any]:
         if req.t_col in d1.columns:
             d1 = d1.sort_values(req.t_col, kind="mergesort")
         out["series"] = d1
+        
+        if lo and hi:
+            out["band"] = (str(lo), str(hi))
+        # UX: if user plots "actual", overlay q50
+        
+        overlay = None
+        if qmeta and (not _is_quantile_col(req.z_col)):
+            q50 = pick_mid_col(req.z_col, qmeta)
+            if q50 and (q50 != req.z_col):
+                if q50 in d1.columns:
+                    overlay = str(q50)
+        out["overlay"] = overlay
 
         if req.thr is not None and qmeta:
             try:
@@ -221,6 +295,8 @@ def _compute(req: SelectionRequest) -> Dict[str, Any]:
                 )
             except Exception:
                 out["risk_p"] = float("nan")
+                
+
 
         return out
 

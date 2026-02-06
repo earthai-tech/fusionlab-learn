@@ -285,8 +285,13 @@ def extrapolate_scenarios(
     simulated = d.groupby("_loc_id").apply(_forecast_group).reset_index()
     
     # Merge metadata (coordinates/IDs) back to simulated rows
-    meta = d.drop_duplicates(subset="_loc_id")[["_loc_id"] + valid_ids]
-    
+    # meta = d.drop_duplicates(subset="_loc_id")[["_loc_id"] + valid_ids]
+    meta_cols = ["_loc_id"] + valid_ids
+    for c in ("lon", "lat"):
+        if (c in d.columns) and (c not in meta_cols):
+            meta_cols.append(c)
+    meta = d.drop_duplicates(subset="_loc_id")[meta_cols]
+
     # Merge
     final_sim = pd.merge(simulated, meta, on="_loc_id", how="left")
     
@@ -371,8 +376,9 @@ def compute_propagation_vectors(
                 continue
                 
             # Angle in degrees
-            angle = np.degrees(np.arctan2(dy[r,c], dx[r,c]))
-            
+            # angle = np.degrees(np.arctan2(dy[r,c], dx[r,c]))
+            angle = np.degrees(np.arctan2(-dy[r, c], -dx[r, c]))
+
             vectors.append({
                 "lon": float(XI[r,c]),
                 "lat": float(YI[r,c]),

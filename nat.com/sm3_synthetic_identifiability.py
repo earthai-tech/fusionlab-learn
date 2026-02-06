@@ -170,6 +170,166 @@ def settlement_from_tau(
         s[t] = alpha * acc
     return s
 
+def solve_head_1d_fd(
+    years: np.ndarray,
+    h_left: np.ndarray,
+    *,
+    Lx_m: float,
+    nx: int,
+    K_mps: float,
+    Ss: float,
+    h_right: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Solve Ss dh/dt = K d2h/dx2 on [0,Lx] with Dirichlet BCs:
+      h(0,t)=h_left[t],  h(Lx,t)=h_right
+
+    Returns
+    -------
+    x_m : (nx,)
+    h   : (nx, nT)
+    """
+    years = np.asarray(years, float)
+    h_left = np.asarray(h_left, float)
+
+    nT = int(years.size)
+    nx = int(nx)
+
+    if nx < 3:
+        raise ValueError("nx must be >= 3.")
+
+    x_m = np.linspace(0.0, float(Lx_m), nx)
+    dx = float(x_m[1] - x_m[0])
+
+    if nT < 2:
+        raise ValueError("Need at least 2 time points.")
+
+    dt_year = float(years[1] - years[0])
+    dt = dt_year * float(SEC_PER_YEAR)
+
+    Ss = max(float(Ss), 1e-12)
+    K = max(float(K_mps), 1e-20)
+
+    # Stability coeff r = (K/Ss) dt / dx^2
+    r = (K / Ss) * dt / (dx * dx)
+
+    # Auto substeps to keep r_sub <= 0.45
+    n_sub = int(np.ceil(r / 0.45)) if r > 0.45 else 1
+    dt_sub = dt / float(n_sub)
+    r_sub = (K / Ss) * dt_sub / (dx * dx)
+
+    h = np.zeros((nx, nT), dtype=float)
+
+    # init: linear between BCs at t=0
+    for i in range(nx):
+        f = float(i) / float(nx - 1)
+        h[i, 0] = (1.0 - f) * h_left[0] + f * float(h_right)
+
+    for t in range(1, nT):
+        ht = h[:, t - 1].copy()
+
+        for _ in range(n_sub):
+            ht[0] = float(h_left[t])
+            ht[-1] = float(h_right)
+
+            hn = ht.copy()
+            hn[1:-1] = (
+                ht[1:-1]
+                + r_sub
+                * (ht[2:] - 2.0 * ht[1:-1] + ht[:-2])
+            )
+            ht = hn
+
+        ht[0] = float(h_left[t])
+        ht[-1] = float(h_right)
+        h[:, t] = ht
+
+    return x_m, h
+
+def make_windows_1d_domain(
+    *,
+    years: np.ndarray,
+    head_xt: np.ndarray,   # (nx,nT) head (m, up+)
+    subs_xt: np.ndarray,   # (nx,nT) cumulative subs (m)
+    x_m: np.ndarray,       # (nx,)
+    Lx_m: float,
+    static_vec: np.ndarray,
+    time_steps: int,
+    forecast_horizon: int,
+    H_field_value: float,
+    z_surf_static_index: int,
+) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], float, int]:
+    years = np.asarray(years, float)
+    head_xt = np.asarray(head_xt, float)
+    subs_xt = np.asarray(subs_xt, float)
+    x_m = np.asarray(x_m, float)
+
+    nx, nT = head_xt.shape
+    if subs_xt.shape != (nx, nT):
+        raise ValueError("subs_xt shape mismatch.")
+
+    T = int(time_steps)
+    H = int(forecast_horizon)
+
+    B = int(nT - T - H + 1)
+    if B <= 0:
+        raise ValueError("Not enough samples for horizon.")
+
+    # depth_bgs (down+), z_surf=0 -> depth = -head
+    depth_xt = (-head_xt).astype(np.float32)
+    subs_xt = subs_xt.astype(np.float32)
+
+    t0 = float(years[0])
+    t_rng = float(years[-1] - t0)
+    t_rng = max(t_rng, 1.0)
+
+    st = np.asarray(static_vec, np.float32)
+    z_surf = float(st[int(z_surf_static_index)])
+
+    x_norm = (x_m / max(float(Lx_m), 1e-12)).astype(np.float32)
+
+    N = int(B * nx)
+
+    X: dict[str, np.ndarray] = {}
+    X["static_features"] = np.repeat(st[None, :], N, axis=0)
+    X["dynamic_features"] = np.zeros((N, T, 2), np.float32)
+    X["future_features"] = np.zeros((N, H, 1), np.float32)
+    X["coords"] = np.zeros((N, H, 3), np.float32)
+    X["H_field"] = np.full((N, H, 1), float(H_field_value), np.float32)
+
+    y = {
+        "subs_pred": np.zeros((N, H, 1), np.float32),
+        "gwl_pred": np.zeros((N, H, 1), np.float32),
+    }
+
+    # time-major packing:
+    # sample index = i*nx + p  (i window, p pixel)
+    for i in range(B):
+        j = i + T
+
+        for p in range(nx):
+            sidx = i * nx + p
+
+            X["dynamic_features"][sidx, :, 0] = depth_xt[p, i:j]
+            X["dynamic_features"][sidx, :, 1] = subs_xt[p, i:j]
+
+            for h in range(H):
+                k = j + h
+
+                y["subs_pred"][sidx, h, 0] = subs_xt[p, k]
+
+                # head target (up+): z_surf - depth
+                y["gwl_pred"][sidx, h, 0] = z_surf - depth_xt[p, k]
+
+                # future-known: depth at target time
+                X["future_features"][sidx, h, 0] = depth_xt[p, k]
+
+                X["coords"][sidx, h, 0] = (years[k] - t0) / t_rng
+                X["coords"][sidx, h, 1] = x_norm[p]
+                X["coords"][sidx, h, 2] = 0.0
+
+    return X, y, t_rng, nx
+
 def make_windows(
     years: np.ndarray,
     dh: np.ndarray,
@@ -450,7 +610,6 @@ def _infer_payload_time_units(meta: Dict[str, Any]) -> str:
 
     return "sec"
 
-
 def convert_payload_time_units(
     payload: Dict[str, np.ndarray],
     *,
@@ -497,10 +656,34 @@ def convert_payload_time_units(
 
     return out
 
+def split_tail_timeblocks(
+    X: Dict[str, np.ndarray],
+    y: Dict[str, np.ndarray],
+    *,
+    val_tail: int,
+    nx: int,
+) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray],
+           Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+    N = int(len(next(iter(X.values()))))
+    nx = int(nx)
+
+    tail = int(val_tail) * nx
+    if not (0 < tail < N):
+        raise ValueError("val_tail*nx must be in (0, N).")
+
+    cut = N - tail
+    Xtr = {k: v[:cut] for k, v in X.items()}
+    ytr = {k: v[:cut] for k, v in y.items()}
+    Xva = {k: v[cut:] for k, v in X.items()}
+    yva = {k: v[cut:] for k, v in y.items()}
+    return Xtr, ytr, Xva, yva
+
+
 def _make_scaling_kwargs(
     *,
     t_range: float,
     z_surf_static_index: int,
+    Lx_m: float = 1.0,
     K_min: float = 1e-15,
     K_max: float = 3e-10,
     Ss_min: float = 1e-7,
@@ -510,6 +693,7 @@ def _make_scaling_kwargs(
     tau_min_year: float = 0.3,
     tau_max_year: float = 10.0,
     allow_subs_residual: bool = True,
+    subs_resid_policy: str = "always_on",
 ) -> dict[str, Any]:
     """
     Scaling config for synthetic identifiability.
@@ -522,15 +706,15 @@ def _make_scaling_kwargs(
     """
     spy = float(SEC_PER_YEAR)
 
-    logK_min = float(np.log10(K_min))
-    logK_max = float(np.log10(K_max))
-    logSs_min = float(np.log10(Ss_min))
-    logSs_max = float(np.log10(Ss_max))
+    # logK_min = float(np.log10(K_min))
+    # logK_max = float(np.log10(K_max))
+    # logSs_min = float(np.log10(Ss_min))
+    # logSs_max = float(np.log10(Ss_max))
 
     tau_min_sec = float(tau_min_year) * spy
     tau_max_sec = float(tau_max_year) * spy
-    logTau_min = float(np.log10(tau_min_sec))
-    logTau_max = float(np.log10(tau_max_sec))
+    # logTau_min = float(np.log10(tau_min_sec))
+    # logTau_max = float(np.log10(tau_max_sec))
 
     return dict(
         # SI scaling (we already provide meters).
@@ -548,14 +732,17 @@ def _make_scaling_kwargs(
         coord_order=["t", "x", "y"],
         coord_ranges=dict(
             t=float(t_range),
-            x=1.0,
+            x=float(Lx_m),
             y=1.0,
         ),
         coords_in_degrees=False,
 
         # Enable consolidation residuals.
         allow_subs_residual=bool(allow_subs_residual),
-
+        subs_resid_policy=str(subs_resid_policy), 
+        
+        bounds_mode="hard", 
+        
         # Dynamic layout (depth + subs history).
         gwl_dyn_index=0,
         subs_dyn_index=1,
@@ -580,26 +767,21 @@ def _make_scaling_kwargs(
         # future_feature_names=["future_dummy"],
         future_feature_names=["GWL_depth_future_bgs_m"],
         static_feature_names=None,
+        
+        bounds = dict(
+        K_min=K_min,
+        K_max=K_max,
+        
+        Ss_min=Ss_min,
+        Ss_max=Ss_max,
+        
+        tau_min=tau_min_sec,
+        tau_max=tau_max_sec,
+        
+        H_min=float(H_min),
+        H_max=float(H_max),
+    )
 
-        bounds=dict(
-            H_min=float(H_min),
-            H_max=float(H_max),
-
-            K_min=float(K_min),
-            K_max=float(K_max),
-            logK_min=logK_min,
-            logK_max=logK_max,
-
-            Ss_min=float(Ss_min),
-            Ss_max=float(Ss_max),
-            logSs_min=logSs_min,
-            logSs_max=logSs_max,
-
-            tau_min=float(tau_min_sec),
-            tau_max=float(tau_max_sec),
-            logTau_min=logTau_min,
-            logTau_max=logTau_max,
-        ),
     )
 
 def make_pinball_with_crossing(
@@ -642,6 +824,7 @@ def train_one_pixel(
     forecast_horizon: int, 
     n_lith: int,
     z_surf_static_index: int, 
+    Lx_m: float =1.0, 
     # These bounds should match your synthetic generator.
     K_min: float = 1e-15,
     K_max: float = 3e-10,
@@ -652,6 +835,7 @@ def train_one_pixel(
     tau_min_year: float = 0.3,
     tau_max_year: float = 10.0,
     lambda_offset: float = 0,
+    identify: str = "tau",
 ) -> Tuple[GeoPriorSubsNet, tf.data.Dataset]:
 
 
@@ -664,6 +848,8 @@ def train_one_pixel(
     sk = _make_scaling_kwargs(
         t_range=float(t_range_years),
         z_surf_static_index=int(z_surf_static_index),
+        Lx_m=float(Lx_m),
+        subs_resid_policy="always_on",
         # keep these consistent with your generator:
         K_min=K_min,
         K_max=K_max,
@@ -676,12 +862,24 @@ def train_one_pixel(
         allow_subs_residual=True,
     )
 
-    b = sk["bounds"]
-    print("K_max (linear):", b["K_max"])
-    print("K_max (from log10):", 10.0 ** b["logK_max"])
+
+    # b = sk["bounds"]
+    # print("K_max (linear):", b["K_max"])
+    # print("K_max (from log10):", 10.0 ** b["logK_max"])
 
     H = int(forecast_horizon)
     
+    mode = str(identify).strip().lower()
+    
+    coords = Xtr["coords"]
+    sx = float(np.nanstd(coords[..., 1]))
+    sy = float(np.nanstd(coords[..., 2]))
+    has_spatial = (sx > 1e-6) or (sy > 1e-6)
+    
+    pde_mode = "consolidation"
+    if mode == "both" and has_spatial:
+        pde_mode = "both"
+
     model = GeoPriorSubsNet(
         static_input_dim=s_dim,
         dynamic_input_dim=d_dim,
@@ -716,12 +914,13 @@ def train_one_pixel(
         # export cons_res_scaled in payloads.
         scale_pde_residuals=False,
 
-        pde_mode="consolidation",
+        pde_mode=pde_mode,
         offset_mode="log10",
+        # and pass lambda_offset=0.0 for multiplier=1
         scaling_kwargs=sk,
     )
-    print("K bounds used:", 10**b["logK_min"], 10**b["logK_max"])
-    print("tau bounds used:", 10**b["logTau_min"], 10**b["logTau_max"])
+    # print("K bounds used:", 10**b["logK_min"], 10**b["logK_max"])
+    # print("tau bounds used:", 10**b["logTau_min"], 10**b["logTau_max"])
 
 
     ds_tr = tf_dataset(
@@ -741,7 +940,38 @@ def train_one_pixel(
 
     for xb, _ in ds_tr.take(1):
         _ = model(xb)
+        
+    def _set_trainable(block, flag: bool) -> None:
+        if block is None:
+            return
+        block.trainable = bool(flag)
+        for l in getattr(block, "layers", []):
+            l.trainable = bool(flag)
 
+    mode = str(identify).strip().lower()
+    
+    if mode == "tau":
+        _set_trainable(model.K_head, False)
+        _set_trainable(model.Ss_head, False)
+        _set_trainable(model.tau_head, True)
+    
+    elif mode == "k":
+        _set_trainable(model.tau_head, False)
+        _set_trainable(model.Ss_head, False)
+        _set_trainable(model.K_head, True)
+    
+    elif mode == "both":
+        _set_trainable(model.K_head, True)
+        _set_trainable(model.Ss_head, True)
+        _set_trainable(model.tau_head, True)
+    
+        if not has_spatial:
+            print(
+                "[warn] identify=both but no spatial "
+                "variation in coords; K cannot be "
+                "identified independently. Using "
+                "consolidation-only constraints."
+            )
 
     QUANTILES = [0.1, 0.5, 0.9]
     SUBS_WEIGHTS = {0.1: 3.0, 0.5: 1.0, 0.9: 3.0}
@@ -775,28 +1005,32 @@ def train_one_pixel(
         ],
     }
 
-    # physics_loss_weights = dict(
-    #     lambda_cons=10.0,
-    #     lambda_gw=0.0,
-    #     lambda_prior=0.3,
-    #     lambda_smooth=0.0,
-    #     lambda_bounds=10.0, #0.1,
-    #     lambda_mv=0.0,
-    #     mv_lr_mult=1.0,
-    #     kappa_lr_mult=0.0,
-    #     lambda_offset=float(lambda_offset),
-    #     lambda_q=1.0,
-    # )
+    lam_cons = 50.0
+    lam_gw = 0.0
+    lam_prior = 3.0
+    
+    if mode == "tau":
+        lam_prior = 0.0
+        lam_gw = 0.0
+    
+    elif mode == "k":
+        lam_prior = 50.0
+        lam_gw = 0.0
+    
+    elif mode == "both":
+        lam_prior = 5.0
+        lam_gw = 50.0 if has_spatial else 0.0
+    
     physics_loss_weights = dict(
-        lambda_cons=50.0,
-        lambda_gw=0.0,
-        lambda_prior=3.0,
+        lambda_cons=lam_cons,
+        lambda_gw=lam_gw,
+        lambda_prior=lam_prior,
         lambda_smooth=0.0,
         lambda_bounds=10.0,
         lambda_mv=0.0,
         mv_lr_mult=1.0,
         kappa_lr_mult=0.0,
-        lambda_offset=max(1.0, float(lambda_offset)),
+        lambda_offset=float(lambda_offset),
         lambda_q=1.0,
     )
 
@@ -968,8 +1202,6 @@ def flatten_diag(diag: Dict[str, Any]) -> Dict[str, float]:
             row[f2] = float(d.get("q95", np.nan))
 
     return row
-
-
 def run_one_realisation(
     *,
     r: int,
@@ -978,8 +1210,15 @@ def run_one_realisation(
     years: np.ndarray,
     outdir: str,
 ) -> Dict[str, Any]:
+    """
+    Run a single synthetic realisation.
+
+    - Single pixel path: original SM3 generator.
+    - 1D multi-pixel path: only when nx>1 OR
+      identify="both" (K needs spatial signal).
+    """
     n_lith = len(priors)
-    
+
     rng = np.random.default_rng(int(args.seed) + int(r))
     run_dir = os.path.join(outdir, f"real_{r:03d}")
     os.makedirs(run_dir, exist_ok=True)
@@ -1006,13 +1245,14 @@ def run_one_realisation(
     denom = (np.pi**2) * float(args.kappa_b) * tau_prior_sec
     K_prior_mps = float(numer / denom)
 
+    mode = str(args.identify).strip().lower()
+
     dlogSs = float(
         rng.normal(0.0, float(args.Ss_spread_dex))
     )
-    Ss_true = float(Ss_prior * (10.0**dlogSs))
-    # --- SM3 identifiability: keep Ss fixed so tau is identifiable ---
-    # dlogSs = 0.0
-    # Ss_true = float(Ss_prior)
+    if mode in ("tau", "k"):
+        dlogSs = 0.0
+    Ss_true = float(Ss_prior * (10.0 ** dlogSs))
 
     logtau_t = float(
         logtau_p
@@ -1026,16 +1266,53 @@ def run_one_realisation(
 
     Hd_true = float(Hd_prior)
 
-    numer_t = (Hd_true**2) * Ss_true
-    denom_t = (np.pi**2) * float(args.kappa_b) * tau_true_sec
-    K_true_mps = float(numer_t / denom_t)
+    if mode == "both":
+        K_spread = float(
+            getattr(args, "K_spread_dex", 0.6)
+        )
+        dlogK = float(rng.normal(0.0, K_spread))
+        K_true_mps = float(
+            K_prior_mps * (10.0 ** dlogK)
+        )
+    else:
+        numer_t = (Hd_true**2) * Ss_true
+        denom_t = (
+            (np.pi**2)
+            * float(args.kappa_b)
+            * tau_true_sec
+        )
+        K_true_mps = float(numer_t / denom_t)
 
     amp = float(rng.uniform(-15.0, -5.0))
     step_hi = max(3, args.n_years // 3)
     step_year = int(rng.integers(2, step_hi))
     ramp_years = max(3, args.n_years // 4)
 
-    dh = build_load(
+    unit_scale = float(args.alpha)
+    alpha_eff = unit_scale * Ss_true * H_eff
+
+    is_capped = float(H_phys > args.thickness_cap)
+
+    z_surf = 0.0
+    static_vec = np.concatenate(
+        [
+            one_hot(lith_idx, n_lith),
+            np.array(
+                [H_eff, is_capped, z_surf],
+                np.float32,
+            ),
+        ],
+        axis=0,
+    ).astype(np.float32)
+
+    z_surf_static_index = int(static_vec.size - 1)
+
+    nx = int(getattr(args, "nx", 1))
+    Lx_m = float(getattr(args, "Lx_m", 1.0))
+    h_right = float(getattr(args, "h_right", 0.0))
+
+    # left boundary head signal (up+)
+    h_left_t = build_load(
         years=years,
         kind=args.load_type,
         step_year=step_year,
@@ -1043,73 +1320,128 @@ def run_one_realisation(
         ramp_years=ramp_years,
     )
 
-    unit_scale = float(args.alpha)
-    alpha_eff = unit_scale * Ss_true * H_eff
+    noise_std = float("nan")
+    nx_eff = 1
 
-    s_cum = settlement_from_tau(
-        years,
-        dh,
-        tau_true_year,
-        alpha=alpha_eff,
-    )
+    if (nx > 1) or (mode == "both"):
+        if nx < 3:
+            raise ValueError(
+                "nx must be >=3 for 1D head solver."
+            )
 
-    y_inc = np.zeros_like(s_cum)
-    y_inc[0] = s_cum[0]
-    y_inc[1:] = s_cum[1:] - s_cum[:-1]
+        x_m, head_xt = solve_head_1d_fd(
+            years=years,
+            h_left=h_left_t,
+            Lx_m=Lx_m,
+            nx=nx,
+            K_mps=K_true_mps,
+            Ss=Ss_true,
+            h_right=h_right,
+        )
 
+        subs_xt = np.zeros_like(head_xt, dtype=float)
+        noise_list: list[float] = []
 
-    # AUTO noise from deterministic increments
-    noise_std = resolve_noise_std(
-        y_inc,
-        noise_std=args.noise_std,
-        noise_frac=getattr(args, "noise_frac", 0.10),
-        percentile=95.0,
-        min_std=0.0,
-    )
+        for p in range(nx):
+            s_cum = settlement_from_tau(
+                years,
+                head_xt[p, :],
+                tau_true_year,
+                alpha=alpha_eff,
+            )
 
-    y_inc = y_inc + rng.normal(
-        0.0,
-        float(noise_std),
-        size=y_inc.shape,
-    )
+            y_inc = np.zeros_like(s_cum)
+            y_inc[0] = s_cum[0]
+            y_inc[1:] = s_cum[1:] - s_cum[:-1]
 
-    s_obs = np.cumsum(y_inc)
+            ns = resolve_noise_std(
+                y_inc,
+                noise_std=args.noise_std,
+                noise_frac=getattr(
+                    args, "noise_frac", 0.10
+                ),
+                percentile=95.0,
+                min_std=0.0,
+            )
+            noise_list.append(float(ns))
 
-    is_capped = float(H_phys > args.thickness_cap)
-    
-    z_surf = 0.0  # constant datum for SM3
-    static_vec = np.concatenate(
-        [
-            one_hot(lith_idx, n_lith),
-            np.array([H_eff, is_capped, z_surf], np.float32),
-        ],
-        axis=0,
-    ).astype(np.float32)
-    
-    z_surf_static_index = int(static_vec.size - 1)  # == n_lith + 2
-    
-    # X, y, t_range_years = make_one_step_windows(
-    #     years=years,
-    #     dh=dh,
-    #     s_cum=s_obs,
-    #     static_vec=static_vec,
-    #     time_steps=args.time_steps,
-    #     H_field_value=H_eff,
-    #     z_surf_static_index=z_surf_static_index,
-    # )
-    
-    X, y, t_range_years = make_windows(
-        years=years,
-        dh=dh,
-        s_cum=s_obs,
-        static_vec=static_vec,
-        time_steps=args.time_steps,
-        forecast_horizon=args.forecast_horizon,
-        H_field_value=H_eff,
-        z_surf_static_index=z_surf_static_index,
-    )
+            y_inc = y_inc + rng.normal(
+                0.0,
+                float(ns),
+                size=y_inc.shape,
+            )
+            subs_xt[p, :] = np.cumsum(y_inc)
 
-    Xtr, ytr, Xva, yva = split_tail(X, y, args.val_tail)
+        if noise_list:
+            noise_std = float(np.mean(noise_list))
+
+        X, y, t_range_years, nx_eff = make_windows_1d_domain(
+            years=years,
+            head_xt=head_xt,
+            subs_xt=subs_xt,
+            x_m=x_m,
+            Lx_m=Lx_m,
+            static_vec=static_vec,
+            time_steps=args.time_steps,
+            forecast_horizon=args.forecast_horizon,
+            H_field_value=H_eff,
+            z_surf_static_index=z_surf_static_index,
+        )
+
+        Xtr, ytr, Xva, yva = split_tail_timeblocks(
+            X,
+            y,
+            val_tail=int(args.val_tail),
+            nx=int(nx_eff),
+        )
+    else:
+        # -----------------------------
+        # Original single-pixel path
+        # -----------------------------
+        dh = h_left_t
+
+        s_cum = settlement_from_tau(
+            years,
+            dh,
+            tau_true_year,
+            alpha=alpha_eff,
+        )
+
+        y_inc = np.zeros_like(s_cum)
+        y_inc[0] = s_cum[0]
+        y_inc[1:] = s_cum[1:] - s_cum[:-1]
+
+        noise_std = resolve_noise_std(
+            y_inc,
+            noise_std=args.noise_std,
+            noise_frac=getattr(args, "noise_frac", 0.10),
+            percentile=95.0,
+            min_std=0.0,
+        )
+
+        y_inc = y_inc + rng.normal(
+            0.0,
+            float(noise_std),
+            size=y_inc.shape,
+        )
+        s_obs = np.cumsum(y_inc)
+
+        X, y, t_range_years = make_windows(
+            years=years,
+            dh=dh,
+            s_cum=s_obs,
+            static_vec=static_vec,
+            time_steps=args.time_steps,
+            forecast_horizon=args.forecast_horizon,
+            H_field_value=H_eff,
+            z_surf_static_index=z_surf_static_index,
+        )
+
+        Xtr, ytr, Xva, yva = split_tail(
+            X,
+            y,
+            args.val_tail,
+        )
 
     model, ds_va = train_one_pixel(
         Xtr,
@@ -1125,15 +1457,14 @@ def run_one_realisation(
         gamma_w=args.gamma_w,
         hd_factor=args.hd_factor,
         t_range_years=float(t_range_years),
-        forecast_horizon=int(args.forecast_horizon),  
+        forecast_horizon=int(args.forecast_horizon),
         n_lith=n_lith,
         z_surf_static_index=z_surf_static_index,
         lambda_offset=float(args.lambda_offset),
+        identify=str(args.identify),
     )
 
-
     npz_path = os.path.join(run_dir, "phys_payload_val.npz")
-
 
     meta = {
         "synthetic": True,
@@ -1157,7 +1488,9 @@ def run_one_realisation(
         "amp_dh": float(amp),
         "step_year": int(step_year),
         "noise_std": float(noise_std),
-        
+        "nx": int(nx_eff),
+        "Lx_m": float(Lx_m),
+        "h_right": float(h_right),
         "payload_time_units": "sec",
         "units": {
             "tau": "s",
@@ -1168,6 +1501,7 @@ def run_one_realisation(
 
     meta["z_surf_m"] = 0.0
     meta["units"]["head"] = "m"
+    meta["identify"] = str(args.identify)
 
     model.export_physics_payload(
         ds_va,
@@ -1179,24 +1513,21 @@ def run_one_realisation(
 
     payload, meta = load_physics_payload(npz_path)
 
-    # Payload is SI by contract:
-    # tau: s, K: m/s, cons_res_vals: m/s
     eff = summarise_effective_params(payload)
-    
+
     tau_est_sec = float(eff["tau"])
     K_est_mps = float(eff["K"])
-    
+
     tau_est_year = tau_est_sec / SEC_PER_YEAR
     K_est_m_per_year = K_est_mps * SEC_PER_YEAR
-    
+
     eps_cons_raw_mps = _rms(payload["cons_res_vals"])
     eps_cons_raw_m_per_year = eps_cons_raw_mps * SEC_PER_YEAR
-    
+
     eps_cons_scaled = float("nan")
     if "cons_res_scaled" in payload:
         eps_cons_scaled = _rms(payload["cons_res_scaled"])
-    
-    # Diagnostics block (must be in SAME units)
+
     diag = identifiability_diagnostics_from_payload(
         payload,
         tau_true=float(meta["tau_true_sec"]),
@@ -1207,9 +1538,8 @@ def run_one_realisation(
         Ss_prior=float(meta["Ss_prior"]),
         Hd_prior=float(meta["Hd_prior"]),
     )
-    
-    # pull payload metrics from meta sidecar
-    pm = (meta.get("payload_metrics") or {})
+
+    pm = meta.get("payload_metrics") or {}
     eps_prior_rms = pm.get("eps_prior_rms", np.nan)
     r2_logtau = pm.get("r2_logtau", np.nan)
     clos_rms = pm.get("closure_consistency_rms", np.nan)
@@ -1225,77 +1555,60 @@ def run_one_realisation(
         np.log10(max(tau_est_sec, 1e-12))
         - np.log10(max(meta["tau_true_sec"], 1e-12))
     )
-    
-    row = {
+
+    row: Dict[str, Any] = {
         "realisation": int(r),
         "lith_idx": int(lith_idx),
-    
         "tau_true_sec": float(meta["tau_true_sec"]),
         "tau_prior_sec": float(meta["tau_prior_sec"]),
-        "tau_est_med_sec": tau_est_sec,
-    
+        "tau_est_med_sec": float(tau_est_sec),
         "tau_true_year": float(meta["tau_true_year"]),
         "tau_prior_year": float(meta["tau_prior_year"]),
-        "tau_est_med_year": tau_est_year,
-    
+        "tau_est_med_year": float(tau_est_year),
         "K_true_mps": float(meta["K_true_mps"]),
         "K_prior_mps": float(meta["K_prior_mps"]),
-        "K_est_med_mps": K_est_mps,
-        "K_est_med_m_per_year": K_est_m_per_year,
-    
+        "K_est_med_mps": float(K_est_mps),
+        "K_est_med_m_per_year": float(K_est_m_per_year),
         "Ss_true": float(meta["Ss_true"]),
         "Ss_prior": float(meta["Ss_prior"]),
         "Ss_est_med": float(eff["Ss"]),
-    
         "Hd_true": float(meta["Hd_true"]),
         "Hd_prior": float(meta["Hd_prior"]),
         "Hd_est_med": float(eff["Hd"]),
-    
-        # PHYSICAL epsilon (report)
         "eps_cons_raw_rms_mps": float(eps_cons_raw_mps),
         "eps_cons_raw_rms_m_per_year": float(
             eps_cons_raw_m_per_year
         ),
-    
-        # TRAINING epsilon (unitless, optional)
         "eps_cons_scaled_rms": float(eps_cons_scaled),
-    
-        # closure diagnostics (dimensionless)
         "eps_prior_rms": float(eps_prior_rms),
         "r2_logtau": float(r2_logtau),
         "closure_consistency_rms": float(clos_rms),
-    
-        "dlog10_tau_med": dlog10_tau_med,
+        "dlog10_tau_med": float(dlog10_tau_med),
         "kappa_b": float(args.kappa_b),
+        "nx": int(nx_eff),
+        "Lx_m": float(Lx_m),
     }
-    
+
+    row["identify"] = str(args.identify)
     row.update(flatten_diag(diag))
-    
-    # ---- add to SM3 row: closure-implied K from tau (m/yr) ----
+
     eps = 1e-12
-    PI2 = np.pi ** 2
-    
+    PI2 = np.pi**2
+
     tau_est = max(float(tau_est_sec), eps)
     kappa = max(float(args.kappa_b), eps)
-    
-    # choose which Ss/Hd you want for closure:
-    # (A) est (recommended if you're plotting k_cl_source="est")
+
     Ss_use = max(float(eff["Ss"]), eps)
     Hd_use = max(float(eff["Hd"]), eps)
-    
-    # (B) prior
-    # Ss_use = max(float(meta["Ss_prior"]), eps)
-    # Hd_use = max(float(meta["Hd_prior"]), eps)
-    
-    # (C) true
-    # Ss_use = max(float(meta["Ss_true"]), eps)
-    # Hd_use = max(float(meta["Hd_true"]), eps)
-    
-    K_cl_mps = (Hd_use ** 2) * Ss_use / (PI2 * kappa * tau_est)
+
+    K_cl_mps = (Hd_use**2) * Ss_use / (PI2 * kappa * tau_est)
     K_cl_m_per_year = K_cl_mps * SEC_PER_YEAR
-    
-    row["K_from_tau_m_per_year"] = float(K_cl_m_per_year)
-    row["log10_K_from_tau_m_per_year"] = float(
+
+    k_k_tau = "K_from_tau_m_per_year"
+    k_logk_tau = "log10_K_from_tau_m_per_year"
+
+    row[k_k_tau] = float(K_cl_m_per_year)
+    row[k_logk_tau] = float(
         np.log10(max(K_cl_m_per_year, eps))
     )
 
@@ -1304,23 +1617,23 @@ def run_one_realisation(
     def _q50(name: str) -> float:
         d = offs.get(name, {})
         return float(d.get("q50", np.nan))
-    
+
     dK = _q50("delta_K")
     dS = _q50("delta_Ss")
     dH = _q50("delta_Hd")
-    
-    row["dlogK_q50"] = dK
-    row["dlogSs_q50"] = dS
-    row["dlogHd_q50"] = dH
-    
+
+    row["dlogK_q50"] = float(dK)
+    row["dlogSs_q50"] = float(dS)
+    row["dlogHd_q50"] = float(dH)
+
     row["ridge_resid_q50"] = float(
         abs(dK - (dS + 2.0 * dH))
     )
-    
+
     done_path = os.path.join(run_dir, "DONE.json")
     with open(done_path, "w", encoding="utf-8") as f:
         json.dump({"realisation": int(r), "done": True}, f)
-        
+
     return row
 
 def run_experiment(args: argparse.Namespace) -> pd.DataFrame:
@@ -1557,7 +1870,45 @@ def main() -> None:
         default=1,
         help="1-based realisation index to start from (resume-safe).",
     )
-    
+    ap.add_argument(
+        "--identify",
+        choices=("tau", "K", "both"),
+        default="tau",
+        help=(
+            "Which parameter(s) to identify. "
+            "tau: learn tau offset only. "
+            "K: learn K via closure (tau offset fixed). "
+            "both: learn tau+K (needs spatial data)."
+        ),
+    )
+    ap.add_argument(
+        "--nx",
+        type=int,
+        default=1,
+        help="Number of x pixels for 1D domain.",
+    )
+    ap.add_argument(
+        "--Lx-m",
+        dest="Lx_m",
+        type=float,
+        default=1_000.0,
+        help="Domain length in meters.",
+    )
+    ap.add_argument(
+        "--h-right",
+        dest="h_right",
+        type=float,
+        default=0.0,
+        help="Right boundary head (meters).",
+    )
+    ap.add_argument(
+        "--K-spread-dex",
+        dest="K_spread_dex",
+        type=float,
+        default=0.6,
+        help="Extra K spread when identify=both.",
+    )
+
     args = ap.parse_args()
 
     ok = args.tau_min > 0.0 and args.tau_max > args.tau_min
@@ -1574,7 +1925,11 @@ def main() -> None:
     )
     if not (0 < int(args.val_tail) < B):
         raise ValueError("--val-tail must be in (0, B).")
-    
+        
+    if str(args.identify).lower() == "both":
+        if int(args.nx) < 3:
+            raise ValueError("--identify both needs --nx >= 3.")
+
     _ = run_experiment(args)
 
 

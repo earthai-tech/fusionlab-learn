@@ -18,9 +18,16 @@ Goals
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Dict, Optional, List
+import numpy as np
+from matplotlib import colormaps
 
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import (
+    QIcon,
+    QImage,
+    QPixmap,
+    qRgb,
+)
 from PyQt5.QtCore import Qt, QSignalBlocker, pyqtSignal
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -99,6 +106,7 @@ from .keys import (
     MAP_VIEW_FILTER_ENABLE,
     MAP_VIEW_FILTER_VMIN,
     MAP_VIEW_FILTER_VMAX,
+    MAP_VIEW_LEGEND_ORIENT,
  
     VIEW_DEFAULTS, 
     VIEW_KEYS, 
@@ -110,6 +118,42 @@ from .keys import (
     K_PROP_LOOP, 
     get_engine,
   )
+
+
+def _try_palette(
+    name: str,
+    n: int = 64,
+) -> Optional[List[List[int]]]:
+
+    nm = str(name or "viridis").strip()
+    try:
+        cm = colormaps.get_cmap(nm)
+    except Exception:
+        cm = colormaps.get_cmap("viridis")
+
+    xs = np.linspace(0.0, 1.0, n)
+    rgb = cm(xs)[:, :3]
+    rgb = (rgb * 255.0).round().astype(int)
+    return rgb.tolist()
+
+def _palette_icon(
+    pal: List[List[int]],
+    w: int = 84,
+    h: int = 12,
+) -> QIcon:
+    img = QImage(w, h, QImage.Format_RGB888)
+    n = max(len(pal), 1)
+
+    for x in range(w):
+        t = x / max(w - 1, 1)
+        i = int(t * (n - 1))
+        r, g, b = pal[i]
+        px = qRgb(r, g, b)
+        for y in range(h):
+            img.setPixel(x, y, px)
+
+    pm = QPixmap.fromImage(img)
+    return QIcon(pm)
 
 class AutoHideViewPanel(AutoHidePanel):
     """
@@ -723,6 +767,15 @@ class AutoHideViewPanel(AutoHidePanel):
             "tl",
         ])
         self.cmb_legpos.setToolTip("Legend position")
+        self.cmb_legori = QComboBox(box)
+        self.cmb_legori.addItems(
+            ["vertical", "horizontal"]
+        )
+        self.cmb_legori.setToolTip(
+            "Colorbar orientation"
+        )
+        
+        form.addRow("Orient", self.cmb_legori)
 
         form.addRow("", self.chk_cbar)
         form.addRow("", self.chk_leg)
@@ -1114,7 +1167,14 @@ class AutoHideViewPanel(AutoHidePanel):
                 "br",
             )),
         )
-        
+        self._set_combo(
+            self.cmb_legori,
+            str(self.store.get(
+                MAP_VIEW_LEGEND_ORIENT,
+                "vertical",
+            )),
+        )
+
         # --- hotspots
         self.chk_hot.setChecked(bool(self.store.get(
             MAP_VIEW_HOTSPOTS_ENABLED, False
@@ -1547,7 +1607,12 @@ class AutoHideViewPanel(AutoHidePanel):
                 MAP_VIEW_LEGEND_POS, str(v)
             )
         )
-
+        self.cmb_legori.currentTextChanged.connect(
+            lambda t: self.store.set(
+                MAP_VIEW_LEGEND_ORIENT,
+                str(t),
+            )
+        )
         self.store.config_changed.connect(
             self._on_store_changed,
         )
@@ -1829,7 +1894,11 @@ class AutoHideViewPanel(AutoHidePanel):
         if any(k in keys for k in ("map.engine", "map.engine.active")):
             self._refresh_basemap_choices() 
             
-        if any(k.startswith("map.view.") for k in keys):
+        if any(
+            k.startswith("map.view.")
+            or k.startswith("map.propagation.")
+            for k in keys
+        ):
             self._sync_from_store()
             
     def _on_reset(self) -> None:

@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QEvent, QPoint
 from PyQt5.QtWidgets import (
     QSplitter,
     QVBoxLayout,
@@ -61,10 +61,13 @@ from .interpretation import (
     policy_brief_md,
 )
 from .keys import ( 
-    _MAP_DEFAULTS,     
+    _MAP_DEFAULTS, 
+    VIEW_DEFAULTS, 
     K_PROP_ENABLED, 
     K_ALERT_TRIGGER,
     K_PROP_VECTORS,
+    K_PROP_VECTOR_COLOR_CUSTOM,
+    K_PROP_VECTOR_COLOR,
     K_ALERT_ENABLED,
     MAP_DATA_SOURCE, 
     MAP_DF_ALL,
@@ -86,6 +89,8 @@ from .keys import (
     MAP_SELECT_IDS,
     MAP_SELECT_OPEN,
     MAP_SELECT_PINNED,
+    MAP_SELECT_ANCHOR_X, 
+    MAP_SELECT_ANCHOR_Y, 
     MAP_SAMPLING_APPLY_HOTSPOTS, 
     MAP_SAMPLING_CELL_KM, 
     MAP_SAMPLING_MAX_PER_CELL, 
@@ -124,6 +129,10 @@ from .keys import (
     MAP_DF_ALL_POINTS,
     MAP_PROP_YEAR,
     MAP_PROP_VECTORS,
+    K_PROP_YEARS,
+    MAP_SELECT_MANUAL, 
+    MAP_SELECT_POS_Y, 
+    MAP_SELECT_POS_X, 
     MAP_GOOGLE_API_KEY,
     map_view_key, 
     
@@ -184,12 +193,19 @@ class MapTab(QWidget):
 
         self._last_hs_payload = []
         self._last_hs_ctx = {}
+
+        # Propagation hotspot tracking (new vs baseline)
+        self._hs_first_seen = {}
+        self._hs_prev_year = None
         self._sim_df = pd.DataFrame() # Store for simulated data
         
         self._sim_time_col = ""
         self._sim_value_col = ""
         self._sim_vmin_global = None
         self._sim_vmax_global = None
+        
+        self._last_sel_pos = None
+        self._last_mouse_pos = None
 
         self._engine_applied = ""
         self._google_key_applied = ""
@@ -204,6 +220,8 @@ class MapTab(QWidget):
         )
         
         self.canvas = ForecastMapView(parent=self)
+        self.canvas.setMouseTracking(True)
+        self.canvas.installEventFilter(self)
         
         self.nav_c = AutoHideViewPanel(
             store=self.store,
@@ -323,6 +341,17 @@ class MapTab(QWidget):
         self.sel_worker.busy_changed.connect(
             self._on_sel_busy
         )
+        
+    def eventFilter(self, obj, ev) -> bool:
+        if obj is getattr(self, "canvas", None):
+            et = ev.type()
+            if et in (QEvent.MouseMove,
+                      QEvent.MouseButtonPress):
+                try:
+                    self._last_mouse_pos = ev.pos()
+                except Exception:
+                    pass
+        return super().eventFilter(obj, ev)
 
     def set_available_columns(self, cols: Sequence[str]) -> None:
         self.head.set_available_columns(cols)
@@ -412,20 +441,12 @@ class MapTab(QWidget):
             self._dock_c.setGeometry(x0, 0, dw, h)
             self._dock_c.raise_()
 
-        # Selection drawer (right overlay)
+        # Selection popover (smart)
         sp = getattr(self, "sel_panel", None)
         if sp is not None and sp.isVisible():
-            pw = 420
-            ph = min(360, max(220, h - 80))
-
-            right_pad = 0
-            if self._dock_c.isVisible():
-                right_pad = self._dock_c.drawer.width()
-
-            x0 = max(0, w - right_pad - pw - 10)
-            y0 = 60
-            sp.setGeometry(x0, y0, pw, ph)
+            self._layout_sel_popover(w=w, h=h)
             sp.raise_()
+
 
         # Bottom dock (Analytics)
         if self.panel_d.isVisible():
@@ -442,37 +463,129 @@ class MapTab(QWidget):
         # Hover tooltab (top-center).
         if getattr(self, "tooltab", None) is not None:
             self.tooltab.relayout(w, h)
-            
-        if sp is not None:
-            if self.sel_panel.isVisible():
-                spw = int(
-                    self.store.get(
-                        "map.select.width",
-                        520,
-                    ) or 520
-                )
-                sph = int(
-                    self.store.get(
-                        "map.select.height",
-                        320,
-                    ) or 320
-                )
-                spw = max(360, min(spw, w - 40))
-                sph = max(240, min(sph, h - 40))
-
-                right_pad = 10
-                if self._dock_c.isVisible():
-                    right_pad += int(
-                        self._dock_c.drawer.width()
-                    )
-
-                x0 = max(10, w - right_pad - spw)
-                y0 = 10
-                self.sel_panel.setGeometry(
-                    x0, y0, spw, sph
-                )
-                self.sel_panel.raise_()
                 
+    def _layout_sel_popover(self, *, w: int, h: int) -> None:
+        sp = self.sel_panel
+    
+        top_pad = 56
+        pad = 12
+    
+        right_pad = 10
+        if self._dock_c.isVisible():
+            right_pad += int(self._dock_c.drawer.width())
+    
+        max_x = max(10, w - right_pad - 10)
+        max_y = max(10, h - 10)
+    
+        sp.adjustSize()
+        hint = sp.sizeHint()
+    
+        spw = max(360, int(hint.width()))
+        sph = max(220, int(hint.height()))
+    
+        spw = min(spw, max_x - 10)
+        sph = min(sph, max_y - top_pad)
+        manual = bool(self.store.get(MAP_SELECT_MANUAL, False))
+    
+        if manual:
+            px = int(self.store.get(MAP_SELECT_POS_X, -1) or -1)
+            py = int(self.store.get(MAP_SELECT_POS_Y, -1) or -1)
+        
+            if px >= 0 and py >= 0:
+                x0 = min(max(10, px), max_x - spw)
+                y0 = min(max(top_pad, py), max_y - sph)
+                sp.setGeometry(int(x0), int(y0), int(spw), int(sph))
+                return
+
+        pin = bool(self.store.get(MAP_SELECT_PINNED, False))
+    
+        ax = int(self.store.get(MAP_SELECT_ANCHOR_X, -1) or -1)
+        ay = int(self.store.get(MAP_SELECT_ANCHOR_Y, -1) or -1)
+    
+        # pinned: keep top-right
+        if pin or ax < 0 or ay < 0:
+            x0 = max(10, max_x - spw)
+            y0 = top_pad
+            sp.setGeometry(int(x0), int(y0), int(spw), int(sph))
+            return
+    
+        cands = [
+            (ax + pad, ay - sph - pad),
+            (ax - spw - pad, ay - sph - pad),
+            (ax + pad, ay + pad),
+            (ax - spw - pad, ay + pad),
+        ]
+    
+        for cx, cy in cands:
+            ok = True
+            if cx < 10 or (cx + spw) > max_x:
+                ok = False
+            if cy < top_pad or (cy + sph) > max_y:
+                ok = False
+            if ok:
+                sp.setGeometry(int(cx), int(cy), int(spw), int(sph))
+                return
+    
+        # fallback: clamp around anchor
+        x0 = min(max(10, ax - spw // 2), max_x - spw)
+        y0 = min(max(top_pad, ay - sph // 2), max_y - sph)
+        sp.setGeometry(int(x0), int(y0), int(spw), int(sph))
+
+                
+    def _layout_selection_popover(
+        self,
+        *,
+        host_w: int,
+        host_h: int,
+        right_pad: int,
+    ) -> None:
+        sp = self.sel_panel
+    
+        top_pad = 60
+        pad = 12
+    
+        max_x = max(10, host_w - right_pad - 10)
+        max_y = max(10, host_h - 10)
+    
+        sp.adjustSize()
+        hint = sp.sizeHint()
+    
+        spw = max(360, int(hint.width()))
+        sph = max(240, int(hint.height()))
+    
+        spw = min(spw, max_x - 10)
+        sph = min(sph, max_y - top_pad)
+    
+        ax = int(self.store.get(MAP_SELECT_ANCHOR_X, -1) or -1)
+        ay = int(self.store.get(MAP_SELECT_ANCHOR_Y, -1) or -1)
+    
+        # default: top-right
+        x0 = max(10, max_x - spw)
+        y0 = top_pad
+    
+        # anchor-aware candidates
+        if ax >= 0 and ay >= 0:
+            cands = [
+                (ax + pad, ay - sph - pad),      # top-right
+                (ax - spw - pad, ay - sph - pad),# top-left
+                (ax + pad, ay + pad),            # bottom-right
+                (ax - spw - pad, ay + pad),      # bottom-left
+            ]
+    
+            for cx, cy in cands:
+                ok = True
+                if cx < 10 or (cx + spw) > max_x:
+                    ok = False
+                if cy < top_pad or (cy + sph) > max_y:
+                    ok = False
+                if ok:
+                    x0, y0 = int(cx), int(cy)
+                    break
+            else:
+                x0 = min(max(10, ax - spw // 2), max_x - spw)
+                y0 = min(max(top_pad, ay - sph // 2), max_y - sph)
+    
+        sp.setGeometry(int(x0), int(y0), int(spw), int(sph))
 
     def _apply_defaults(self) -> None:
         cfg = self.store.cfg
@@ -492,6 +605,13 @@ class MapTab(QWidget):
 
         with self.store.batch():
             for k, v in _MAP_DEFAULTS.items():
+                cur = self.store.get(k, None)
+                if cur is None or cur == "":
+                    self.store.set(k, v)
+                    
+            # IMPORTANT: propagation/view defaults live in store._extra
+            # (e.g. horizon years, loop, vectors, hotspots config).
+            for k, v in VIEW_DEFAULTS.items():
                 cur = self.store.get(k, None)
                 if cur is None or cur == "":
                     self.store.set(k, v)
@@ -621,7 +741,8 @@ class MapTab(QWidget):
         self.prop_panel.frame_changed.connect(
             self._on_sim_frame_changed
         )
-        
+
+
         # Listen to store to show/hide the panel
         self.store.config_changed.connect(
             self._check_prop_visibility
@@ -631,7 +752,8 @@ class MapTab(QWidget):
         )
         self.sel_panel.request_pin.connect(
             lambda _on: self._layout_overlays()
-        )
+        )        
+        self.sel_panel.request_relayout.connect(self._layout_overlays)
         # ---------------------------------------------
         # PATCH: repaint map when controller updates
         # ---------------------------------------------
@@ -655,6 +777,10 @@ class MapTab(QWidget):
     def _on_sel_close(self) -> None:
         with self.store.batch():
             self.store.set(MAP_SELECT_PINNED, False)
+            self.store.set(MAP_SELECT_MANUAL, False)
+            self.store.set(MAP_SELECT_POS_X, -1)
+            self.store.set(MAP_SELECT_POS_Y, -1)
+
         self._set_select_mode("off")
         self._clear_selection()
         if getattr(self, "sel_worker", None) is not None:
@@ -676,12 +802,7 @@ class MapTab(QWidget):
         self.sel_panel.set_result(res)
         self._layout_overlays()
 
-    # def _on_sel_close(self) -> None:
-    #     with self.store.batch():
-    #         self.store.set(MAP_SELECT_OPEN, False)
-    #         self.store.set(MAP_SELECT_PINNED, False)
-    #     self._layout_overlays()
-    
+
     def _on_selection_changed(self, keys) -> None:
         ks = set(keys or [])
         watch = {
@@ -708,6 +829,11 @@ class MapTab(QWidget):
             self.store.get(MAP_SELECT_PINNED, False)
         )
 
+        if (open_ or pin) and ids and (self._last_mouse_pos is not None): 
+            self.store.set(MAP_SELECT_ANCHOR_X, int( self._last_mouse_pos.x()))
+            self.store.set(MAP_SELECT_ANCHOR_Y, int( self._last_mouse_pos.y()))
+
+
         self._layout_overlays()
 
         if mode not in ("point", "group"):
@@ -730,21 +856,35 @@ class MapTab(QWidget):
         df_all = getattr(b, "df_all", None)
         df_frame = getattr(b, "df_frame", None)
 
-        t_col = "t"
-        z_col = "v"
-        if isinstance(df_all, pd.DataFrame) and not df_all.empty:
-            if "t" not in df_all.columns:
-                t_col = str(
-                    self.store.get("map.time_col", "t")
-                )
-            if "v" not in df_all.columns:
-                z_col = str(
-                    self.store.get("map.value_col", "v")
-                )
+        # Prefer currently displayed time/value (sim may override).
+        t_col = str(
+            getattr(self, "_sim_time_col", "") or ""
+        ).strip()
+        if not t_col:
+            t_col = str(
+                self.store.get(MAP_TIME_COL, "")
+            ).strip()
+        if not t_col:
+            t_col = "t"
+
+        z_col = str(
+            getattr(self, "_sim_value_col", "") or ""
+        ).strip()
+        if not z_col:
+            z_col = str(
+                self.store.get(MAP_VALUE_COL, "")
+            ).strip()
+        if not z_col:
+            z_col = str(
+                self.store.get(MAP_Z_COL, "")
+            ).strip()
+        if not z_col:
+            z_col = "v"
 
         p = str(
             self.store.get("map.active_file", "")
         ).strip()
+        
         path = Path(p) if p else None
 
         req = SelectionRequest(
@@ -828,7 +968,10 @@ class MapTab(QWidget):
             self.store.set(MAP_SELECT_IDS, [])
             self.store.set(MAP_SELECT_MODE, "off")
             self.store.set(MAP_SELECT_OPEN, False)
-
+            self.store.set(MAP_SELECT_MANUAL, False)
+            self.store.set(MAP_SELECT_POS_X, -1)
+            self.store.set(MAP_SELECT_POS_Y, -1)
+            
         if getattr(self, "tooltab", None) is None:
             return
         self.tooltab.set_checked("select_point", False)
@@ -928,6 +1071,10 @@ class MapTab(QWidget):
         if K_PROP_ENABLED in keys:
             enabled = bool(self.store.get(K_PROP_ENABLED, False))
             self.prop_panel.setVisible(enabled)
+
+            # Propagation toggle: reset hotspot baseline tracking
+            self._hs_first_seen = {}
+            self._hs_prev_year = None
             # If disabled, restore original data view
             if not enabled:
                 # self._refresh_points() 
@@ -1013,6 +1160,7 @@ class MapTab(QWidget):
         # years already stored by spinbox
         bid = int(self.store.get(MAP_PROP_BUILD_ID, 0) or 0)
         self.store.set(MAP_PROP_BUILD_ID, bid + 1)
+        self.store.set(K_PROP_YEARS, int(years_to_add))
 
     def _check_alerts(self) -> None:
         # 1. Check if enabled
@@ -1976,6 +2124,14 @@ class MapTab(QWidget):
         if MAP_PROP_TIMELINE in ks:
             tl = self.store.get(MAP_PROP_TIMELINE, []) or []
             self.prop_panel.set_timeline(tl)
+
+        if (
+            MAP_PROP_VECTORS in ks
+            or K_PROP_VECTORS in ks
+            or K_PROP_VECTOR_COLOR_CUSTOM in ks
+            or K_PROP_VECTOR_COLOR in ks
+        ):
+            self._refresh_vectors_only()
         
         if MAP_DF_POINTS in ks or MAP_PROP_DF_POINTS in ks:
             self._refresh_points()
@@ -2010,6 +2166,48 @@ class MapTab(QWidget):
             name,
             tooltip=str(path),
         )
+
+    def _prop_vector_color(self) -> str:
+        col = "#d7263d"
+        if not self.store:
+            return col
+        if bool(
+            self.store.get(
+                K_PROP_VECTOR_COLOR_CUSTOM,
+                False,
+            )
+        ):
+            v = str(
+                self.store.get(K_PROP_VECTOR_COLOR, col)
+                or col
+            ).strip()
+            if v:
+                col = v
+        return col
+
+    def _decorate_vectors(self, vec) -> list:
+        out = []
+        col = self._prop_vector_color()
+        for d in list(vec or []):
+            if isinstance(d, dict):
+                dd = dict(d)
+                dd["color"] = col
+                out.append(dd)
+            else:
+                out.append(d)
+        return out
+
+    def _refresh_vectors_only(self) -> None:
+        if not self.store:
+            return
+        if not bool(self.store.get(K_PROP_ENABLED, False)):
+            self.canvas.set_vectors([])
+            return
+        if not bool(self.store.get(K_PROP_VECTORS, True)):
+            self.canvas.set_vectors([])
+            return
+        vec = self.store.get(MAP_PROP_VECTORS, []) or []
+        self.canvas.set_vectors(self._decorate_vectors(vec))
         
     def _refresh_points(self) -> None:
         # ---------------------------------------------
@@ -2040,7 +2238,7 @@ class MapTab(QWidget):
 
         if prop_on and bool(self.store.get(K_PROP_VECTORS, True)):
             vec = self.store.get(MAP_PROP_VECTORS, []) or []
-            self.canvas.set_vectors(vec)
+            self.canvas.set_vectors(self._decorate_vectors(vec))
         else:
             self.canvas.set_vectors([])
 
@@ -2133,16 +2331,19 @@ class MapTab(QWidget):
             self._last_hs_payload = []
             self._last_hs_ctx = {}
         else:
-            df_all = self.store.get(MAP_DF_ALL, None)
+            # Canonical history frame for hotspots (t, lon, lat, v)
+            df_all = self.store.get(
+                MAP_PROP_DF_ALL if prop_on else MAP_DF_ALL_POINTS,
+                None,
+            )
+
             if not isinstance(df_all, pd.DataFrame):
                 df_all = pd.DataFrame()
 
-            t = str(self.store.get(MAP_TIME_COL, "")).strip()
-            x = str(self.store.get(MAP_X_COL, "")).strip()
-            y = str(self.store.get(MAP_Y_COL, "")).strip()
-            vcol = str(self.store.get(MAP_VALUE_COL, "")).strip()
-            if not vcol:
-                vcol = str(self.store.get(MAP_Z_COL, "")).strip()
+            t = "t"
+            x = "lon"
+            y = "lat"
+            vcol = "v"
 
             k = "map.view.hotspots."
 
@@ -2313,6 +2514,56 @@ class MapTab(QWidget):
                 hist,
                 coord_mode="lonlat",
             )
+
+            # Mark hotspots that appear after the baseline year
+            if prop_on:
+                try:
+                    year_now = int(
+                        self.store.get(MAP_PROP_YEAR, 0) or 0
+                    )
+                except Exception:
+                    year_now = 0
+
+                is_first = self._hs_prev_year is None
+
+                # Loop restart detection (e.g., 2027 -> 2020)
+                if (
+                    self._hs_prev_year is not None
+                    and year_now < self._hs_prev_year
+                ):
+                    self._hs_first_seen = {}
+                    is_first = True
+
+                self._hs_prev_year = year_now
+
+                tol_km = float(
+                    self.store.get(
+                        "map.view.hotspots.new_tol_km",
+                        0.25,
+                    )
+                )
+                cell = max(1e-9, tol_km / 111.0)
+                for hh in hs_payload:
+                    try:
+                        lon = float(hh.get("lon"))
+                        lat = float(hh.get("lat"))
+                    except Exception:
+                        continue
+                    key = (
+                        int(round(lon / cell)),
+                        int(round(lat / cell)),
+                    )
+                    first = self._hs_first_seen.get(key)
+                    if first is None:
+                        self._hs_first_seen[key] = year_now
+                        hh["first_year"] = year_now
+                        hh["age"] = 0
+                        hh["is_new"] = False if is_first else True
+                    else:
+                        first_i = int(first)
+                        hh["first_year"] = first_i
+                        hh["age"] = int(year_now - first_i)
+                        hh["is_new"] = False
 
             labels = bool(self.store.get(k + "labels", True))
             if icfg.enabled and icfg.callouts:
