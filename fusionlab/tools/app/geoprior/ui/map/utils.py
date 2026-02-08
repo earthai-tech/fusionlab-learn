@@ -14,9 +14,12 @@ We detect: (v3.0)
     train_<jobid>/
       *_forecast_*_calibrated.csv
       *_forecast_*_future.csv
+      geoprior_eval*_interpretable.json",
+      geoprior_eval*.json",
     tuning/
       run_<jobid>/
         *.csv
+        *.json
     inference/
       run_<jobid>/
         *.csv
@@ -28,6 +31,7 @@ from __future__ import annotations
 
 import re
 import json
+import pandas as pd
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -341,7 +345,7 @@ def load_forecast_meta(
     *,
     colmap: Optional[Dict[str, str]] = None,
 ) -> ForecastMeta:
-    import pandas as pd
+    
 
     p = Path(path)
 

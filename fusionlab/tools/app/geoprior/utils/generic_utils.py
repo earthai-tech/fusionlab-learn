@@ -112,6 +112,8 @@ DEFAULT_UNIT_MAP: Dict[str, str] = {
     "h": "m",
     "z_surf": "m",
     "h_eff": "m",
+    "soil_thickness": "m", 
+    "rainfall": "mm", 
     # Physics defaults (from identifiability units)
     "k": "m/s",
     "ss": "1/m",

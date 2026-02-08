@@ -43,7 +43,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 from .basemap.basemap import resolve_basemap # noqa
-from .engines.leaflet_html import _leaflet_html
+from .engines.leaflet_html import leaflet_html
 from .engines.maplibre_html import maplibre_html
 from .engines.google_html import google_html
 
@@ -302,10 +302,10 @@ class ForecastMapView(QFrame):
 
         if req == "google":
             if not self._google_key:
-                return _leaflet_html(), "leaflet"
+                return leaflet_html(), "leaflet"
             return google_html(self._google_key), "google"
 
-        return _leaflet_html(), "leaflet"
+        return leaflet_html(), "leaflet"
 
     def set_select_mode(self, mode: str) -> None:
         m = str(mode or "off").strip().lower()
@@ -350,7 +350,15 @@ class ForecastMapView(QFrame):
         eng = self._engine_active
     
         if eng == "leaflet":
-            js = "typeof L !== 'undefined'"
+            # js = "typeof L !== 'undefined'"
+            js = (
+                "window.__GeoPriorMap ? {"
+                "ready: !!window.__GeoPriorMap.__ready,"
+                "failed: !!window.__GeoPriorMap.__failed,"
+                "err: window.__GeoPriorMap.__err || ''"
+                "} : null"
+            )
+            
         elif eng == "maplibre":
             js = (
                 "window.__GeoPriorMap ? {"
@@ -374,7 +382,8 @@ class ForecastMapView(QFrame):
         failed = False
         err = ""
     
-        if eng == "maplibre" and isinstance(ok, dict):
+        # if eng == "maplibre" and isinstance(ok, dict):
+        if isinstance(ok, dict):
             is_ok = bool(ok.get("ready"))
             failed = bool(ok.get("failed"))
             err = str(ok.get("err") or "")

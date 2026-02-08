@@ -667,7 +667,7 @@ class DataTab(QWidget):
         self._viz_split.setStretchFactor(0, 1)
         self._viz_split.setStretchFactor(1, 0)
         # self._viz_split.setSizes([650, 250])
-        self._viz_split.setSizes([650, 200])
+        self._viz_split.setSizes([650, 350])
 
         outer.addWidget(self._viz_split, 1)
 
@@ -840,7 +840,7 @@ class DataTab(QWidget):
             return
     
         if checked:
-            self._viz_split.setSizes([650, 250])
+            self._viz_split.setSizes([650, 350])
         else:
             self._viz_split.setSizes([9999, 0])
             

@@ -205,6 +205,22 @@ MAP_VIEW_INTERP_ACTION_INTENSITY = "map.view.interp.action_intensity"
 MAP_VIEW_INTERP_TONE = "map.view.interp.tone"
 MAP_VIEW_INTERP_SUMMARY = "map.view.interp.summary"
 
+# Callout safety / formatting
+MAP_VIEW_INTERP_CALL_STD_MAX = (
+    "map.view.interp.callout.std_max_lines"
+)
+MAP_VIEW_INTERP_CALL_DET_MAX = (
+    "map.view.interp.callout.det_max_lines"
+)
+MAP_VIEW_INTERP_CALL_WRAP_COLS = (
+    "map.view.interp.callout.wrap_cols"
+)
+MAP_VIEW_INTERP_CALL_POPUP = (
+    "map.view.interp.callout.popup"
+)
+# Model-driven interpretation (eval json)
+MAP_VIEW_INTERP_MODEL_ENABLED = "map.view.interp.model.enabled"
+MAP_VIEW_INTERP_MODEL_BLOCKS = "map.view.interp.model.blocks"
 
 # Propagation / Simulation Options
 K_PROP_ENABLED = "map.view.prop.enabled"        # bool
@@ -417,7 +433,15 @@ VIEW_DEFAULTS: Dict[str, object] = {
     MAP_VIEW_INTERP_ACTION_INTENSITY: "balanced",
     MAP_VIEW_INTERP_TONE: "municipal",
     MAP_VIEW_INTERP_SUMMARY: "",
-    
+
+    MAP_VIEW_INTERP_CALL_STD_MAX: 4,
+    MAP_VIEW_INTERP_CALL_DET_MAX: 10,
+    MAP_VIEW_INTERP_CALL_WRAP_COLS: 46,
+    MAP_VIEW_INTERP_CALL_POPUP: True,
+
+    MAP_VIEW_INTERP_MODEL_ENABLED: False,
+    MAP_VIEW_INTERP_MODEL_BLOCKS: [],
+
     # Propagation / Animation
     K_PROP_ENABLED: False,
     K_PROP_YEARS: 5,

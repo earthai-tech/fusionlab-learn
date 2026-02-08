@@ -15,7 +15,7 @@ from PyQt5.QtCore import (
     Qt,
     pyqtSignal,
 )
-from PyQt5.QtGui import QIcon, QColor
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QFrame,
     QGraphicsOpacityEffect,
@@ -104,7 +104,6 @@ class MapToolTab(QWidget):
         self._hide_timer.timeout.connect(self._hide)
 
         self._build_default_tools()
-        self._apply_style()
 
         if self._s is not None:
             self._pinned = bool(
@@ -321,23 +320,6 @@ class MapToolTab(QWidget):
     # -------------------------
     # Hover logic + animation
     # -------------------------
-
-    def _apply_style(self) -> None:
-        c = self.palette().window().color()
-        bg = QColor(c.red(), c.green(), c.blue(), 210)
-        bd = QColor(c.red(), c.green(), c.blue(), 140)
-
-        self.setStyleSheet(
-            "QWidget#mapToolTab{"
-            f"background:{bg.name(QColor.HexArgb)};"
-            f"border:1px solid {bd.name(QColor.HexArgb)};"
-            "border-radius:16px;"
-            "}"
-        )
-        self.hotzone.setStyleSheet(
-            "QWidget#mapToolTabHot{background:rgba(0,0,0,0);}"
-        )
-
     def eventFilter(self, obj, ev) -> bool:
         t = ev.type()
         if obj in (self, self.hotzone):

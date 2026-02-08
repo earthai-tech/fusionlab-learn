@@ -76,9 +76,6 @@ QDialog#gpDockWindow {
   border-radius: 14px;
 }
 
-QDialog#gpDockWindow QWidget {
-  background: transparent;
-}
 /* ===== Analytics (Light) ===== */
 
 QFrame#MapAnalyticsPanel {
@@ -166,9 +163,6 @@ QDialog#gpDockWindow {
   border-radius: 14px;
 }
 
-QDialog#gpDockWindow QWidget {
-  background: transparent;
-}
 /* ===== Analytics (Dark) ===== */
 
 QFrame#MapAnalyticsPanel {
@@ -252,6 +246,92 @@ QFrame#mapHeadGroup QComboBox:disabled::drop-down {
   background: rgba(255, 255, 255, 0.05);
 }
 """
+
+MAP_TOOLTAB_LIGHT = """
+/* ===== Map tooltab (Light) ===== */
+
+QWidget#mapToolTab {
+  background: rgba(255,255,255,0.88);
+  border: 1px solid rgba(46,49,145,0.22);
+  border-radius: 16px;
+}
+
+QWidget#mapToolTab:hover {
+  background: rgba(255,255,255,0.94);
+  border-color: rgba(51,153,255,0.38);
+}
+
+QWidget#mapToolTabHot {
+  background: transparent;
+}
+
+/* Make each icon sit on a subtle chip */
+QWidget#mapToolTab QToolButton#miniAction {
+  background: rgba(255,255,255,0.22);
+  border: 1px solid rgba(0,0,0,0.10);
+  border-radius: 10px;
+}
+
+QWidget#mapToolTab QToolButton#miniAction:hover {
+  background: rgba(0,0,0,0.06);
+}
+
+QWidget#mapToolTab QToolButton#miniAction:checked {
+  background: rgba(51,153,255,0.18);
+  border-color: rgba(51,153,255,0.34);
+}
+
+/* Vertical separators */
+QWidget#mapToolTab QFrame {
+  border: none;
+  background: rgba(0,0,0,0.18);
+  min-width: 1px;
+  max-width: 1px;
+  margin: 4px 6px;
+}
+"""
+MAP_TOOLTAB_DARK = """
+/* ===== Map tooltab (Dark) ===== */
+
+QWidget#mapToolTab {
+  background: rgba(2,6,23,0.70);
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 16px;
+}
+
+QWidget#mapToolTab:hover {
+  background: rgba(2,6,23,0.78);
+  border-color: rgba(51,153,255,0.28);
+}
+
+QWidget#mapToolTabHot {
+  background: transparent;
+}
+
+QWidget#mapToolTab QToolButton#miniAction {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 10px;
+}
+
+QWidget#mapToolTab QToolButton#miniAction:hover {
+  background: rgba(255,255,255,0.10);
+}
+
+QWidget#mapToolTab QToolButton#miniAction:checked {
+  background: rgba(51,153,255,0.18);
+  border-color: rgba(51,153,255,0.26);
+}
+
+QWidget#mapToolTab QFrame {
+  border: none;
+  background: rgba(255,255,255,0.16);
+  min-width: 1px;
+  max-width: 1px;
+  margin: 4px 6px;
+}
+"""
+
 MAP_SELECTION_LIGHT = """
 /* ===== Selection drawer (Light) ===== */
 
@@ -387,6 +467,8 @@ QWidget#gpSelDragBar:hover {
   background: rgba(255,255,255,0.06);  /* dark hover */
 }
 """
+MAP_DOCK_LIGHT += MAP_TOOLTAB_LIGHT
+MAP_DOCK_DARK  += MAP_TOOLTAB_DARK
 
 MAP_DOCK_LIGHT += MAP_SELECTION_LIGHT
 MAP_DOCK_DARK  += MAP_SELECTION_DARK

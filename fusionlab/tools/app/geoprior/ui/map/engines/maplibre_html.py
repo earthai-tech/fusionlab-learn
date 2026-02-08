@@ -75,41 +75,121 @@ def maplibre_html() -> str:
         "    pointer-events: none;",
         "    transform-origin: 50% 50%;",
         "  }",
+        "  /* Hotspot interpretation labels */",
+        "  .gp-hot-label {",
+        "    background: rgba(20,20,20,0.78);",
+        "    color: #fff;",
+        "    padding: 6px 8px;",
+        "    border-radius: 10px;",
+        "    font-family: sans-serif;",
+        "    font-size: 12px;",
+        "    max-width: 260px;",
+        "    line-height: 1.15;",
+        "    box-shadow: 0 6px 18px rgba(0,0,0,0.25);",
+        "    pointer-events: none;",
+        "    border: 1px solid rgba(255,255,255,0.12);",
+        "  }",
+        "  .gp-hot-label .t { font-weight: 700; margin-bottom: 2px; }",
+        "  .gp-hot-label .b { opacity: 0.92; }",
+        "  .gp-hot-label.critical { background: rgba(215,38,61,0.88); }",
+        "  .gp-hot-label.high { background: rgba(241,143,1,0.88); }",
+        "  .gp-hot-label.medium { background: rgba(63,136,197,0.88); }",
+        "  .gp-hot-label.low { background: rgba(108,117,125,0.82); }",
+        "  .gp-hot-popup .maplibregl-popup-content {",
+        "    padding: 0;",
+        "    background: transparent;",
+        "    box-shadow: none;",
+        "  }",
+        "  .gp-hot-popup .maplibregl-popup-tip { display: none; }",
         "</style>",
         "</head>",
         "<body>",
         '<div id="map"></div>',
         "<script>",
         "(function () {",
-        "  // Define API first (safe if engine fails)",
+        "  // Cache for reload safety (define BEFORE API)",
+        "  let lastPoints = [];",
+        "  let lastPointOpts = {};",
+        "  let lastMainKind = 'points';",
+        "  let lastHotspots = [];",
+        "  let lastHotOpts = {};",
+        "  let lastLegend = null;",
+        "  let lastBasemap = { p: 'osm', s: 'light', o: 1.0 };",
+        "  let lastSelectMode = 'off';",
+        "  let lastVectors = [];",
+        "  let lastVecOpts = {};",
+        "",
+        "  // Define API first (contract is ready immediately)",
         "  window.__GeoPriorMap = {",
         "    __engine: 'maplibre',",
-        "    __ready: false,",
+        "    __ready: true,",
+        "    __loaded: false,",
         "    __failed: false,",
         "    __err: '',",
         "    __debug: function () {",
         "      return {",
         "        engine: String(this.__engine || ''),",
         "        ready: !!this.__ready,",
+        "        loaded: !!this.__loaded,",
         "        failed: !!this.__failed,",
         "        err: String(this.__err || ''),",
         "      };",
         "    },",
-        "    setPoints: function(){},",
-        "    setHexbin: function(){},",
-        "    setContours: function(){},",
-        "    clearPoints: function(){},",
-        "    fitPoints: function(){},",
-        "    fitBounds: function(){},",
-        "    zoomIn: function(){},",
-        "    zoomOut: function(){},",
-        "    setLegend: function(){},",
-        "    setBasemap: function(){},",
-        "    setHotspots: function(){},",
-        "    clearHotspots: function(){},",
-        "    showHotspots: function(){},",
-        "    setVectors: function(){},",
-        "    setSelectMode: function(){}",
+        "    setPoints: function (p, o) {",
+        "      lastMainKind = 'points';",
+        "      lastPoints = p || [];",
+        "      lastPointOpts = o || {};",
+        "    },",
+        "    setHexbin: function (p, o) {",
+        "      lastMainKind = 'hexbin_source';",
+        "      lastPoints = p || [];",
+        "      lastPointOpts = o || {};",
+        "    },",
+        "    setContours: function (p, o) {",
+        "      lastMainKind = 'contour_source';",
+        "      lastPoints = p || [];",
+        "      lastPointOpts = o || {};",
+        "    },",
+        "    clearPoints: function () {",
+        "      lastPoints = [];",
+        "      lastPointOpts = {};",
+        "      lastMainKind = 'points';",
+        "    },",
+        "    fitPoints: function () {},",
+        "    zoomIn: function () {},",
+        "    zoomOut: function () {},",
+        "    setLegend: function (vmin, vmax, label, cmap, inv) {",
+        "      lastLegend = {",
+        "        vmin: Number(vmin),",
+        "        vmax: Number(vmax),",
+        "        label: String(label || 'Z'),",
+        "        cmap: String(cmap || 'viridis'),",
+        "        inv: !!inv,",
+        "      };",
+        "    },",
+        "    setBasemap: function (provider, style, opacity) {",
+        "      lastBasemap = {",
+        "        p: String(provider || 'osm'),",
+        "        s: String(style || 'light'),",
+        "        o: (opacity != null) ? Number(opacity) : 1.0,",
+        "      };",
+        "    },",
+        "    setHotspots: function (hs, o) {",
+        "      lastHotspots = hs || [];",
+        "      lastHotOpts = o || {};",
+        "    },",
+        "    clearHotspots: function () {",
+        "      lastHotspots = [];",
+        "      lastHotOpts = {};",
+        "    },",
+        "    showHotspots: function () {},",
+        "    setVectors: function (v, o) {",
+        "      lastVectors = v || [];",
+        "      lastVecOpts = o || {};",
+        "    },",
+        "    setSelectMode: function (m) {",
+        "      lastSelectMode = String(m || 'off');",
+        "    },",
         "  };",
         "",
         "  if (typeof maplibregl === 'undefined') {",
@@ -176,21 +256,10 @@ def maplibre_html() -> str:
         "    );",
         "  }",
         "",
-        "  // Cache for reload safety",
-        "  let lastPoints = [];",
-        "  let lastPointOpts = {};",
-        "  let lastMainKind = 'points';",
-        "  let lastHotspots = [];",
-        "  let lastHotOpts = {};",
-        "  let lastVectors = [];",
-        "  let lastVecOpts = {};",
-        "  let _vecMarkers = [];",
-        "  let lastLegend = null;",
-        "",
         "  // Map + layers",
         "  let _gpLoaded = false;",
-        "  let lastBasemap = { p: 'osm', s: 'light', o: 1.0 };",
-        "",        "  const GP_EMPTY_STYLE = {",
+        "",        
+        "  const GP_EMPTY_STYLE = {",
         "    version: 8,",
         "    sources: {},",
         "    layers: [",
@@ -220,11 +289,11 @@ def maplibre_html() -> str:
         "  }",
         "",
         "  map.on('error', function (e) {",
-        "    window.__GeoPriorMap.__failed = true;",
+        "    // Non-fatal errors (tiles/styles) can trigger here; don't kill engine",
         "    if (e && e.error) {",
         "      window.__GeoPriorMap.__err = String(e.error);",
         "    } else {",
-        "      window.__GeoPriorMap.__err = String(e);",
+        "      window.__GeoPriorMap.__err = String(e || '');",
         "    }",
         "  });",
         "",
@@ -257,7 +326,8 @@ def maplibre_html() -> str:
         "      try { map.removeSource('gp_basemap'); } catch (e) {}",
         "    }",
         "  }",
-        "",        "  function _basemapBeforeId() {",
+        "",        
+        "  function _basemapBeforeId() {",
         "    const ids = [",
         "      'gp_points_layer',",
         "      'gp_hex_fill',",
@@ -387,7 +457,8 @@ def maplibre_html() -> str:
         "",
         "    return { kind: 'raster', tiles: tiles, att: att };",
         "  }",
-        "",        "  function setBasemap(provider, style, opacity) {",
+        "", 
+        "  function setBasemap(provider, style, opacity) {",
         "    lastBasemap = {",
         "      p: String(provider || 'osm'),",
         "      s: String(style || 'light'),",
@@ -439,292 +510,505 @@ def maplibre_html() -> str:
         "    }",
         "  }",
         "",
-        "  // Hotspots layers",
-        "  let hotOn = true;",
-        "  let hotTimer = null;",
-        "",
-        "  function _stopHotTimer() {",
-        "    if (hotTimer != null) {",
-        "      try { clearInterval(hotTimer); } catch (e) {}",
-        "    }",
-        "    hotTimer = null;",
-        "  }",
-        "",
-        "  function _ensureHotLayers() {",
-        "    if (!map.getSource('gp_hot_core')) {",
-        "      map.addSource('gp_hot_core', {",
-        "        type: 'geojson',",
-        "        data: { type: 'FeatureCollection', features: [] }",
-        "      });",
-        "    }",
-        "    if (!map.getSource('gp_hot_ring')) {",
-        "      map.addSource('gp_hot_ring', {",
-        "        type: 'geojson',",
-        "        data: { type: 'FeatureCollection', features: [] }",
-        "      });",
-        "    }",
-        "    if (!map.getLayer('gp_hot_ring_layer')) {",
-        "      map.addLayer({",
-        "        id: 'gp_hot_ring_layer',",
-        "        type: 'circle',",
-        "        source: 'gp_hot_ring',",
-        "        paint: {",
-        "          'circle-radius': ['get', 'r'],",
-        "          'circle-color': ['get', 'col'],",
-        "          'circle-opacity': 0.0,",
-        "          'circle-stroke-color': ['get', 'col'],",
-        "          'circle-stroke-opacity': ['get', 'a'],",
-        "          'circle-stroke-width': ['case',",
-        "            ['==', ['get', 'is_new'], 1],",
-        "            3,",
-        "            2",
-        "          ]",
-        "        }",
-        "      });",
-        "    }",
-        "    if (!map.getLayer('gp_hot_core_layer')) {",
-        "      map.addLayer({",
-        "        id: 'gp_hot_core_layer',",
-        "        type: 'circle',",
-        "        source: 'gp_hot_core',",
-        "        paint: {",
-        "          'circle-radius': ['case',",
-        "            ['==', ['get', 'is_new'], 1],",
-        "            7,",
-        "            5",
-        "          ],",
-        "          'circle-color': ['get', 'col'],",
-        "          'circle-opacity': 0.95,",
-        "          'circle-stroke-color': ['get', 'col'],",
-        "          'circle-stroke-width': 1",
-        "        }",
-        "      });",
-        "",
-        "      map.on('click', 'gp_hot_core_layer', function (e) {",
-        "        try {",
-        "          const f = e.features && e.features[0];",
-        "          if (!f) return;",
-        "          const g = f.geometry;",
-        "          if (!g || g.type !== 'Point') return;",
-        "          const c = g.coordinates || [];",
-        "          const props = f.properties || {};",
-        "          const sid = props.sid;",
-        "          if (sid != null && isFinite(sid)) {",
-        "            _emitPointClickedId(Number(sid));",
-        "          } else {",
-        "            _emitPointClicked(Number(c[0]), Number(c[1]));",
-        "          }",
-        "        } catch (err) {}",
-        "      });",
-        "    }",
-        "  }",
-        "",
-        "  function showHotspots(on) {",
-        "    hotOn = !!on;",
-        "    const v = hotOn ? 'visible' : 'none';",
-        "    if (map.getLayer('gp_hot_core_layer')) {",
-        "      map.setLayoutProperty('gp_hot_core_layer',",
-        "        'visibility', v);",
-        "    }",
-        "    if (map.getLayer('gp_hot_ring_layer')) {",
-        "      map.setLayoutProperty('gp_hot_ring_layer',",
-        "        'visibility', v);",
-        "    }",
-        "  }",
-        "",
-        "  function _clearHotSources() {",
-        "    _stopHotTimer();",
-        "    try {",
-        "      const s1 = map.getSource('gp_hot_core');",
-        "      if (s1) s1.setData({",
-        "        type: 'FeatureCollection', features: []",
-        "      });",
-        "    } catch (e) {}",
-        "    try {",
-        "      const s2 = map.getSource('gp_hot_ring');",
-        "      if (s2) s2.setData({",
-        "        type: 'FeatureCollection', features: []",
-        "      });",
-        "    } catch (e) {}",
-        "  }",
-        "",
-        "  function clearHotspots() {",
-        "    lastHotspots = [];",
-        "    lastHotOpts = {};",
-        "    _clearHotSources();",
-        "  }",
-        "",
-        "",
-        "  function _kmToPx(km, lat) {",
-        "    const z = map.getZoom();",
-        "    const c = Math.cos((lat * Math.PI) / 180.0);",
-        "    const mpp = (156543.03392 * c) / Math.pow(2, z);",
-        "    const m = Number(km) * 1000.0;",
-        "    if (!isFinite(mpp) || mpp <= 0) return 24;",
-        "    const px = m / mpp;",
-        "    return Math.max(6, Math.min(220, px));",
-        "  }",
-        "",
-        "  function _sevColor(sev) {",
-        "    const s = (sev || 'high').toLowerCase();",
-        "    if (s === 'critical') return '#d7263d';",
-        "    if (s === 'high') return '#f18f01';",
-        "    if (s === 'medium') return '#3f88c5';",
-        "    return '#6c757d';",
-        "  }",
-        "",
-                "  function _pulseRings(rings, speed) {",
-        "    _stopHotTimer();",
-        "    let sp = Number(speed);",
-        "    if (!isFinite(sp) || sp <= 0) sp = 1.0;",
-        "    let dt = 80 / sp;",
-        "    dt = Math.max(25, Math.min(200, dt));",
-        "",
-        "    hotTimer = setInterval(function () {",
-        "      for (let i = 0; i < rings.length; i++) {",
-        "        const r = rings[i];",
-        "        const isNew = (r.is_new === 1 || r.is_new === true);",
-        "        const k = isNew ? 0.10 : 0.06;",
-        "        const da = isNew ? 0.03 : 0.04;",
-        "        const a0 = isNew ? 0.95 : 0.9;",
-        "",
-        "        r.r += (r.r0 * k);",
-        "        r.a -= da;",
-        "        if (r.a <= 0.05) {",
-        "          r.r = r.r0;",
-        "          r.a = a0;",
-        "        }",
-        "      }",
-        "",
-        "      // push update",
-        "      const feats = [];",
-        "      for (let i = 0; i < rings.length; i++) {",
-        "        const rr = rings[i];",
-        "        feats.push({",
-        "          type: 'Feature',",
-        "          geometry: rr.g,",
-        "          properties: {",
-        "            col: rr.col,",
-        "            r: rr.r,",
-        "            a: rr.a,",
-        "            is_new: rr.is_new ? 1 : 0",
-        "          }",
-        "        });",
-        "      }",
-        "      try {",
-        "        const s2 = map.getSource('gp_hot_ring');",
-        "        if (s2) s2.setData({",
-        "          type: 'FeatureCollection',",
-        "          features: feats",
-        "        });",
-        "      } catch (e) {}",
-        "    }, dt);",
-        "  }",
-        "",
-"  function setHotspots(hs, opts) {",
-        "    const h = hs || [];",
-        "    const o = opts || {};",
-        "    lastHotspots = h;",
-        "    lastHotOpts = o;",
-        "",
-        "    _clearHotSources();",
-        "    if (!_gpLoaded) return;",
-        "",
-        "    const want = (o.show != null) ? !!o.show : true;",
-        "    showHotspots(want);",
-        "",
-        "    const style = String(o.style || 'pulse').toLowerCase();",
-        "    const pulse = (o.pulse != null) ? !!o.pulse : true;",
-        "",
-        "    let baseKm = Number(o.ringKm);",
-        "    if (!isFinite(baseKm) || baseKm <= 0) baseKm = 0.8;",
-        "",
-        "    let sp = Number(o.pulseSpeed);",
-        "    if (!isFinite(sp) || sp <= 0) sp = 1.0;",
-        "",
-        "    function _sevMul(sev) {",
-        "      const s = (sev || 'high').toLowerCase();",
-        "      if (s === 'critical') return 1.6;",
-        "      if (s === 'high') return 1.25;",
-        "      if (s === 'medium') return 1.0;",
-        "      return 0.8;",
-        "    }",
-        "",
-        "    const coreFeats = [];",
-        "    const ringFeats = [];",
-        "    const rings = [];",
-        "",
-        "    for (let i = 0; i < h.length; i++) {",
-        "      const pt = h[i] || {};",
-        "      const lat = pt.lat;",
-        "      const lon = pt.lon;",
-        "      if (!isFinite(lat) || !isFinite(lon)) continue;",
-        "",
-        "      const sid = (pt.sid != null && isFinite(pt.sid)) ? Number(pt.sid) : null;",
-        "      const sev = pt.sev || 'high';",
-        "      const col = _sevColor(sev);",
-        "      const isNew = !!pt.is_new;",
-        "      const mul = _sevMul(sev) * (isNew ? 1.15 : 1.0);",
-        "",
-        "      coreFeats.push({",
-        "        type: 'Feature',",
-        "        geometry: { type: 'Point', coordinates: [lon, lat] },",
-        "        properties: { col: col, sid: sid, is_new: isNew ? 1 : 0 }",
-        "      });",
-        "",
-        "      const r0m = (baseKm * 1000.0 * mul);",
-        "      if (style === 'glow') {",
-        "        ringFeats.push({",
-        "          type: 'Feature',",
-        "          geometry: { type: 'Point', coordinates: [lon, lat] },",
-        "          properties: { r: r0m, a: isNew ? 0.75 : 0.55, col: col, is_new: isNew ? 1 : 0 }",
-        "        });",
-        "        continue;",
-        "      }",
-        "",
-        "      rings.push({",
-        "        g: { type: 'Point', coordinates: [lon, lat] },",
-        "        r0: r0m,",
-        "        r: r0m,",
-        "        a: 0.9,",
-        "        col: col,",
-        "        is_new: isNew ? 1 : 0",
-        "      });",
-        "    }",
-        "",
-        "    // commit sources",
-        "    try {",
-        "      const s1 = map.getSource('gp_hot_core');",
-        "      if (s1) s1.setData({",
-        "        type: 'FeatureCollection',",
-        "        features: coreFeats",
-        "      });",
-        "    } catch (e) {}",
-        "",
-        "    if (style !== 'glow') {",
-        "      for (let i = 0; i < rings.length; i++) {",
-        "        const r = rings[i];",
-        "        ringFeats.push({",
-        "          type: 'Feature',",
-        "          geometry: r.g,",
-        "          properties: { r: r.r, a: r.a, col: r.col, is_new: r.is_new }",
-        "        });",
-        "      }",
-        "    }",
-        "",
-        "    try {",
-        "      const s2 = map.getSource('gp_hot_ring');",
-        "      if (s2) s2.setData({",
-        "        type: 'FeatureCollection',",
-        "        features: ringFeats",
-        "      });",
-        "    } catch (e) {}",
-        "",
-        "    if (style !== 'glow' && pulse) {",
-        "      _pulseRings(rings, sp);",
-        "    }",
-        "  }",
-        "",
+
+
+
+                r"""
+          // Hotspots layers (core + ring + hover interpretation)
+          // Fix: circle-radius is PIXELS in MapLibre, so we convert km->px per zoom.
+          let hotOn = true;
+          let hotTimer = null;
+
+          // Stateful ring objects for pulse & zoom scaling
+          // { g, lat, km0, r0, r, a, col, is_new }
+          let hotRings = [];
+
+          // Hover interpretation popup
+          let hotTextOn = true;
+          let hotTextMinZoom = 6.0;
+          let hotHoverInstalled = false;
+          let hotPopup = null;
+
+          function _stopHotTimer() {
+            if (hotTimer != null) {
+              try { clearInterval(hotTimer); } catch (e) {}
+            }
+            hotTimer = null;
+          }
+
+          function _esc(s) {
+            const t = String(s == null ? "" : s);
+            return t
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/"/g, "&quot;")
+              .replace(/'/g, "&#39;");
+          }
+
+          function _sevColor(sev) {
+            const s = (sev || "high").toLowerCase();
+            if (s === "critical") return "#d7263d";
+            if (s === "high") return "#f18f01";
+            if (s === "medium") return "#3f88c5";
+            return "#6c757d";
+          }
+
+          function _sevClass(sev) {
+            const s = (sev || "high").toLowerCase();
+            if (s === "critical") return "critical";
+            if (s === "high") return "high";
+            if (s === "medium") return "medium";
+            return "low";
+          }
+
+          function _kmToPx(km, lat) {
+            const z = map.getZoom();
+            const c = Math.cos((Number(lat) * Math.PI) / 180.0);
+            const mpp = (156543.03392 * c) / Math.pow(2, z);
+            const m = Number(km) * 1000.0;
+            if (!isFinite(mpp) || mpp <= 0) return 24;
+            const px = m / mpp;
+            // clamp for usability (avoid gigantic rings)
+            return Math.max(6, Math.min(220, px));
+          }
+
+          function _hotPopupRemove() {
+            if (hotPopup) {
+              try { hotPopup.remove(); } catch (e) {}
+            }
+            hotPopup = null;
+          }
+
+          function _hotCursorRestore() {
+            try {
+              const cv = map.getCanvas();
+              if (!cv) return;
+              if (selectMode === "group") cv.style.cursor = "crosshair";
+              else if (selectMode === "point") cv.style.cursor = "pointer";
+              else cv.style.cursor = "";
+            } catch (e) {}
+          }
+
+          function _hotHtmlFromProps(props) {
+            const sev = String((props && props.sev) || "high");
+            const cls = _sevClass(sev);
+
+            const title = String((props && props.ttl) || "").trim();
+            const body = String((props && props.body) || "").trim();
+
+            if (!title && !body) return "";
+
+            let html = '<div class="gp-hot-label ' + cls + '">';
+            if (title) {
+              html += '<div class="t">' + _esc(title) + "</div>";
+            }
+            if (body) {
+              html += (
+                '<div class="b" style="white-space:pre-line;">' +
+                _esc(body) +
+                "</div>"
+              );
+            }
+            html += "</div>";
+            return html;
+          }
+
+          function _installHotHover() {
+            if (hotHoverInstalled) return;
+            hotHoverInstalled = true;
+
+            map.on("mousemove", "gp_hot_core_layer", function (e) {
+              try {
+                if (!hotOn || !hotTextOn) {
+                  _hotPopupRemove();
+                  return;
+                }
+                if (map.getZoom() < hotTextMinZoom) {
+                  _hotPopupRemove();
+                  return;
+                }
+
+                const f = e.features && e.features[0];
+                if (!f) {
+                  _hotPopupRemove();
+                  return;
+                }
+
+                const props = f.properties || {};
+                const html = _hotHtmlFromProps(props);
+                if (!html) {
+                  _hotPopupRemove();
+                  return;
+                }
+
+                // Cursor: do not override group mode crosshair
+                try {
+                  const cv = map.getCanvas();
+                  if (cv && selectMode !== "group") {
+                    cv.style.cursor = "pointer";
+                  }
+                } catch (e2) {}
+
+                const g = f.geometry || null;
+                const c = (g && g.coordinates) ? g.coordinates : null;
+                const ll = c ? c : [e.lngLat.lng, e.lngLat.lat];
+
+                if (!hotPopup) {
+                  hotPopup = new maplibregl.Popup({
+                    closeButton: false,
+                    closeOnClick: false,
+                    className: "gp-hot-popup",
+                    offset: [0, -12]
+                  });
+                }
+
+                hotPopup.setLngLat(ll).setHTML(html).addTo(map);
+              } catch (err) {}
+            });
+
+            map.on("mouseleave", "gp_hot_core_layer", function () {
+              _hotPopupRemove();
+              _hotCursorRestore();
+            });
+          }
+
+          function _ensureHotLayers() {
+            if (!map.getSource("gp_hot_core")) {
+              map.addSource("gp_hot_core", {
+                type: "geojson",
+                data: { type: "FeatureCollection", features: [] }
+              });
+            }
+            if (!map.getSource("gp_hot_ring")) {
+              map.addSource("gp_hot_ring", {
+                type: "geojson",
+                data: { type: "FeatureCollection", features: [] }
+              });
+            }
+
+            if (!map.getLayer("gp_hot_ring_layer")) {
+              map.addLayer({
+                id: "gp_hot_ring_layer",
+                type: "circle",
+                source: "gp_hot_ring",
+                paint: {
+                  "circle-radius": ["get", "r"],            // <-- r is px now
+                  "circle-color": ["get", "col"],
+                  "circle-opacity": 0.0,
+                  "circle-stroke-color": ["get", "col"],
+                  "circle-stroke-opacity": ["get", "a"],
+                  "circle-stroke-width": ["case",
+                    ["==", ["get", "is_new"], 1], 3, 2
+                  ]
+                }
+              });
+            }
+
+            if (!map.getLayer("gp_hot_core_layer")) {
+              map.addLayer({
+                id: "gp_hot_core_layer",
+                type: "circle",
+                source: "gp_hot_core",
+                paint: {
+                  "circle-radius": ["case",
+                    ["==", ["get", "is_new"], 1], 7, 5
+                  ],
+                  "circle-color": ["get", "col"],
+                  "circle-opacity": 0.95,
+                  "circle-stroke-color": ["get", "col"],
+                  "circle-stroke-width": 1
+                }
+              });
+
+              map.on("click", "gp_hot_core_layer", function (e) {
+                try {
+                  const f = e.features && e.features[0];
+                  if (!f) return;
+                  const g = f.geometry;
+                  if (!g || g.type !== "Point") return;
+                  const c = g.coordinates || [];
+                  const props = f.properties || {};
+                  const sid = props.sid;
+                  if (sid != null && isFinite(sid)) {
+                    _emitPointClickedId(Number(sid));
+                  } else {
+                    _emitPointClicked(Number(c[0]), Number(c[1]));
+                  }
+                } catch (err) {}
+              });
+
+              // Hover interpretation (Leaflet-like tooltip)
+              try { _installHotHover(); } catch (e) {}
+            }
+          }
+
+          function showHotspots(on) {
+            hotOn = !!on;
+            const vis = hotOn ? "visible" : "none";
+            try {
+              if (map && map.getLayer && map.getLayer("gp_hot_core_layer")) {
+                map.setLayoutProperty("gp_hot_core_layer", "visibility", vis);
+              }
+              if (map && map.getLayer && map.getLayer("gp_hot_ring_layer")) {
+                map.setLayoutProperty("gp_hot_ring_layer", "visibility", vis);
+              }
+            } catch (e) {}
+
+            // Keep pulse in sync with visibility
+            if (!hotOn) {
+              _stopHotTimer();
+              _hotPopupRemove();
+            } else {
+              const o = lastHotOpts || {};
+              const pulseOn = (o.pulse != null) ? !!o.pulse : false;
+              const sp = (o.pulseSpeed != null) ? Number(o.pulseSpeed) : 1.0;
+              if (pulseOn) _startPulse(sp);
+              else _stopHotTimer();
+            }
+          }
+
+          function _clearHotSources() {
+            _stopHotTimer();
+            _hotPopupRemove();
+            hotRings = [];
+
+            try {
+              const s1 = map.getSource("gp_hot_core");
+              if (s1) s1.setData({ type: "FeatureCollection", features: [] });
+            } catch (e) {}
+            try {
+              const s2 = map.getSource("gp_hot_ring");
+              if (s2) s2.setData({ type: "FeatureCollection", features: [] });
+            } catch (e) {}
+          }
+
+          function clearHotspots() {
+            lastHotspots = [];
+            lastHotOpts = {};
+            _clearHotSources();
+          }
+
+          function _pushHotRings() {
+            const ringFeats = [];
+            for (let i = 0; i < hotRings.length; i++) {
+              const rr = hotRings[i];
+              ringFeats.push({
+                type: "Feature",
+                geometry: rr.g,
+                properties: {
+                  col: rr.col,
+                  r: rr.r,
+                  a: rr.a,
+                  is_new: rr.is_new ? 1 : 0
+                }
+              });
+            }
+            try {
+              const s2 = map.getSource("gp_hot_ring");
+              if (s2) s2.setData({ type: "FeatureCollection", features: ringFeats });
+            } catch (e) {}
+          }
+
+          function _refreshHotR0FromZoom() {
+            // Recompute base pixel radii so the ring represents constant km
+            for (let i = 0; i < hotRings.length; i++) {
+              const rr = hotRings[i];
+              const basePx = _kmToPx(rr.km0, rr.lat);
+              rr.r0 = basePx;
+              rr.r = basePx;
+            }
+            _pushHotRings();
+          }
+
+          function _startPulse(speed) {
+            _stopHotTimer();
+
+            let sp = Number(speed);
+            if (!isFinite(sp) || sp <= 0) sp = 1.0;
+
+            let dt = 80 / sp;
+            dt = Math.max(25, Math.min(200, dt));
+
+            hotTimer = setInterval(function () {
+              for (let i = 0; i < hotRings.length; i++) {
+                const rr = hotRings[i];
+
+                // keep km meaning even while pulsing
+                const basePx = _kmToPx(rr.km0, rr.lat);
+                rr.r0 = basePx;
+
+                const isNew = (rr.is_new === 1 || rr.is_new === true);
+                const k = isNew ? 0.10 : 0.06;
+                const da = isNew ? 0.03 : 0.04;
+                const a0 = isNew ? 0.95 : 0.90;
+
+                rr.r += (rr.r0 * k);
+                rr.a -= da;
+
+                if (rr.a <= 0.05) {
+                  rr.r = rr.r0;
+                  rr.a = a0;
+                }
+              }
+              _pushHotRings();
+            }, dt);
+          }
+
+          function _normHotText(pt) {
+            const rawTitle = String(pt.title || pt.label || "").trim();
+            let rawBody = String(pt.text || pt.note || pt.msg || "").trim();
+            const rawFull = String(pt.label_full || pt.full || pt.popup || "").trim();
+
+            if (!rawBody && rawFull) rawBody = rawFull;
+
+            let title = rawTitle;
+            let body = rawBody;
+
+            if (!title && body) {
+              const lines = body
+                .split(/\r?\n/)
+                .map((s) => String(s || "").trim())
+                .filter((s) => s.length > 0);
+              if (lines.length) {
+                title = lines[0];
+                body = lines.slice(1).join("\n");
+              }
+            }
+
+            if (title && body && title === body) body = "";
+            return { t: title, b: body };
+          }
+
+          function setHotspots(hs, opts) {
+            const h = hs || [];
+            const o = opts || {};
+            lastHotspots = h;
+            lastHotOpts = o;
+
+            _clearHotSources();
+            if (!_gpLoaded) return;
+
+            const want = (o.show != null) ? !!o.show : true;
+            showHotspots(want);
+            if (!want) return;
+
+            const style = String(o.style || "pulse").toLowerCase();
+            const pulse = (o.pulse != null) ? !!o.pulse : true;
+
+            let baseKm = Number(o.ringKm);
+            if (!isFinite(baseKm) || baseKm <= 0) baseKm = 0.8;
+
+            let sp = Number(o.pulseSpeed);
+            if (!isFinite(sp) || sp <= 0) sp = 1.0;
+
+            // Interpretation (hover) settings
+            hotTextOn = (o.showText != null) ? !!o.showText : true;
+            hotTextMinZoom = (o.textMinZoom != null)
+              ? Number(o.textMinZoom) : 6.0;
+
+            function _sevMul(sev) {
+              const s = (sev || "high").toLowerCase();
+              if (s === "critical") return 1.6;
+              if (s === "high") return 1.25;
+              if (s === "medium") return 1.0;
+              return 0.8;
+            }
+
+            const coreFeats = [];
+            hotRings = [];
+
+            // Build sources + ring states
+            for (let i = 0; i < h.length; i++) {
+              const pt = h[i] || {};
+              const lat = Number(pt.lat);
+              const lon = Number(pt.lon);
+              if (!isFinite(lat) || !isFinite(lon)) continue;
+
+              const sid =
+                (pt.sid != null && isFinite(pt.sid))
+                  ? Number(pt.sid)
+                  : null;
+
+              const sev = pt.sev || "high";
+              const col = _sevColor(sev);
+              const isNew = !!pt.is_new;
+              const mul = _sevMul(sev) * (isNew ? 1.15 : 1.0);
+
+              const tb = _normHotText(pt);
+
+              // core feature (store text so hover can render it)
+              coreFeats.push({
+                type: "Feature",
+                geometry: { type: "Point", coordinates: [lon, lat] },
+                properties: {
+                  col: col,
+                  sid: sid,
+                  is_new: isNew ? 1 : 0,
+                  sev: String(sev || "high"),
+                  ttl: String(tb.t || ""),
+                  body: String(tb.b || "")
+                }
+              });
+
+              // ring state (km -> px)
+              const km0 = baseKm * mul;
+              const r0px = _kmToPx(km0, lat);
+
+              // glow style = static ring (no pulse), pulse style = animated ring
+              const a0 = isNew ? 0.95 : 0.90;
+              hotRings.push({
+                g: { type: "Point", coordinates: [lon, lat] },
+                lat: lat,
+                km0: km0,
+                r0: r0px,
+                r: r0px,
+                a: (style === "glow") ? (isNew ? 0.75 : 0.55) : a0,
+                col: col,
+                is_new: isNew ? 1 : 0
+              });
+            }
+
+            // Commit core
+            try {
+              const s1 = map.getSource("gp_hot_core");
+              if (s1) s1.setData({
+                type: "FeatureCollection",
+                features: coreFeats
+              });
+            } catch (e) {}
+
+            // Commit rings (initial)
+            _pushHotRings();
+
+            // Pulse (optional)
+            if (style !== "glow" && pulse) {
+              _startPulse(sp);
+            }
+          }
+
+          // Keep ring meaning stable on zoom (km -> px rescale)
+          map.on("zoomend", function () {
+            try {
+              if (hotOn && hotRings && hotRings.length) {
+                if (hotTimer == null) _refreshHotR0FromZoom();
+                if (hotTimer != null) _refreshHotR0FromZoom();
+              }
+            } catch (e) {}
+
+            // Hide tooltip at low zoom
+            try {
+              if (map.getZoom() < hotTextMinZoom) {
+                _hotPopupRemove();
+              }
+            } catch (e) {}
+          });
+        """,
+
+        
+        
+        
+ 
         "  function clearPoints() {",
         "    lastPoints = [];",
         "    lastPointOpts = {};",
@@ -1229,33 +1513,6 @@ def maplibre_html() -> str:
         "    legendEl = div;",
         "  }",
         "",
-        "    const cm = cmap || 'viridis';",
-        "    const iv = !!inv;",
-        "    const title = (label || 'Z');",
-        "    const g = (",
-        "      'linear-gradient(to top,' +",
-        "      _color(0, cm, iv) + ',' +",
-        "      _color(1, cm, iv) + ')'",
-        "    );",
-        "",
-        "    const div = document.createElement('div');",
-        "    div.className = 'gp-legend';",
-        "    div.innerHTML = (",
-        "      '<div style=\"font-weight:600;\">' + title + '</div>' +",
-        "      '<div style=\"display:flex;gap:8px;align-items:center;\">' +",
-        "      '<div style=\"width:12px;height:90px;background:' + g +",
-        "      ';border-radius:6px;\"></div>' +",
-        "      '<div>' +",
-        "      '<div>' + Number(vmax).toFixed(3) + '</div>' +",
-        "      '<div style=\"height:62px;\"></div>' +",
-        "      '<div>' + Number(vmin).toFixed(3) + '</div>' +",
-        "      '</div></div>'",
-        "    );",
-        "",
-        "    document.body.appendChild(div);",
-        "    legendEl = div;",
-        "  }",
-        "",
         "  function setPoints(points, opts) {",
         "    const p = points || [];",
         "    const o = opts || {};",
@@ -1399,6 +1656,7 @@ def maplibre_html() -> str:
         "  function zoomIn() { map.zoomIn(); }",
         "  function zoomOut() { map.zoomOut(); }",
         "",
+        "  let _vecMarkers = [];",
         "  function _clearVecMarkers() {",
         "    for (let i = 0; i < _vecMarkers.length; i++) {",
         "      try { _vecMarkers[i].remove(); } catch (e) {}",
@@ -1581,6 +1839,7 @@ def maplibre_html() -> str:
         "  // Install layers on load",
         "  map.on('load', function () {",
         "    _gpLoaded = true;",
+        "    window.__GeoPriorMap.__loaded = true;",
         "",
         "    // Install raster basemap first (style is always GP_EMPTY_STYLE)",
         "    try {",
@@ -1592,7 +1851,6 @@ def maplibre_html() -> str:
         "      _installOverlays();",
         "    } catch (e) {}",
         "",
-        "    window.__GeoPriorMap.__ready = true;",
         "  });",
         "",
         "  // Attach real functions",

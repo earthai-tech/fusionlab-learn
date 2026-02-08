@@ -34,6 +34,7 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QGridLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -95,6 +96,12 @@ from .keys import (
     MAP_VIEW_INTERP_ACTION_PACK,
     MAP_VIEW_INTERP_ACTION_INTENSITY,
     MAP_VIEW_INTERP_TONE,
+    MAP_VIEW_INTERP_MODEL_ENABLED,
+    MAP_VIEW_INTERP_MODEL_BLOCKS,
+    MAP_VIEW_INTERP_CALL_STD_MAX,
+    MAP_VIEW_INTERP_CALL_DET_MAX,
+    MAP_VIEW_INTERP_CALL_POPUP,
+    MAP_VIEW_INTERP_CALL_WRAP_COLS,
 
     MAP_VIEW_PLOT_KIND,
     MAP_VIEW_HEX_GRIDSIZE,
@@ -921,118 +928,594 @@ class AutoHideViewPanel(AutoHidePanel):
         form.addRow("", self.chk_labels)
     
         return box
+
+    def _set_req_hotspots_tooltip(self, w, msg: str) -> None:
+        w.setToolTip(msg)
+        w.setAttribute(Qt.WA_AlwaysShowToolTips, True)
+
+    def _update_hotspot_ui_enabled(self) -> None:
+        on = bool(self.chk_hot.isChecked())
+        mode = str(
+            self.cmb_hot_mode.currentText() or "auto"
+        ).lower()
+        thr = str(
+            self.cmb_thr.currentText() or "quantile"
+        ).lower()
     
-    def _group_interpretation(
-        self,
-        parent: QWidget,
-    ) -> QFrame:
+        # Enable/disable whole set (except master checkbox)
+        for w in (
+            self.cmb_hot_mode,
+            self.cmb_hot_method,
+            self.cmb_hot_metric,
+            self.cmb_hot_time,
+            self.cmb_thr,
+            self.sl_q,
+            self.sp_abs,
+            self.sp_cell,
+            self.sp_minpts,
+            self.sp_maxn,
+            self.sp_sep,
+            self.cmb_hot_style,
+            self.chk_pulse,
+            self.sl_speed,
+            self.sp_ring,
+            self.chk_labels,
+        ):
+            w.setEnabled(on)
+    
+        # Manual mode disables auto parameters
+        auto_on = on and (mode != "manual")
+        for w in (
+            self.cmb_hot_method,
+            self.cmb_hot_metric,
+            self.cmb_hot_time,
+            self.cmb_thr,
+            self.sl_q,
+            self.sp_abs,
+            self.sp_cell,
+            self.sp_minpts,
+            self.sp_maxn,
+            self.sp_sep,
+        ):
+            w.setEnabled(auto_on)
+    
+        # Threshold: quantile vs absolute
+        self.sl_q.setEnabled(auto_on and thr == "quantile")
+        self.sp_abs.setEnabled(auto_on and thr == "absolute")
+    
+        # Pulse speed only matters if pulse + style pulse
+        style = str(
+            self.cmb_hot_style.currentText() or "pulse"
+        ).lower()
+        pulse_ok = (
+            on
+            and bool(self.chk_pulse.isChecked())
+            and style == "pulse"
+        )
+        self.sl_speed.setEnabled(pulse_ok)
+    
+        self._update_chips()
+    
+    
+    def _update_interp_ui_enabled(self) -> None:
+        interp_on = bool(self.chk_interp.isChecked())
+        hot_on = bool(self.chk_hot.isChecked())
+    
+        # Core interpretation controls (no hotspots needed)
+        for w in (
+            self.cmb_interp,
+            self.cmb_tone,
+            self.chk_model,
+            self.lb_interp_sum,
+        ):
+            w.setEnabled(interp_on)
+    
+        # Important: NEVER disable chk_callouts based on itself.
+        # Keep it clickable so user can check/uncheck anytime.
+        self.chk_callouts.setEnabled(interp_on)
+    
+        # "Full callout on click" can work without hotspots
+        self.chk_call_popup.setEnabled(interp_on)
+    
+        # --- Model blocks: depend only on interp + chk_model
+        model_ok = interp_on and bool(self.chk_model.isChecked())
+        for cb in self._model_checks.values():
+            cb.setEnabled(model_ok)
+    
+        # --- Hotspot-dependent: callouts settings
+        call_ok = (
+            interp_on
+            and hot_on
+            and bool(self.chk_callouts.isChecked())
+        )
+    
+        for w in (
+            self.cmb_call_lvl,
+            self.sp_call_std,
+            self.sp_call_det,
+            self.sp_call_wrap,
+            self.chk_call_act,
+        ):
+            w.setEnabled(call_ok)
+    
+        # Actions pack/intensity only when "Include actions"
+        act_ok = call_ok and bool(self.chk_call_act.isChecked())
+        self.cmb_pack.setEnabled(act_ok)
+        self.cmb_int.setEnabled(act_ok)
+    
+        # --- Hotspot-dependent: exports
+        # (exports do NOT depend on callouts checkbox)
+        exp_ok = interp_on and hot_on
+        for w in (
+            self.btn_exp_csv,
+            self.btn_exp_geo,
+            self.btn_exp_brief,
+        ):
+            w.setEnabled(exp_ok)
+    
+        # Tooltips / hint when hotspots are missing
+        hot_msg = getattr(
+            self,
+            "_req_hotspots_msg",
+            "Requires Hotspots. Turn on: "
+            "Hotspots → Enable hotspots.",
+        )
+        req_ws = getattr(self, "_req_hotspots_widgets", [])
+        if interp_on and (not hot_on):
+            for w in req_ws:
+                w.setToolTip(hot_msg)
+            if hasattr(self, "_interp_export_row"):
+                self._interp_export_row.setToolTip(hot_msg)
+        else:
+            for w in req_ws:
+                w.setToolTip("")
+            if hasattr(self, "_interp_export_row"):
+                self._interp_export_row.setToolTip("")
+    
+        self._update_chips()
+    
+    
+    def _group_interpretation(self, parent: QWidget) -> QFrame:
         box, body, chip = self._make_card(
             parent,
             title="Interpretation",
             sp=QStyle.SP_MessageBoxInformation,
         )
         self._chip_interp = chip
-        
+    
         form = QFormLayout(body)
-        form.setContentsMargins(0, 0, 0, 0)
-        
         form.setContentsMargins(10, 10, 10, 10)
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(8)
-
+    
         self.chk_interp = QCheckBox(
             "Enable interpretation",
             box,
         )
-
+    
         self.cmb_interp = QComboBox(box)
-        self.cmb_interp.addItems([
-            "subsidence",
-            "risk",
-        ])
-
+        self.cmb_interp.addItems(["subsidence", "risk"])
+    
         self.cmb_tone = QComboBox(box)
-        self.cmb_tone.addItems([
-            "municipal",
-            "technical",
-            "public",
-        ])
-
+        self.cmb_tone.addItems(
+            ["municipal", "technical", "public"]
+        )
+    
+        # Hotspot-dependent callouts
         self.chk_callouts = QCheckBox(
             "Show callouts on hotspots",
             box,
         )
-
+    
         self.cmb_call_lvl = QComboBox(box)
-        self.cmb_call_lvl.addItems([
-            "compact",
-            "standard",
-            "detailed",
-        ])
-
+        self.cmb_call_lvl.addItems(
+            ["compact", "standard", "detailed"]
+        )
+    
+        self.sp_call_std = QSpinBox(box)
+        self.sp_call_std.setRange(1, 20)
+        self.sp_call_std.setSingleStep(1)
+        self.sp_call_std.setToolTip(
+            "Max lines for standard callout"
+        )
+    
+        self.sp_call_det = QSpinBox(box)
+        self.sp_call_det.setRange(0, 60)
+        self.sp_call_det.setSingleStep(1)
+        self.sp_call_det.setSpecialValueText("No limit")
+        self.sp_call_det.setToolTip(
+            "Max lines for detailed callout"
+        )
+    
+        self.sp_call_wrap = QSpinBox(box)
+        self.sp_call_wrap.setRange(24, 84)
+        self.sp_call_wrap.setSingleStep(2)
+        self.sp_call_wrap.setToolTip("Wrap width (cols)")
+    
+        # Not hotspot-dependent (can be click-selection based)
+        self.chk_call_popup = QCheckBox(
+            "Full callout on click",
+            box,
+        )
+    
         self.chk_call_act = QCheckBox(
             "Include actions in callout",
             box,
         )
-
+    
         self.cmb_pack = QComboBox(box)
-        self.cmb_pack.addItems([
-            "balanced",
-            "groundwater",
-            "infrastructure",
-            "planning",
-            "monitoring",
-        ])
-
+        self.cmb_pack.addItems(
+            [
+                "balanced",
+                "groundwater",
+                "infrastructure",
+                "planning",
+                "monitoring",
+            ]
+        )
+    
         self.cmb_int = QComboBox(box)
-        self.cmb_int.addItems([
-            "conservative",
-            "balanced",
-            "aggressive",
-        ])
-
+        self.cmb_int.addItems(
+            ["conservative", "balanced", "aggressive"]
+        )
+    
         self.lb_interp_sum = QLabel("", box)
         self.lb_interp_sum.setWordWrap(True)
         self.lb_interp_sum.setStyleSheet(
             "color: rgba(140,140,140,1);"
         )
-
+    
+        # Exports (hotspot-dependent)
         exp = QWidget(box)
         el = QHBoxLayout(exp)
         el.setContentsMargins(0, 0, 0, 0)
         el.setSpacing(6)
-
+    
         self.btn_exp_csv = QPushButton("CSV", box)
         self.btn_exp_geo = QPushButton("GeoJSON", box)
         self.btn_exp_brief = QPushButton("Brief", box)
-
-        self.btn_exp_csv.setToolTip(
-            "Export hotspots summary (CSV)"
-        )
-        self.btn_exp_geo.setToolTip(
-            "Export hotspots as GeoJSON"
-        )
-        self.btn_exp_brief.setToolTip(
-            "Export a municipal brief (Markdown)"
-        )
-
+    
+        self.btn_exp_csv.setToolTip("Export hotspots CSV")
+        self.btn_exp_geo.setToolTip("Export hotspots GeoJSON")
+        self.btn_exp_brief.setToolTip("Export brief (Markdown)")
+    
         el.addWidget(self.btn_exp_csv, 0)
         el.addWidget(self.btn_exp_geo, 0)
         el.addWidget(self.btn_exp_brief, 0)
         el.addStretch(1)
-
+    
+        # Keep export row to show tooltip even if buttons
+        # are disabled (hover the row area).
+        self._interp_export_row = exp
+    
+        # Tooltip message for hotspot-dependent widgets
+        self._req_hotspots_msg = (
+            "Requires Hotspots. Turn on: "
+            "Hotspots → Enable hotspots."
+        )
+    
+        # Widgets that require hotspots
+        self._req_hotspots_widgets = [
+            self.chk_callouts,
+            self.cmb_call_lvl,
+            self.sp_call_std,
+            self.sp_call_det,
+            self.sp_call_wrap,
+            self.chk_call_act,
+            self.btn_exp_csv,
+            self.btn_exp_geo,
+            self.btn_exp_brief,
+        ]
+    
+        # Model-driven (eval JSON) section
+        self._model_block_ids = [
+            "accuracy",
+            "intervals",
+            "eps_prior",
+            "eps_cons",
+            "eps_gw",
+            "censor",
+        ]
+        labels = {
+            "accuracy": "Accuracy",
+            "intervals": "Intervals && calibration",
+            "eps_prior": "Physics ε-prior",
+            "eps_cons": "Physics ε-cons",
+            "eps_gw": "Physics ε-gw",
+            "censor": "Bias / censoring",
+        }
+    
+        self.chk_model = QCheckBox(
+            "Include model evaluation",
+            box,
+        )
+    
+        self._model_checks = {}
+    
+        w_model = QWidget(box)
+        v_model = QVBoxLayout(w_model)
+        v_model.setContentsMargins(0, 0, 0, 0)
+        v_model.setSpacing(4)
+        v_model.addWidget(self.chk_model, 0)
+    
+        grid = QGridLayout()
+        grid.setContentsMargins(18, 0, 0, 0)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(2)
+    
+        for i, bid in enumerate(self._model_block_ids):
+            cb = QCheckBox(labels.get(bid, bid), w_model)
+            self._model_checks[bid] = cb
+            r = i // 2
+            c = i % 2
+            grid.addWidget(cb, r, c)
+    
+        v_model.addLayout(grid)
+    
+        # Layout
         form.addRow("", self.chk_interp)
         form.addRow("Scheme", self.cmb_interp)
         form.addRow("Tone", self.cmb_tone)
+    
         form.addRow("", self.chk_callouts)
         form.addRow("Callout", self.cmb_call_lvl)
+        form.addRow("", self.chk_call_popup)
+        form.addRow("Std lines", self.sp_call_std)
+        form.addRow("Det lines", self.sp_call_det)
+        form.addRow("Wrap", self.sp_call_wrap)
+    
         form.addRow("", self.chk_call_act)
         form.addRow("Actions", self.cmb_pack)
         form.addRow("Intensity", self.cmb_int)
+    
+        form.addRow("Model", w_model)
         form.addRow("Summary", self.lb_interp_sum)
         form.addRow("Export", exp)
-        
+    
         return box
+
+    # def _group_interpretation(
+    #     self,
+    #     parent: QWidget,
+    # ) -> QFrame:
+    #     box, body, chip = self._make_card(
+    #         parent,
+    #         title="Interpretation",
+    #         sp=QStyle.SP_MessageBoxInformation,
+    #     )
+    #     self._chip_interp = chip
+        
+    #     form = QFormLayout(body)
+    #     form.setContentsMargins(0, 0, 0, 0)
+        
+    #     form.setContentsMargins(10, 10, 10, 10)
+    #     form.setHorizontalSpacing(10)
+    #     form.setVerticalSpacing(8)
+
+    #     self.chk_interp = QCheckBox(
+    #         "Enable interpretation",
+    #         box,
+    #     )
+
+    #     self.cmb_interp = QComboBox(box)
+    #     self.cmb_interp.addItems([
+    #         "subsidence",
+    #         "risk",
+    #     ])
+
+    #     self.cmb_tone = QComboBox(box)
+    #     self.cmb_tone.addItems([
+    #         "municipal",
+    #         "technical",
+    #         "public",
+    #     ])
+
+    #     self.chk_callouts = QCheckBox(
+    #         "Show callouts on hotspots",
+    #         box,
+    #     )
+
+    #     self.cmb_call_lvl = QComboBox(box)
+    #     self.cmb_call_lvl.addItems([
+    #         "compact",
+    #         "standard",
+    #         "detailed",
+    #     ])
+
+    #     self.sp_call_std = QSpinBox(box)
+    #     self.sp_call_std.setRange(1, 20)
+    #     self.sp_call_std.setSingleStep(1)
+    #     self.sp_call_std.setToolTip(
+    #         "Max lines for standard callout"
+    #     )
+
+    #     self.sp_call_det = QSpinBox(box)
+    #     self.sp_call_det.setRange(0, 60)
+    #     self.sp_call_det.setSingleStep(1)
+    #     self.sp_call_det.setSpecialValueText(
+    #         "No limit"
+    #     )
+    #     self.sp_call_det.setToolTip(
+    #         "Max lines for detailed callout"
+    #     )
+
+    #     self.sp_call_wrap = QSpinBox(box)
+    #     self.sp_call_wrap.setRange(24, 84)
+    #     self.sp_call_wrap.setSingleStep(2)
+    #     self.sp_call_wrap.setToolTip(
+    #         "Wrap width (columns)"
+    #     )
+
+    #     self.chk_call_popup = QCheckBox(
+    #         "Full callout on click",
+    #         box,
+    #     )
+
+    #     self.chk_call_act = QCheckBox(
+    #         "Include actions in callout",
+    #         box,
+    #     )
+
+    #     self.cmb_pack = QComboBox(box)
+    #     self.cmb_pack.addItems([
+    #         "balanced",
+    #         "groundwater",
+    #         "infrastructure",
+    #         "planning",
+    #         "monitoring",
+    #     ])
+
+    #     self.cmb_int = QComboBox(box)
+    #     self.cmb_int.addItems([
+    #         "conservative",
+    #         "balanced",
+    #         "aggressive",
+    #     ])
+
+    #     self.lb_interp_sum = QLabel("", box)
+    #     self.lb_interp_sum.setWordWrap(True)
+    #     self.lb_interp_sum.setStyleSheet(
+    #         "color: rgba(140,140,140,1);"
+    #     )
+
+    #     exp = QWidget(box)
+    #     el = QHBoxLayout(exp)
+    #     el.setContentsMargins(0, 0, 0, 0)
+    #     el.setSpacing(6)
+
+    #     self.btn_exp_csv = QPushButton("CSV", box)
+    #     self.btn_exp_geo = QPushButton("GeoJSON", box)
+    #     self.btn_exp_brief = QPushButton("Brief", box)
+
+    #     self.btn_exp_csv.setToolTip(
+    #         "Export hotspots summary (CSV)"
+    #     )
+    #     self.btn_exp_geo.setToolTip(
+    #         "Export hotspots as GeoJSON"
+    #     )
+    #     self.btn_exp_brief.setToolTip(
+    #         "Export a municipal brief (Markdown)"
+    #     )
+        
+    #     hot_msg = "Requires Hotspots. Turn on: Hotspots → Enable hotspots."
+        
+    #     for w in (
+    #         self.chk_callouts,
+    #         self.cmb_call_lvl,
+    #         self.sp_call_std,
+    #         self.sp_call_det,
+    #         self.sp_call_wrap,
+    #         self.chk_call_popup,
+    #         self.chk_call_act,
+    #         self.btn_exp_csv,
+    #         self.btn_exp_geo,
+    #         self.btn_exp_brief,
+    #     ):
+    #         self._set_req_hotspots_tooltip(w, hot_msg)
+
+    #     el.addWidget(self.btn_exp_csv, 0)
+    #     el.addWidget(self.btn_exp_geo, 0)
+    #     el.addWidget(self.btn_exp_brief, 0)
+    #     el.addStretch(1)
+
+    #     form.addRow("", self.chk_interp)
+    #     form.addRow("Scheme", self.cmb_interp)
+    #     form.addRow("Tone", self.cmb_tone)
+    #     form.addRow("", self.chk_callouts)
+    #     form.addRow("Callout", self.cmb_call_lvl)
+    #     form.addRow("", self.chk_call_popup)
+    #     form.addRow("Std lines", self.sp_call_std)
+    #     form.addRow("Det lines", self.sp_call_det)
+    #     form.addRow("Wrap", self.sp_call_wrap)
+    #     form.addRow("", self.chk_call_act)
+    #     form.addRow("Actions", self.cmb_pack)
+    #     form.addRow("Intensity", self.cmb_int)
+        
+    #     # Model-driven (eval JSON)
+
+    #     self._model_block_ids = [
+    #         "accuracy",
+    #         "intervals",
+    #         "eps_prior",
+    #         "eps_cons",
+    #         "eps_gw",
+    #         "censor",
+    #     ]
+
+    #     labels = {
+    #         "accuracy": "Accuracy",
+    #         "intervals": "Intervals && calibration",
+    #         "eps_prior": "Physics ε-prior",
+    #         "eps_cons": "Physics ε-cons",
+    #         "eps_gw": "Physics ε-gw",
+    #         "censor": "Bias / censoring",
+    #     }
+
+    #     self.chk_model = QCheckBox(
+    #         "Include model evaluation",
+    #         box,
+    #     )
+
+    #     self._model_checks = {}
+
+    #     w_model = QWidget(box)
+    #     v_model = QVBoxLayout(w_model)
+    #     v_model.setContentsMargins(0, 0, 0, 0)
+    #     v_model.setSpacing(4)
+    #     v_model.addWidget(self.chk_model, 0)
+
+    #     grid = QGridLayout()
+    #     grid.setContentsMargins(18, 0, 0, 0)
+    #     grid.setHorizontalSpacing(12)
+    #     grid.setVerticalSpacing(2)
+
+    #     for i, bid in enumerate(self._model_block_ids):
+    #         cb = QCheckBox(labels.get(bid, bid), w_model)
+    #         self._model_checks[bid] = cb
+    #         r = i // 2
+    #         c = i % 2
+    #         grid.addWidget(cb, r, c)
+
+    #     v_model.addLayout(grid)
+    #     form.addRow("Model", w_model)
+
+    #     form.addRow("Summary", self.lb_interp_sum)
+    #     form.addRow("Export", exp)
+        
+    #     return box
+    
+    def _set_model_block(
+        self,
+        bid: str,
+        checked: bool,
+    ) -> None:
+        if not self.store:
+            return
+
+        cur = self.store.get(
+            MAP_VIEW_INTERP_MODEL_BLOCKS,
+            [],
+        )
+
+        try:
+            items = list(cur) if cur is not None else []
+        except Exception:
+            items = []
+
+        s = {str(x).strip() for x in items if str(x).strip()}
+
+        if checked:
+            s.add(bid)
+        else:
+            s.discard(bid)
+
+        order = getattr(self, "_model_block_ids", [])
+        out = [x for x in order if x in s]
+
+        self.store.set(
+            MAP_VIEW_INTERP_MODEL_BLOCKS,
+            out,
+        )
 
     def _update_chips(self) -> None:
         if hasattr(self, "_chip_base"):
@@ -1258,15 +1741,33 @@ class AutoHideViewPanel(AutoHidePanel):
         self._set_combo(
             self.cmb_call_lvl,
             str(self.store.get(
-                "map.view.interp."
-                "callout_level",
+                MAP_VIEW_INTERP_CALLOUT_LEVEL,
                 "standard",
             )),
         )
 
+        self.sp_call_std.setValue(int(self.store.get(
+            MAP_VIEW_INTERP_CALL_STD_MAX,
+            4,
+        ) or 4))
+
+        self.sp_call_det.setValue(int(self.store.get(
+            MAP_VIEW_INTERP_CALL_DET_MAX,
+            10,
+        ) or 10))
+
+        self.sp_call_wrap.setValue(int(self.store.get(
+            MAP_VIEW_INTERP_CALL_WRAP_COLS,
+            46,
+        ) or 46))
+
+        self.chk_call_popup.setChecked(bool(self.store.get(
+            MAP_VIEW_INTERP_CALL_POPUP,
+            True,
+        )))
+
         self.chk_call_act.setChecked(bool(self.store.get(
-            "map.view.interp."
-            "callout_actions",
+            MAP_VIEW_INTERP_CALLOUT_ACTIONS,
             True,
         )))
 
@@ -1281,8 +1782,7 @@ class AutoHideViewPanel(AutoHidePanel):
         self._set_combo(
             self.cmb_pack,
             str(self.store.get(
-                "map.view.interp."
-                "action_pack",
+                MAP_VIEW_INTERP_ACTION_PACK,
                 "balanced",
             )),
         )
@@ -1290,11 +1790,38 @@ class AutoHideViewPanel(AutoHidePanel):
         self._set_combo(
             self.cmb_int,
             str(self.store.get(
-                "map.view.interp."
-                "action_intensity",
+                MAP_VIEW_INTERP_ACTION_INTENSITY,
                 "balanced",
             )),
         )
+        # --- model-driven interpretation
+        m_on = bool(
+            self.store.get(
+                MAP_VIEW_INTERP_MODEL_ENABLED,
+                False,
+            )
+        )
+        with QSignalBlocker(self.chk_model):
+            self.chk_model.setChecked(m_on)
+
+        sel = self.store.get(
+            MAP_VIEW_INTERP_MODEL_BLOCKS,
+            [],
+        )
+
+        try:
+            bset = {
+                str(x).strip()
+                for x in list(sel)
+                if str(x).strip()
+            }
+        except Exception:
+            bset = set()
+
+        for bid, cb in self._model_checks.items():
+            with QSignalBlocker(cb):
+                cb.setChecked(bid in bset)
+
         self._set_combo(
             self.cmb_plot_kind,
             str(self.store.get(
@@ -1370,7 +1897,7 @@ class AutoHideViewPanel(AutoHidePanel):
         )
 
         # --- ALERT SYSTEM REFRESH ---
-        # FIX: Explicitly sync the sub-widget to match the store
+        # Explicitly sync the sub-widget to match the store
         if hasattr(self, "alert_group"):
             self.alert_group.sync()
 
@@ -1436,92 +1963,115 @@ class AutoHideViewPanel(AutoHidePanel):
         if hasattr(self, "_chip_render"):
             self._chip_render.setText(kind)
 
-    def _update_hotspot_ui_enabled(self) -> None:
-        on = bool(self.chk_hot.isChecked())
-        mode = str(self.cmb_hot_mode.currentText() or "auto").lower()
-        thr = str(self.cmb_thr.currentText() or "quantile").lower()
+    # def _update_hotspot_ui_enabled(self) -> None:
+    #     on = bool(self.chk_hot.isChecked())
+    #     mode = str(self.cmb_hot_mode.currentText() or "auto").lower()
+    #     thr = str(self.cmb_thr.currentText() or "quantile").lower()
     
-        # enable/disable whole set (except master checkbox)
-        for w in (
-            self.cmb_hot_mode,
-            self.cmb_hot_method,
-            self.cmb_hot_metric,
-            self.cmb_hot_time,
-            self.cmb_thr,
-            self.sl_q,
-            self.sp_abs,
-            self.sp_cell,
-            self.sp_minpts,
-            self.sp_maxn,
-            self.sp_sep,
-            self.cmb_hot_style,
-            self.chk_pulse,
-            self.sl_speed,
-            self.sp_ring,
-            self.chk_labels,
-        ):
-            w.setEnabled(on)
+    #     # enable/disable whole set (except master checkbox)
+    #     for w in (
+    #         self.cmb_hot_mode,
+    #         self.cmb_hot_method,
+    #         self.cmb_hot_metric,
+    #         self.cmb_hot_time,
+    #         self.cmb_thr,
+    #         self.sl_q,
+    #         self.sp_abs,
+    #         self.sp_cell,
+    #         self.sp_minpts,
+    #         self.sp_maxn,
+    #         self.sp_sep,
+    #         self.cmb_hot_style,
+    #         self.chk_pulse,
+    #         self.sl_speed,
+    #         self.sp_ring,
+    #         self.chk_labels,
+    #     ):
+    #         w.setEnabled(on)
     
-        # Manual mode: auto params are disabled
-        auto_on = on and (mode != "manual")
-        for w in (
-            self.cmb_hot_method,
-            self.cmb_hot_metric,
-            self.cmb_hot_time,
-            self.cmb_thr,
-            self.sl_q,
-            self.sp_abs,
-            self.sp_cell,
-            self.sp_minpts,
-            self.sp_maxn,
-            self.sp_sep,
-        ):
-            w.setEnabled(auto_on)
+    #     # Manual mode: auto params are disabled
+    #     auto_on = on and (mode != "manual")
+    #     for w in (
+    #         self.cmb_hot_method,
+    #         self.cmb_hot_metric,
+    #         self.cmb_hot_time,
+    #         self.cmb_thr,
+    #         self.sl_q,
+    #         self.sp_abs,
+    #         self.sp_cell,
+    #         self.sp_minpts,
+    #         self.sp_maxn,
+    #         self.sp_sep,
+    #     ):
+    #         w.setEnabled(auto_on)
     
-        # Threshold: quantile vs absolute
-        self.sl_q.setEnabled(auto_on and thr == "quantile")
-        self.sp_abs.setEnabled(auto_on and thr == "absolute")
+    #     # Threshold: quantile vs absolute
+    #     self.sl_q.setEnabled(auto_on and thr == "quantile")
+    #     self.sp_abs.setEnabled(auto_on and thr == "absolute")
     
-        # Pulse speed only matters if pulse + style pulse
-        style = str(self.cmb_hot_style.currentText() or "pulse").lower()
-        pulse_on = bool(self.chk_pulse.isChecked()) and style == "pulse"
-        self.sl_speed.setEnabled(on and pulse_on)
+    #     # Pulse speed only matters if pulse + style pulse
+    #     style = str(self.cmb_hot_style.currentText() or "pulse").lower()
+    #     pulse_on = bool(self.chk_pulse.isChecked()) and style == "pulse"
+    #     self.sl_speed.setEnabled(on and pulse_on)
         
-        self._update_chips()
+    #     self._update_chips()
 
+    # def _update_interp_ui_enabled(self) -> None:
+    #     interp_on = bool(self.chk_interp.isChecked())
+    #     hot_on = bool(self.chk_hot.isChecked())
+        
+    #     call_on = (
+    #         interp_on
+    #         and hot_on
+    #         and bool(self.chk_callouts.isChecked())
+    #     )
+    #     # main interp widgets
+    #     for w in (
+    #         self.cmb_interp,
+    #         self.cmb_tone,
+    #         self.chk_callouts,
+    #         self.cmb_call_lvl,
+    #         self.sp_call_std,
+    #         self.sp_call_det,
+    #         self.sp_call_wrap,
+    #         self.chk_call_popup,
+    #         self.chk_call_act,
+    #         self.cmb_pack,
+    #         self.cmb_int,
+    #         self.lb_interp_sum,
+    #         self.btn_exp_csv,
+    #         self.btn_exp_geo,
+    #         self.btn_exp_brief,
+    #         self.chk_model,
+    #         *self._model_checks.values(),
+    #     ):
+    #         w.setEnabled(interp_on)
 
-    def _update_interp_ui_enabled(self) -> None:
-        interp_on = bool(self.chk_interp.isChecked())
-        hot_on = bool(self.chk_hot.isChecked())
+    #     # callouts + exports depend on hotspots
+    #     for w in (
+    #         self.chk_callouts,
+    #         self.cmb_call_lvl,
+    #         self.sp_call_std,
+    #         self.sp_call_det,
+    #         self.sp_call_wrap,
+    #         self.chk_call_popup,
+    #         self.chk_call_act,
+    #         self.cmb_pack,
+    #         self.cmb_int,
+    #         self.btn_exp_csv,
+    #         self.btn_exp_geo,
+    #         self.btn_exp_brief,
+    #     ):
+    #         w.setEnabled(call_on)
 
-        for w in (
-            self.cmb_interp,
-            self.cmb_tone,
-            self.chk_callouts,
-            self.cmb_call_lvl,
-            self.chk_call_act,
-            self.cmb_pack,
-            self.cmb_int,
-            self.lb_interp_sum,
-            self.btn_exp_csv,
-            self.btn_exp_geo,
-            self.btn_exp_brief,
-        ):
-            w.setEnabled(interp_on)
+    #     # model blocks depend on chk_model
+    #     self.chk_model.setEnabled(interp_on)
 
-        # Callouts + exports are meaningful with hotspots
-        for w in (
-            self.chk_callouts,
-            self.cmb_call_lvl,
-            self.chk_call_act,
-            self.btn_exp_csv,
-            self.btn_exp_geo,
-            self.btn_exp_brief,
-        ):
-            w.setEnabled(interp_on and hot_on)
-            
-        self._update_chips()
+    #     blk_ok = interp_on and bool(self.chk_model.isChecked())
+    #     for cb in self._model_checks.values():
+    #         cb.setEnabled(blk_ok)
 
+    #     self._update_chips()
 
     def _update_interp_summary(self) -> None:
         on = bool(self.chk_interp.isChecked())
@@ -1541,7 +2091,26 @@ class AutoHideViewPanel(AutoHidePanel):
             )
             return
 
-        msg = f"{sch} | {tone} | callouts={call} | {lvl}"
+        msg = f"{sch} | {tone} | "
+        msg += f"callouts={call} | {lvl}"
+
+        if bool(self.chk_model.isChecked()):
+            short = {
+                "accuracy": "acc",
+                "intervals": "int",
+                "eps_prior": "eP",
+                "eps_cons": "eC",
+                "eps_gw": "eG",
+                "censor": "cens",
+            }
+            xs = [
+                short.get(bid, bid)
+                for bid, cb in self._model_checks.items()
+                if cb.isChecked()
+            ]
+            if xs:
+                msg += " | model=" + "+".join(xs)
+
         self.lb_interp_sum.setText(msg)
 
     def _connect(self) -> None:
@@ -1731,6 +2300,25 @@ class AutoHideViewPanel(AutoHidePanel):
                 self._update_interp_summary(),
             )
         )
+        # --- model eval toggle + blocks (connect once)
+        self.chk_model.toggled.connect(
+            lambda b: (
+                self.store.set(
+                    MAP_VIEW_INTERP_MODEL_ENABLED,
+                    bool(b),
+                ),
+                self._update_interp_ui_enabled(),
+                self._update_interp_summary(),
+            )
+        )
+
+        for bid, cb in self._model_checks.items():
+            cb.toggled.connect(
+                lambda b, bid=bid: (
+                    self._set_model_block(bid, bool(b)),
+                    self._update_interp_summary(),
+                )
+            )
 
         self.cmb_interp.currentTextChanged.connect(
             lambda v: (
@@ -1767,6 +2355,45 @@ class AutoHideViewPanel(AutoHidePanel):
                 self.store.set(
                     MAP_VIEW_INTERP_CALLOUT_LEVEL,
                     str(v),
+                ),
+                self._update_interp_summary(),
+            )
+        )
+        self.sp_call_std.valueChanged.connect(
+            lambda v: (
+                self.store.set(
+                    MAP_VIEW_INTERP_CALL_STD_MAX,
+                    int(v),
+                ),
+                self._update_interp_summary(),
+            )
+        )
+
+        self.sp_call_det.valueChanged.connect(
+            lambda v: (
+                self.store.set(
+                    MAP_VIEW_INTERP_CALL_DET_MAX,
+                    int(v),
+                ),
+                self._update_interp_summary(),
+            )
+        )
+
+        self.sp_call_wrap.valueChanged.connect(
+            lambda v: (
+                self.store.set(
+                    MAP_VIEW_INTERP_CALL_WRAP_COLS,
+                    int(v),
+                ),
+                self._update_interp_summary(),
+            )
+        )
+
+        self.chk_call_popup.toggled.connect(
+            lambda b: (
+                self.store.set(
+                    MAP_VIEW_INTERP_CALL_POPUP,
+                    bool(b),
                 ),
                 self._update_interp_summary(),
             )
@@ -1885,7 +2512,6 @@ class AutoHideViewPanel(AutoHidePanel):
     # -------------------------------------------------
     # Handlers
     # -------------------------------------------------
-
     def _on_store_changed(self, keys) -> None:
         keys = set(keys or [])
         if not keys:
@@ -1896,7 +2522,6 @@ class AutoHideViewPanel(AutoHidePanel):
             
         if any(
             k.startswith("map.view.")
-            or k.startswith("map.propagation.")
             for k in keys
         ):
             self._sync_from_store()

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Callable, Iterable, List, Optional, Tuple
 
 import pandas as pd
 import numpy as np
@@ -30,6 +30,11 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QScrollArea,
+)
+
+from ..utils.generic_utils import (
+    pretty_label,
+    resolve_unit,
 )
 
 try:
@@ -73,6 +78,11 @@ class PlotRecipe:
 # ---------------------------------------------------------------------
 # Helpers (types, sampling, selection extraction)
 # ---------------------------------------------------------------------
+
+def _ui_label(name: str) -> str:
+    u = resolve_unit(name)
+    return pretty_label(name, unit=u)
+
 def _is_numeric(s: pd.Series) -> bool:
     try:
         return pd.api.types.is_numeric_dtype(s.dtype)
@@ -538,8 +548,9 @@ class MatplotlibPane(QWidget):
             c = recipe.cols[0]
             s = df[c].dropna()
             ax.hist(s.values, bins=30)
-            ax.set_xlabel(c)
-            ax.set_ylabel("count")
+            ax.set_xlabel(_ui_label(c))
+            ax.set_ylabel("Count")
+            ax.set_title(_ui_label(c))
             return
         
         if k == PlotKind.OUTLIERS_1D:
@@ -585,7 +596,7 @@ class MatplotlibPane(QWidget):
             )
         
             ax.set_yticks([])
-            ax.set_xlabel(c)
+            ax.set_xlabel(_ui_label(c))
         
             ax.text(
                 0.99,
@@ -649,16 +660,18 @@ class MatplotlibPane(QWidget):
             vc = vc.head(20)
             ax.bar(vc.index.astype(str), vc.values)
             ax.tick_params(axis="x", labelrotation=45)
-            ax.set_xlabel(c)
-            ax.set_ylabel("count")
+            ax.set_xlabel(_ui_label(c))
+            ax.set_ylabel("Count")
+            ax.set_title(f"{_ui_label(c)}")
             return
 
         if k == PlotKind.SCATTER_2D:
             x, y = recipe.cols[0], recipe.cols[1]
             d = df[[x, y]].dropna()
             ax.scatter(d[x].values, d[y].values, s=10)
-            ax.set_xlabel(x)
-            ax.set_ylabel(y)
+            ax.set_xlabel(_ui_label(x))
+            ax.set_ylabel(_ui_label(y))
+            ax.set_title(f"{_ui_label(y)} vs {_ui_label(x)}")
             return
 
         if k == PlotKind.LINE_2D:
@@ -666,8 +679,9 @@ class MatplotlibPane(QWidget):
             d = df[[x, y]].dropna()
             d = d.sort_values(by=x, kind="mergesort")
             ax.plot(d[x].values, d[y].values)
-            ax.set_xlabel(x)
-            ax.set_ylabel(y)
+            ax.set_xlabel(_ui_label(x))
+            ax.set_ylabel(_ui_label(y))
+            ax.set_title(f"{_ui_label(y)} vs {_ui_label(x)}")
             return
 
         if k == PlotKind.BOX_BY_CAT:
@@ -696,8 +710,8 @@ class MatplotlibPane(QWidget):
                 return
             ax.boxplot(groups, labels=labels, showfliers=False)
             ax.tick_params(axis="x", labelrotation=45)
-            ax.set_xlabel(cat)
-            ax.set_ylabel(num)
+            ax.set_xlabel(_ui_label(cat))
+            ax.set_ylabel(_ui_label(num))
             return
         
         if k == PlotKind.ECDF_1D:
@@ -720,8 +734,8 @@ class MatplotlibPane(QWidget):
             y = (np.arange(1, n + 1) / float(n))
         
             ax.plot(x, y)
-            ax.set_xlabel(c)
-            ax.set_ylabel("ECDF")
+            ax.set_xlabel(_ui_label(c))
+            ax.set_ylabel(_ui_label("ECDF"))
             ax.set_ylim(0.0, 1.0)
             return
         
@@ -752,8 +766,9 @@ class MatplotlibPane(QWidget):
                 mincnt=1,
             )
             self.fig.colorbar(hb, ax=ax, fraction=0.046, pad=0.04)
-            ax.set_xlabel(x)
-            ax.set_ylabel(y)
+            ax.set_xlabel(_ui_label(x))
+            ax.set_ylabel(_ui_label(y))
+            ax.set_title(f"{_ui_label(y)} vs {_ui_label(x)}")
             return
         
         if k == PlotKind.MISSINGNESS_BAR:
@@ -792,6 +807,8 @@ class MatplotlibPane(QWidget):
             self.fig.colorbar(im, ax=ax, fraction=0.046)
             ax.set_xlabel(c0)
             ax.set_ylabel(c1)
+            ax.set_xlabel(_ui_label(c0))
+            ax.set_ylabel(_ui_label(c1))
             return
 
         if k == PlotKind.HEATMAP_CORR:
@@ -808,17 +825,10 @@ class MatplotlibPane(QWidget):
                     transform=ax.transAxes,
                 )
                 return
-            # corr = d.corr(numeric_only=True)
-            # im = ax.imshow(corr.values, vmin=-1.0, vmax=1.0)
-            # ax.set_xticks(range(len(corr.columns)))
-            # ax.set_yticks(range(len(corr.index)))
-            # ax.set_xticklabels(corr.columns, rotation=45)
-            # ax.set_yticklabels(corr.index)
-            # self.fig.colorbar(im, ax=ax, fraction=0.046)
-            
+
             corr = d.corr(numeric_only=True)
             n = len(corr.columns)
-            labs = [_compact_label(x, 18) for x in corr.columns]
+            labs = [_compact_label(_ui_label(x), 18) for x in corr.columns]
             
             aspect = "equal" if n <= 8 else "auto"
             im = ax.imshow(

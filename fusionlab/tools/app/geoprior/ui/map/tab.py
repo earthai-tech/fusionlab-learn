@@ -16,10 +16,10 @@ from __future__ import annotations
 
 from typing import Optional, Sequence
 from pathlib import Path
-
+import json
 import pandas as pd
 
-from PyQt5.QtCore import Qt, QTimer, QEvent, QPoint
+from PyQt5.QtCore import Qt, QTimer, QEvent
 from PyQt5.QtWidgets import (
     QSplitter,
     QVBoxLayout,
@@ -59,6 +59,8 @@ from .interpretation import (
     geojson_from_rows,
     dump_geojson,
     policy_brief_md,
+    build_model_blocks,
+    render_model_blocks_md,
 )
 from .keys import ( 
     _MAP_DEFAULTS, 
@@ -113,7 +115,9 @@ from .keys import (
     MAP_CLICK_SAMPLE_IDX, 
     MAP_ANALYTICS_HEIGHT, 
     MAP_ANALYTICS_PINNED, 
-    MAP_VIEW_MARKER_SIZE, 
+    MAP_VIEW_MARKER_SIZE,
+    MAP_VIEW_INTERP_MODEL_ENABLED,
+    MAP_VIEW_INTERP_MODEL_BLOCKS,
     MAP_SELECTED_FILES, 
     MAP_ACTIVE_FILE, 
     MAP_TIME_VALUE, 
@@ -210,6 +214,10 @@ class MapTab(QWidget):
         self._engine_applied = ""
         self._google_key_applied = ""
 
+        # Eval JSON cache (model interp)
+        self._eval_json_path = None
+        self._eval_json_mtime = None
+        self._eval_json_obj = None
 
         self.head = MapHeadBar(parent=self)
         
@@ -355,7 +363,118 @@ class MapTab(QWidget):
 
     def set_available_columns(self, cols: Sequence[str]) -> None:
         self.head.set_available_columns(cols)
-        
+
+    def _find_eval_json(self) -> Optional[Path]:
+        p = str(self.store.get(MAP_ACTIVE_FILE, "") or "").strip()
+        if not p:
+            return None
+
+        p0 = Path(p).expanduser()
+        roots = [p0.parent]
+        for d in p0.parents:
+            roots.append(d)
+            if len(roots) >= 6:
+                break
+
+        pats = [
+            "geoprior_eval_phys_*_interpretable.json",
+            "geoprior_eval_phys_*.json",
+        ]
+
+        hits = []
+        for r in roots:
+            for pat in pats:
+                hits.extend(sorted(r.glob(pat)))
+            if hits:
+                break
+
+        if not hits:
+            return None
+
+        try:
+            return max(hits, key=lambda q: q.stat().st_mtime)
+        except Exception:
+            return hits[-1]
+
+    def _load_eval_json_cached(self) -> Optional[dict]:
+        p = self._find_eval_json()
+        if p is None:
+            self._eval_json_path = None
+            self._eval_json_mtime = None
+            self._eval_json_obj = None
+            return None
+
+        try:
+            mtime = float(p.stat().st_mtime)
+        except Exception:
+            mtime = 0.0
+
+        if (
+            self._eval_json_path == str(p)
+            and self._eval_json_mtime == mtime
+            and isinstance(self._eval_json_obj, dict)
+        ):
+            return self._eval_json_obj
+
+        try:
+            obj = json.loads(p.read_text("utf-8"))
+        except Exception:
+            self._eval_json_path = None
+            self._eval_json_mtime = None
+            self._eval_json_obj = None
+            return None
+
+        if not isinstance(obj, dict):
+            self._eval_json_path = None
+            self._eval_json_mtime = None
+            self._eval_json_obj = None
+            return None
+
+        self._eval_json_path = str(p)
+        self._eval_json_mtime = mtime
+        self._eval_json_obj = obj
+        return obj
+
+    def _model_eval_md(self) -> str:
+        m_on = bool(
+            self.store.get(
+                MAP_VIEW_INTERP_MODEL_ENABLED,
+                False,
+            )
+        )
+        if not m_on:
+            return ""
+
+        sel = self.store.get(
+            MAP_VIEW_INTERP_MODEL_BLOCKS,
+            [],
+        )
+        try:
+            selected = [
+                str(x).strip()
+                for x in list(sel)
+                if str(x).strip()
+            ]
+        except Exception:
+            selected = []
+
+        if not selected:
+            return ""
+
+        obj = self._load_eval_json_cached()
+        if obj is None:
+            return (
+                "\n## Model evaluation\n\n"
+                "*(No eval json found.)*\n"
+            )
+
+        blocks = build_model_blocks(obj)
+        return render_model_blocks_md(
+            blocks,
+            selected=selected,
+            heading="## ## Model-driven interpretation",
+        )
+
     def _format_label(
         self,
         name: str,
@@ -1843,7 +1962,118 @@ class MapTab(QWidget):
 
     def _on_measure_mode_changed(self, mode: str) -> None:
         self.store.set(MAP_MEASURE_MODE, str(mode))
-     
+
+    # ---------------------------------------------
+    # Eval JSON cache (model interpretation)
+    # ---------------------------------------------
+    def _clear_eval_cache(self) -> None:
+        self._eval_json_path = None
+        self._eval_json_mtime = None
+        self._eval_json_obj = None
+
+    # def _find_eval_json(
+    #     self,
+    #     p: Path,
+    # ) -> Optional[Path]:
+    #     pats = (
+    #         "geoprior_eval*_interpretable.json",
+    #         "geoprior_eval*.json",
+    #     )
+
+    #     for d in (p.parent, p.parent.parent):
+    #         if d is None or not d.exists():
+    #             continue
+    #         for pat in pats:
+    #             hits = sorted(d.glob(pat))
+    #             if hits:
+    #                 return hits[0]
+    #     return None
+
+    # def _load_eval_json_cached(
+    #     self,
+    #     p: Path,
+    # ) -> Optional[dict]:
+    #     jf = self._find_eval_json(p)
+    #     if jf is None:
+    #         return None
+
+    #     try:
+    #         mt = float(jf.stat().st_mtime)
+    #     except Exception:
+    #         mt = None
+
+    #     if (
+    #         self._eval_json_path == jf
+    #         and self._eval_json_mtime == mt
+    #         and isinstance(self._eval_json_obj, dict)
+    #     ):
+    #         return self._eval_json_obj
+
+    #     try:
+    #         with open(str(jf), "r", encoding="utf-8") as f:
+    #             obj = json.load(f)
+    #         if not isinstance(obj, dict):
+    #             return None
+    #     except :
+    #         return None
+
+    #     self._eval_json_path = jf
+    #     self._eval_json_mtime = mt
+    #     self._eval_json_obj = obj
+    #     return obj
+
+    # def _model_eval_md(self) -> str:
+    #     if not self.store:
+    #         return ""
+
+    #     if not bool(
+    #         self.store.get(
+    #             MAP_VIEW_INTERP_MODEL_ENABLED,
+    #             False,
+    #         )
+    #     ):
+    #         return ""
+
+    #     sel = self.store.get(
+    #         MAP_VIEW_INTERP_MODEL_BLOCKS,
+    #         [],
+    #     ) or []
+    #     sel = [
+    #         str(s).strip()
+    #         for s in list(sel)
+    #         if str(s).strip()
+    #     ]
+    #     if not sel:
+    #         return ""
+
+    #     ap = str(
+    #         self.store.get(MAP_ACTIVE_FILE, "") or ""
+    #     ).strip()
+    #     if not ap:
+    #         fs = self.store.get(MAP_SELECTED_FILES, []) or []
+    #         if fs:
+    #             ap = str(fs[0] or "").strip()
+
+    #     if not ap:
+    #         return (
+    #             "## Model-driven interpretation\n\n"
+    #             "- Note: dataset path is missing.\n"
+    #         )
+
+    #     obj = self._load_eval_json_cached(Path(ap))
+    #     if not obj:
+    #         return (
+    #             "## Model-driven interpretation\n\n"
+    #             "- Note: evaluation JSON not found near "
+    #             "the dataset file.\n"
+    #         )
+
+    #     blocks = build_model_blocks(obj)
+    #     return render_model_blocks_md(
+    #         blocks,
+    #         selected=sel,
+    #     )
+
     def _on_export_requested(self, kind: str) -> None:
         kind = str(kind or "").strip().lower()
 
@@ -1944,6 +2174,10 @@ class MapTab(QWidget):
             cfg=icfg,
             ctx=self._last_hs_ctx,
         )
+        
+        extra = self._model_eval_md()
+        if extra:
+            md = md.rstrip() + "\n\n" + extra
 
         with open(str(path), "w", encoding="utf-8") as f:
             f.write(md)
@@ -2155,6 +2389,7 @@ class MapTab(QWidget):
         self._auto_fit = True
         
         self.store.set(MAP_ACTIVE_FILE, str(path))
+        self._clear_eval_cache()
         city, model, stage = self._infer_city_from_path(path)
         self.head.set_city_badge(city=city, model=model, stage=stage)
         try:
