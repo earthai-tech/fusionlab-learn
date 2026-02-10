@@ -549,6 +549,10 @@ HEAD_MODEL_COL = (
     or "head"
 )
 
+# XXX TODO: CHeck: we need to be confident whether use SUBS_MODEL_COL/HEAD_MODEL_COL
+# or raw SUBSIDENCE_COL/GWL_COL most common name.. 
+# let try common name first:
+    
 # Stage-1 targets:
 # - subs_pred corresponds to SUBS_MODEL_COL (SI)
 # - gwl_pred corresponds to HEAD_MODEL_COL (SI) ( Stage-1 audit shows this)
@@ -2134,16 +2138,12 @@ print("Calibrator saved.")
 
 forecast_df = None
 dataset_name_for_forecast = "ValidationSet_Fallback"
-X_fore = None
-y_fore = None
 
 if X_test is not None and y_test is not None:
-    X_fore = X_test
-    y_fore = y_test
+    X_fore, y_fore = X_test, y_test
     dataset_name_for_forecast = "TestSet"
 else:
-    X_fore = X_val
-    y_fore = y_val
+    X_fore, y_fore = X_val, y_val
 
 X_fore = ensure_input_shapes(
     X_fore,
@@ -2153,74 +2153,97 @@ X_fore = ensure_input_shapes(
 y_fore_fmt = map_targets_for_training(y_fore)
 
 print(f"\nPredicting on {dataset_name_for_forecast}...")
-pred_out = model_inf.predict(X_fore, verbose=0)  # NEW: {'subs_pred': ..., 'gwl_pred': ...}
+pred_out = model_inf.predict(X_fore, verbose=0)
 
 # ------------------------------------------------------------
-# Normalize predict() output (Keras can return dict or list/tuple)
+# Normalize predict() output (Keras can return dict or list)
 # ------------------------------------------------------------
 if isinstance(pred_out, dict):
     pred_dict = pred_out
 elif isinstance(pred_out, (list, tuple)):
-    # If Keras returns a list, map by output_names when available
-    if hasattr(model_inf, "output_names") and model_inf.output_names:
-        names = list(model_inf.output_names)
-        pred_dict = {names[i]: pred_out[i] for i in range(min(len(names), len(pred_out)))}
+    names = list(getattr(model_inf, "output_names", []) or [])
+    if names:
+        pred_dict = {
+            names[i]: pred_out[i]
+            for i in range(min(len(names), len(pred_out)))
+        }
     else:
         # fallback: assume [subs_pred, gwl_pred]
         pred_dict = {"subs_pred": pred_out[0]}
         if len(pred_out) > 1:
             pred_dict["gwl_pred"] = pred_out[1]
 else:
-    raise TypeError(f"Unexpected predict() output type: {type(pred_out)}")
+    raise TypeError(
+        "Unexpected predict() output type: "
+        f"{type(pred_out)}"
+    )
 
-# Backward-compat: older checkpoints may still output 'data_final'
-if "subs_pred" not in pred_dict and "data_final" in pred_dict:
-    data_final = pred_dict["data_final"]
-    s_dim = model_inf.output_subsidence_dim
+# v3.2+ contract: explicit heads (no more `data_final`).
+if "subs_pred" not in pred_dict or "gwl_pred" not in pred_dict:
+    raise KeyError(
+        "predict() must return 'subs_pred' and "
+        "'gwl_pred'. Got keys="
+        f"{list(pred_dict.keys())}"
+    )
 
-    if QUANTILES:
-        s_pred_q_raw = data_final[..., :s_dim]   # (B,H,Q,1)
-        h_pred_q_raw = data_final[..., s_dim:]   # (B,H,Q,1)
-        s_pred_q_cal = apply_calibrator_to_subs(cal80, s_pred_q_raw)
-        predictions_for_formatter = {"subs_pred": s_pred_q_cal, "gwl_pred": h_pred_q_raw}
-    else:
-        s_pred_raw = data_final[..., :s_dim]     # (B,H,1)
-        h_pred_raw = data_final[..., s_dim:]     # (B,H,1)
-        predictions_for_formatter = {"subs_pred": s_pred_raw, "gwl_pred": h_pred_raw}
+s_pred = pred_dict["subs_pred"]
+h_pred = pred_dict["gwl_pred"]
 
+# Shapes expected for debugging:
+# - quantiles:
+#   subs_pred: (B,H,Q,O_s)  (or BQHO / BHOQ)
+#   gwl_pred : (B,H,Q,O_g)  (or BQHO / BHOQ)
+# - no quantiles:
+#   subs_pred: (B,H,O_s)
+#   gwl_pred : (B,H,O_g)
+
+if QUANTILES:
+    # Some builds return (B,H,Q) with implicit O=1.
+    s_np = np.asarray(s_pred)
+    h_np = np.asarray(h_pred)
+    if s_np.ndim == 3:
+        s_np = s_np[..., None]  # (B,H,Q,1)
+    if h_np.ndim == 3:
+        h_np = h_np[..., None]  # (B,H,Q,1)
+
+    s_pred = canonicalize_BHQO_quantiles_np(
+        s_np,
+        n_q=len(QUANTILES),
+        verbose=1,
+    )  # -> (B,H,Q,O_s)
+    h_pred = canonicalize_BHQO_quantiles_np(
+        h_np,
+        n_q=len(QUANTILES),
+        verbose=1,
+    )  # -> (B,H,Q,O_g)
+
+    # Calibrate subsidence quantiles only.
+    s_pred_cal = apply_calibrator_to_subs(cal80, s_pred)
+    s_pred_cal = canonicalize_BHQO_quantiles_np(
+        s_pred_cal,
+        n_q=len(QUANTILES),
+        verbose=0,
+    )  # -> (B,H,Q,O_s)
+
+    predictions_for_formatter = {
+        "subs_pred": s_pred_cal,
+        "gwl_pred": h_pred,
+    }
 else:
-    
-    # NEW path: call() returns {'subs_pred':..., 'gwl_pred':...}
-    s_pred = pred_dict.get("subs_pred", None)
-    h_pred = pred_dict.get("gwl_pred", None)
-    if s_pred is None or h_pred is None:
-        raise KeyError(
-            f"predict() must return 'subs_pred' and"
-            f" 'gwl_pred'. Got keys={list(pred_dict.keys())}")
-    
-    if QUANTILES:
-        s_pred = canonicalize_BHQO_quantiles_np(
-            s_pred, n_q=len(QUANTILES), verbose=1)
-        h_pred = canonicalize_BHQO_quantiles_np(
-            h_pred, n_q=len(QUANTILES), verbose=1)
-    
-
-    if QUANTILES:
-        # (B,H,Q,1) expected for subs_pred; calibrate subsidence quantiles only
-        s_pred_cal = apply_calibrator_to_subs(cal80, s_pred)
-        predictions_for_formatter = {"subs_pred": s_pred_cal, "gwl_pred": h_pred}
-    else:
-        # (B,H,1)
-        predictions_for_formatter = {"subs_pred": s_pred, "gwl_pred": h_pred}
+    predictions_for_formatter = {
+        "subs_pred": s_pred,
+        "gwl_pred": h_pred,
+    }
 
 
-if DEBUG:
+if DEBUG and QUANTILES:
     debug_quantile_crossing_np(
-        s_pred,
-        n_q=3,
+        predictions_for_formatter["subs_pred"],
+        n_q=len(QUANTILES),
         name="subs_pred",
         verbose=1,
     )
+
 
 target_mapping = {"subs_pred": SUBSIDENCE_COL, "gwl_pred": GWL_COL}
 output_dims = {"subs_pred": OUT_S_DIM, "gwl_pred": OUT_G_DIM}

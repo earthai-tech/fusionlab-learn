@@ -55,6 +55,7 @@ from .validator import is_frame
 from .subsidence_utils import (
     convert_target_units_df,
 )
+from .scale_metrics import _resolve_stage1_entry
 
 logger = fusionlog().get_fusionlab_logger(__name__)
 
@@ -811,6 +812,64 @@ def _find_scaler_block(scaler_info, keys=("targets", "target", "y")):
                 return block
     return None
 
+def _inverse_with_stage1(
+    values: np.ndarray,
+    scaler_info: dict | None,
+    *,
+    target_name: str | None,
+    scaler_name: str | None,
+) -> np.ndarray:
+    """Inverse-scale values using the stage-1 scaler schema."""
+    if scaler_info is None:
+        return np.asarray(values)
+
+    scaler, idx, n_features = _resolve_stage1_entry(
+        scaler_info,
+        target_name=target_name,
+        scaler_name=scaler_name,
+        allow_passthrough=True,
+    )
+
+    # If scaler_name points to a non-scaler entry, retry by target_name.
+    if scaler is None and target_name:
+        scaler, idx, n_features = _resolve_stage1_entry(
+            scaler_info,
+            target_name=target_name,
+            scaler_name=None,
+            allow_passthrough=True,
+        )
+
+    if scaler is None or not hasattr(scaler, "inverse_transform"):
+        return np.asarray(values)
+
+    arr = np.asarray(values, dtype=float)
+    shp = arr.shape
+    flat = arr.reshape(-1)
+
+    idx = int(idx or 0)
+    n_features = int(n_features or 1)
+
+    tmp = np.zeros((flat.size, n_features), dtype=np.float32)
+    tmp[:, idx] = flat.astype(np.float32)
+
+    try:
+        inv = scaler.inverse_transform(tmp)[:, idx]
+    except Exception:
+        return np.asarray(values)
+
+    return inv.reshape(shp)
+
+def _ensure_q_order(qmat: np.ndarray) -> np.ndarray:
+    """Ensure q_low <= q_high by flipping Q-axis if needed."""
+    qmat = np.asarray(qmat)
+    if qmat.ndim != 2 or qmat.shape[1] < 2:
+        return qmat
+    lo = np.nanmedian(qmat[:, 0])
+    hi = np.nanmedian(qmat[:, -1])
+    if np.isfinite(lo) and np.isfinite(hi) and lo > hi:
+        return qmat[:, ::-1]
+    return qmat
+
 def _inverse_with_block(values, block, col_name):
     """Inverse-transform a 1D array using a scaler block.
 
@@ -1480,51 +1539,102 @@ def format_and_forecast(
                 logger=logger,
             )
 
-    # ------------------------------------------------------------------
-    # Inverse-transform subsidence (pred + actual) using scaler_info
-    # ------------------------------------------------------------------
-    if isinstance(scaler_info, dict) and scale_name  in scaler_info:
-        # New Stage-1 schema: one entry per target (e.g. "subsidence")
-        target_block = scaler_info[scale_name]
-    else:
-        # Backwards compatibility with old "targets"/"target"/"y" schema
-        target_block = _find_scaler_block(scaler_info)
+    # # ------------------------------------------------------------------
+    # # Inverse-transform subsidence (pred + actual) using scaler_info
+    # # ------------------------------------------------------------------
+    # if isinstance(scaler_info, dict) and scale_name  in scaler_info:
+    #     # New Stage-1 schema: one entry per target (e.g. "subsidence")
+    #     target_block = scaler_info[scale_name]
+    # else:
+    #     # Backwards compatibility with old "targets"/"target"/"y" schema
+    #     target_block = _find_scaler_block(scaler_info)
 
-    # Eval
+    # # Eval
+    # if quantiles is not None:
+    #     eval_cols = []
+    #     for j in range(subs_eval_q.shape[1]):
+    #         vals = subs_eval_q[:, j].reshape(-1)
+    #         vals_inv = _inverse_with_block(vals, target_block, scale_name)
+    #         eval_cols.append(vals_inv)
+    #     subs_eval_q = np.stack(eval_cols, axis=1)  # (B, Q)
+    # else:
+    #     vals = subs_eval_q.reshape(-1)
+    #     subs_eval_q = _inverse_with_block(vals, target_block, scale_name)
+
+    # # Inverse-transform ground truth (last step + all horizons)
+    # if subs_true_eval is not None:
+    #     subs_true_eval = _inverse_with_block(
+    #         subs_true_eval.reshape(-1), target_block, scale_name
+    #     )
+
+    # if subs_true_all_flat is not None:
+    #     subs_true_all_flat = _inverse_with_block(
+    #         subs_true_all_flat.reshape(-1), target_block, scale_name
+    #     )
+
+    # # Future
+    # if quantiles is not None:
+    #     future_cols = []
+    #     for j in range(subs_future_q.shape[2]):
+    #         vals = subs_future_q[:, :, j].reshape(-1)
+    #         vals_inv = _inverse_with_block(vals, target_block, scale_name)
+    #         future_cols.append(vals_inv)
+    #     subs_future_flat = np.stack(future_cols, axis=1)  # (B*H, Q)
+    # else:
+    #     vals = subs_future_q.reshape(-1)
+    #     subs_future_flat = _inverse_with_block(
+    #         vals, target_block, scale_name
+    #     ).reshape(-1)
+    
+    # ------------------------------------------------------------------
+    # Inverse-scale subsidence (pred + actual) using Stage-1 resolver
+    # (schema-agnostic; avoids relying on block["scaler"]/["cols"]).
+    # ------------------------------------------------------------------
     if quantiles is not None:
-        eval_cols = []
-        for j in range(subs_eval_q.shape[1]):
-            vals = subs_eval_q[:, j].reshape(-1)
-            vals_inv = _inverse_with_block(vals, target_block, scale_name)
-            eval_cols.append(vals_inv)
-        subs_eval_q = np.stack(eval_cols, axis=1)  # (B, Q)
-    else:
-        vals = subs_eval_q.reshape(-1)
-        subs_eval_q = _inverse_with_block(vals, target_block, scale_name)
-
-    # Inverse-transform ground truth (last step + all horizons)
+        subs_eval_q = _ensure_q_order(subs_eval_q)
+    
+    subs_eval_q = _inverse_with_stage1(
+        subs_eval_q,
+        scaler_info,
+        target_name=scale_name,
+        scaler_name=scaler_target_name,
+    )
+    
     if subs_true_eval is not None:
-        subs_true_eval = _inverse_with_block(
-            subs_true_eval.reshape(-1), target_block, scale_name
+        subs_true_eval = _inverse_with_stage1(
+            subs_true_eval,
+            scaler_info,
+            target_name=scale_name,
+            scaler_name=scaler_target_name,
         )
-
+    
     if subs_true_all_flat is not None:
-        subs_true_all_flat = _inverse_with_block(
-            subs_true_all_flat.reshape(-1), target_block, scale_name
+        subs_true_all_flat = _inverse_with_stage1(
+            subs_true_all_flat,
+            scaler_info,
+            target_name=scale_name,
+            scaler_name=scaler_target_name,
         )
-
+    
     # Future
     if quantiles is not None:
-        future_cols = []
-        for j in range(subs_future_q.shape[2]):
-            vals = subs_future_q[:, :, j].reshape(-1)
-            vals_inv = _inverse_with_block(vals, target_block, scale_name)
-            future_cols.append(vals_inv)
-        subs_future_flat = np.stack(future_cols, axis=1)  # (B*H, Q)
+        Q = int(subs_future_q.shape[2])
+        flat = subs_future_q.reshape(-1, Q)
+        flat = _ensure_q_order(flat)
+    
+        flat = _inverse_with_stage1(
+            flat,
+            scaler_info,
+            target_name=scale_name,
+            scaler_name=scaler_target_name,
+        )
+        subs_future_flat = _ensure_q_order(flat)
     else:
-        vals = subs_future_q.reshape(-1)
-        subs_future_flat = _inverse_with_block(
-            vals, target_block, scale_name
+        subs_future_flat = _inverse_with_stage1(
+            subs_future_q.reshape(-1),
+            scaler_info,
+            target_name=scale_name,
+            scaler_name=scaler_target_name,
         ).reshape(-1)
 
     # ------------------------------------------------------------------
