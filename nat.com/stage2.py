@@ -45,7 +45,6 @@ from fusionlab.compat.keras import (
 )
 from fusionlab.registry.utils import _find_stage1_manifest
 from fusionlab.utils.nat_utils import (
-    best_epoch_and_metrics,
     build_censor_mask,
     ensure_input_shapes,
     extract_preds,
@@ -57,9 +56,10 @@ from fusionlab.utils.nat_utils import (
     name_of,
     resolve_hybrid_config,
     resolve_si_affine,
-    save_ablation_record,
-    serialize_subs_params,
-    subs_point_from_out,
+    best_epoch_and_metrics, 
+    subs_point_from_out, 
+    serialize_subs_params, 
+    save_ablation_record, 
 )
 
 from fusionlab.api.util import get_table_size
@@ -99,6 +99,7 @@ from fusionlab.nn.pinn.op import extract_physical_parameters
 from fusionlab.nn._shapes import (
     _logs_to_py,
     canonicalize_BHQO_quantiles_np,
+    canonicalize_to_BHQO_using_ytrue,
     debug_quantile_crossing_np,
     debug_tensor_interval,
     debug_val_interval,
@@ -493,25 +494,74 @@ elif MODEL_NAME == "PoroElasticSubsNet":
 
 # For "GeoPriorSubsNet" we keep whatever is in config.py
 # (typically PDE_MODE_CONFIG="both").
+# XXX TODO: RECHECK STAGE2
+# -------------------------------------------------------------------------
+# Column naming (manifest schema v3.2 compatible)
+# -------------------------------------------------------------------------
 
 # Targets & columns (for formatter)
 # cols_cfg = cfg.get("cols", {})
 # SUBSIDENCE_COL = cols_cfg.get("subsidence", "subsidence")
 # GWL_COL        = cols_cfg.get("gwl", "GWL")
 
+# cols_cfg = cfg.get("cols", {}) or {}
+
+# SUBS_MODEL_COL = cols_cfg.get("subs_model", cols_cfg.get("subsidence", "subsidence"))
+# GWL_MODEL_COL  = cols_cfg.get("gwl_model",  cols_cfg.get("gwl", "GWL"))
+# H_MODEL_COL    = cols_cfg.get("h_field_model", cols_cfg.get("h_field", "soil_thickness"))
+
+
+# #%
+# # Keep requested names only for logging/UI if you want
+# # SUBS_REQUESTED_COL = cols_cfg.get("subsidence", "subsidence")
+# # GWL_REQUESTED_COL  = cols_cfg.get("gwl", "GWL")
+# SUBSIDENCE_COL = cols_cfg.get("subsidence", "subsidence")
+# GWL_COL        = cols_cfg.get("gwl", "GWL")
+
 cols_cfg = cfg.get("cols", {}) or {}
 
-SUBS_MODEL_COL = cols_cfg.get("subs_model", cols_cfg.get("subsidence", "subsidence"))
-GWL_MODEL_COL  = cols_cfg.get("gwl_model",  cols_cfg.get("gwl", "GWL"))
-H_MODEL_COL    = cols_cfg.get("h_field_model", cols_cfg.get("h_field", "soil_thickness"))
+SUBS_RAW_COL = (
+    cols_cfg.get("subs_raw")
+    or cols_cfg.get("subsidence_raw")
+    or cols_cfg.get("subsidence")
+    or "subsidence"
+)
 
+SUBS_MODEL_COL = (
+    cols_cfg.get("subs_model")
+    or cols_cfg.get("subsidence_model")
+    or cols_cfg.get("subsidence")
+    or SUBS_RAW_COL
+)
 
-#%
-# Keep requested names only for logging/UI if you want
-# SUBS_REQUESTED_COL = cols_cfg.get("subsidence", "subsidence")
-# GWL_REQUESTED_COL  = cols_cfg.get("gwl", "GWL")
+DEPTH_MODEL_COL = (
+    cols_cfg.get("depth_model")
+    or cols_cfg.get("gwl_depth_model")
+    or cols_cfg.get("depth")
+    or "depth"
+)
+
+HEAD_MODEL_COL = (
+    cols_cfg.get("head_model")
+    or cols_cfg.get("gwl_model")
+    or cols_cfg.get("head")
+    or cols_cfg.get("gwl")
+    or "head"
+)
+
+# Stage-1 targets:
+# - subs_pred corresponds to SUBS_MODEL_COL (SI)
+# - gwl_pred corresponds to HEAD_MODEL_COL (SI) ( Stage-1 audit shows this)
+
+# SUBSIDENCE_COL = SUBS_MODEL_COL
+# GWL_COL = HEAD_MODEL_COL
 SUBSIDENCE_COL = cols_cfg.get("subsidence", "subsidence")
 GWL_COL        = cols_cfg.get("gwl", "GWL")
+
+print("[Cols] SUBS_MODEL_COL:", SUBS_MODEL_COL)
+print("[Cols] GWL target (HEAD_MODEL_COL):", HEAD_MODEL_COL)
+print("[Cols] DEPTH_MODEL_COL (driver):", DEPTH_MODEL_COL)
+
 # -------------------------------------------------------------------------
 # Resolve which *dynamic feature channel* corresponds to the GWL driver
 # (depth-to-water or head proxy) and store its index for the model.
@@ -1569,16 +1619,6 @@ else:
 # ------------------------------------------------------------
 # Compile
 # ------------------------------------------------------------
-# subs_model_inst.compile(
-#     optimizer=tf.keras.optimizers.Adam(
-#         learning_rate=LEARNING_RATE,
-#         clipnorm=1.0,
-#     ),
-#     loss=loss_dict,
-#     metrics=metrics_arg,  # None when TRACK_AUX_METRICS=True
-#     loss_weights=loss_weights_dict,
-#     **physics_loss_weights,
-# )
 subs_model_inst.compile(
     optimizer=tf.keras.optimizers.Adam(
         learning_rate=LEARNING_RATE,
@@ -1950,7 +1990,7 @@ plot_history_in(
     layout="subplots",
     savefig=os.path.join(
         RUN_OUTPUT_PATH,
-        f"{CITY_NAME}_{MODEL_NAME.lower()}_training_history_plot.png",  # add extension
+        f"{CITY_NAME}_{MODEL_NAME.lower()}_training_history_plot.png",  
     ),
 )
 
@@ -2060,7 +2100,7 @@ else:
         compile=False,
         builder=builder,
         build_inputs=build_inputs,
-        prefer_full_model=False,
+        prefer_full_model=True,
         log_fn=print,
         use_in_memory_model=False,
     )
@@ -2294,6 +2334,18 @@ ds_eval = make_tf_dataset(
     forecast_horizon=FORECAST_HORIZON_YEARS,
 )
 
+xb, yb = next(iter(ds_eval))
+out = model_inf(xb, training=False)
+sp = out["subs_pred"]
+print("subs_pred shape:", sp.shape)
+print("subs_pred static:", sp.shape)
+print("subs_pred dyn   :", tf.shape(sp).numpy())
+
+# Try both interpretations explicitly:
+sp_fix = canonicalize_to_BHQO_using_ytrue(
+    sp, yb["subs_pred"], q_values=QUANTILES
+)
+print("canonicalized shape:", sp_fix.shape)
 
 # 1) Dataset debug (safe)
 _ = debug_val_interval(
@@ -2485,9 +2537,17 @@ if (y_true is not None) and (mask is not None):
     else:
         # point-forecast: run model and collect (B,H,1) batches
         s_pred_list = []
-        for xb2, _ in with_progress(ds_eval, desc="Point preds for censor-MAE"):
+        for xb2, yb2 in with_progress(ds_eval,
+                              desc="Point preds for censor-MAE"):
             out2 = model_inf(xb2, training=False)
-            s2 = subs_point_from_out(model_inf, out2, QUANTILES, _med_idx)  # (B,H,1)
+            # s2 = subs_point_from_out(model_inf, out2, QUANTILES, _med_idx)  # (B,H,1)
+            s_pred = out2["subs_pred"]
+            s_pred = canonicalize_to_BHQO_using_ytrue(
+                    s_pred,
+                    yb2["subs_pred"],
+                    q_values=QUANTILES,
+                )
+            s2 = s_pred[:, :, int(_med_idx), :]
             s_pred_list.append(s2)
 
         if not s_pred_list:
@@ -2789,6 +2849,42 @@ except:
 # =============================================================================
 
 print("\nPlotting forecast views...")
+
+# def _as_year(df, src="coord_t", dst="year"):
+#     if df is None or df.empty or src not in df:
+#         return df
+#     out = df.copy()
+#     out[dst] = np.round(out[src]).astype(int)
+#     return out
+
+# df_eval = _as_year(df_eval)
+# df_future = _as_year(df_future)
+
+# eval_years = [int(FORECAST_START_YEAR - 1)]
+# future_years = [int(y) for y in np.round(future_grid)]
+
+# plot_eval_future(
+#     df_eval=df_eval,
+#     df_future=df_future,
+#     target_name=SUBSIDENCE_COL,
+#     quantiles=QUANTILES,
+#     spatial_cols=("coord_x", "coord_y"),
+#     time_col="year",                 # <--- changed
+#     eval_years=eval_years,
+#     future_years=future_years,
+#     eval_view_quantiles=[0.5],
+#     future_view_quantiles=QUANTILES,
+#     spatial_mode="hexbin",
+#     hexbin_gridsize=40,
+#     savefig_prefix=os.path.join(
+#         RUN_OUTPUT_PATH,
+#         f"{CITY_NAME}_subsidence_view",
+#     ),
+#     save_fmts=[".png", ".pdf"],
+#     show=False,
+#     verbose=1,
+# )
+
 try:
     plot_eval_future(
         df_eval=df_eval,

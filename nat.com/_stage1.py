@@ -65,19 +65,9 @@ from fusionlab.utils.subsidence_utils import (
     rate_to_cumulative,
     resolve_gwl_for_physics,
     resolve_head_column,
-    make_txy_coords
 )
-# from fusionlab.utils.sequence_utils import build_future_sequences_npz
-from fusionlab.utils.panel_cache import (
-    feasible_group_keys,
-    min_required_len,
-)
-from fusionlab.utils.split import (
-    SplitCfg,
-    build_group_holdout_npzs,
-    build_future_inputs_npz,
-)
-
+from fusionlab.utils.subsidence_utils import make_txy_coords
+from fusionlab.utils.sequence_utils import build_future_sequences_npz
 from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences
 
 # --- Suppress common warnings/tf chatter ---
@@ -1312,291 +1302,106 @@ print(f"  Dynamic: {dynamic_features}")
 print(f"  Future : {future_features}")
 print(f"  H_field: {H_FIELD_COL}")
 
-# # ==================================================================
-# # Step 5: Split & build TRAIN sequences
-# # ==================================================================
-# print(f"\n{'='*18} Step 5: Train Split & Sequences {'='*18}")
-# df_train = df_scaled[df_scaled[TIME_COL] <= TRAIN_END_YEAR].copy()
-# if df_train.empty:
-#     raise ValueError(f"Empty train split at year={TRAIN_END_YEAR}.")
-
-# seq_job = os.path.join(
-#     ARTIFACTS_DIR, 
-#     f"{CITY_NAME}_train_sequences_T{TIME_STEPS}_H{FORECAST_HORIZON_YEARS}.joblib"
-# )
-
-# OUT_S_DIM, OUT_G_DIM = 1, 1
-# normalize_coords = bool(NORMALIZE_COORDS)
-
-# print("gwl_col(target):", GWL_TARGET_COL)
-# print("gwl_dyn_col(driver):", GWL_DYN_COL)
-# print("dynamic_features:", dynamic_features)
-
-# inputs_train, targets_train, coord_scaler = prepare_pinn_data_sequences(
-#     df=df_train,
-#     time_col=TIME_COL_USED,
-#     lon_col=X_COL_USED,
-#     lat_col=Y_COL_USED,
-
-#     # Use SI columns for physics
-#     subsidence_col=SUBS_MODEL_COL,
-#     gwl_col=GWL_TARGET_COL,   # head_m__si  (TARGET)
-#     gwl_dyn_col=GWL_DYN_COL,     # depth__si   (DRIVER)  
-#     h_field_col=H_FIELD_COL,
-
-#     dynamic_cols=dynamic_features,
-#     static_cols=static_features,
-#     future_cols=future_features,
-#     group_id_cols=GROUP_ID_COLS,
-#     time_steps=TIME_STEPS,
-#     forecast_horizon=FORECAST_HORIZON_YEARS,
-#     output_subsidence_dim=OUT_S_DIM,
-#     output_gwl_dim=OUT_G_DIM,
-
-#     normalize_coords=normalize_coords,
-#     fit_coord_scaler=normalize_coords,
-#     return_coord_scaler=True,
-
-#     savefile=seq_job,
-#     mode=MODE,
-#     model=MODEL_NAME,
-#     verbose=2,
-# )
-
-# if targets_train["subsidence"].shape[0] == 0:
-#     raise ValueError("No training sequences were generated.")
-
-# coord_scaler_path = None
-# if normalize_coords:
-#     coord_scaler_path = os.path.join(ARTIFACTS_DIR, f"{CITY_NAME}_coord_scaler.joblib")
-#     joblib.dump(coord_scaler, coord_scaler_path)
-#     print(f"  Saved coord scaler: {coord_scaler_path}")
-# else:
-#     coord_scaler = None
-#     print("  [Coords] KEEP_COORDS_RAW=True -> coords NOT normalized; no coord_scaler saved.")
-# #%
-# # ---- DEBUG UNITS: Stage-1 target tensors ----
-
-# def _np_stats(name, a):
-#     a = np.asarray(a)
-#     print(f"[Stage1][NPZ] {name:12s} shape={a.shape} "
-#           f"min={np.nanmin(a):.4g} max={np.nanmax(a):.4g} mean={np.nanmean(a):.4g}")
-
-# _np_stats("y_subs", targets_train["subsidence"])
-# _np_stats("y_gwl",  targets_train["gwl"])
-
-# #%
-# # --------------------------------------------------------------
-# # coord ranges for chain-rule in Stage-2
-# # --------------------------------------------------------------
-
-# EPS_RNG = 1e-6
-# if normalize_coords:
-#     cmin = np.asarray(coord_scaler.data_min_, dtype=float)
-#     cmax = np.asarray(coord_scaler.data_max_, dtype=float)
-#     crng = np.maximum(cmax - cmin, EPS_RNG)
-#     coord_ranges = {
-#         "t": float(crng[0]), 
-#         "x": float(crng[1]), 
-#         "y": float(crng[2])
-#     }
-# else:
-#     coords_raw = np.asarray(inputs_train["coords"], dtype=float)
-#     coord_ranges = {
-#         "t": float(max(coords_raw[..., 0].max() - coords_raw[..., 0].min(), EPS_RNG)),
-#         "x": float(max(coords_raw[..., 1].max() - coords_raw[..., 1].min(), EPS_RNG)),
-#         "y": float(max(coords_raw[..., 2].max() - coords_raw[..., 2].min(), EPS_RNG)),
-#     }
-
-# for k, v in inputs_train.items():
-#     print(f"  Train input '{k}': {None if v is None else v.shape}")
-# for k, v in targets_train.items():
-#     print(f"  Train target '{k}': {v.shape}")
 # ==================================================================
-# Step 5: Group-holdout split (NO LEAKAGE) + export NPZ
+# Step 5: Split & build TRAIN sequences
 # ==================================================================
-print(f"\n{'='*18} Step 5: Group Holdout Split {'='*18}")
-
+print(f"\n{'='*18} Step 5: Train Split & Sequences {'='*18}")
 df_train = df_scaled[df_scaled[TIME_COL] <= TRAIN_END_YEAR].copy()
 if df_train.empty:
-    raise ValueError(
-        f"Empty train split at year={TRAIN_END_YEAR}."
-    )
-    
+    raise ValueError(f"Empty train split at year={TRAIN_END_YEAR}.")
+
 seq_job = os.path.join(
     ARTIFACTS_DIR, 
     f"{CITY_NAME}_train_sequences_T{TIME_STEPS}_H{FORECAST_HORIZON_YEARS}.joblib"
 )
 
 OUT_S_DIM, OUT_G_DIM = 1, 1
+normalize_coords = bool(NORMALIZE_COORDS)
 
 print("gwl_col(target):", GWL_TARGET_COL)
 print("gwl_dyn_col(driver):", GWL_DYN_COL)
 print("dynamic_features:", dynamic_features)
-# ---- Feasible group keys (must have >= T+H time points) ----
-min_len = min_required_len(
-    int(TIME_STEPS),
-    int(FORECAST_HORIZON_YEARS),
-)
 
-keys_ok = feasible_group_keys(
-    df_train,
-    group_cols=GROUP_ID_COLS,     # e.g. [lon, lat]
-    time_col=TIME_COL,            # year column is best here
-    min_len=min_len,
-    decimals=8,
-)
+inputs_train, targets_train, coord_scaler = prepare_pinn_data_sequences(
+    df=df_train,
+    time_col=TIME_COL_USED,
+    lon_col=X_COL_USED,
+    lat_col=Y_COL_USED,
 
-print(
-    f"[Split] min_len={min_len}  "
-    f"feasible_groups={keys_ok.size}"
-)
-
-if keys_ok.size < 3:
-    raise ValueError(
-        "Need >= 3 feasible groups to build train/val/test."
-    )
-
-keys_ok_path = os.path.join(
-    ARTIFACTS_DIR,
-    "keys_ok.npy",
-)
-np.save(keys_ok_path, keys_ok, allow_pickle=True)
-print(f"[Split] Saved feasible keys: {keys_ok_path}")
-
-# ---- Split config (optionally expose in cfg) ----
-split_seed = int(cfg.get("SPLIT_SEED", 42))
-split_ratios = tuple(cfg.get(
-    "SPLIT_RATIOS", (0.7, 0.15, 0.15)
-))
-cfg_split = SplitCfg(
-    seed=split_seed,
-    ratios=split_ratios,
-    decimals=8,
-)
-
-# ---- Build split NPZs (each NPZ contains X + Y) ----
-normalize_coords = bool(NORMALIZE_COORDS)
-
-res_split = build_group_holdout_npzs(
-    df_train=df_train,
-    artifacts_dir=ARTIFACTS_DIR,
-    group_cols=GROUP_ID_COLS,
-
-    time_col_used=TIME_COL_USED,
-    x_col_used=X_COL_USED,
-    y_col_used=Y_COL_USED,
-
-    subs_col=SUBS_MODEL_COL,
-    gwl_target_col=GWL_TARGET_COL,
-    gwl_dyn_col=GWL_DYN_COL,
+    # Use SI columns for physics
+    subsidence_col=SUBS_MODEL_COL,
+    gwl_col=GWL_TARGET_COL,   # head_m__si  (TARGET)
+    gwl_dyn_col=GWL_DYN_COL,     # depth__si   (DRIVER)  
     h_field_col=H_FIELD_COL,
 
-    static_cols=static_features,
     dynamic_cols=dynamic_features,
+    static_cols=static_features,
     future_cols=future_features,
+    group_id_cols=GROUP_ID_COLS,
+    time_steps=TIME_STEPS,
+    forecast_horizon=FORECAST_HORIZON_YEARS,
+    output_subsidence_dim=OUT_S_DIM,
+    output_gwl_dim=OUT_G_DIM,
 
-    time_steps=int(TIME_STEPS),
-    horizon=int(FORECAST_HORIZON_YEARS),
-    mode=str(MODE),
-    model_name=str(MODEL_NAME),
-
-    train_end=float(TRAIN_END_YEAR),
-    keys_ok=keys_ok,
-    cfg=cfg_split,
     normalize_coords=normalize_coords,
+    fit_coord_scaler=normalize_coords,
+    return_coord_scaler=True,
+
+    savefile=seq_job,
+    mode=MODE,
+    model=MODEL_NAME,
+    verbose=2,
 )
 
-splits_groups_json = res_split["splits_groups_json"]
-train_windows_npz = res_split["train_windows_npz"]
-val_windows_npz = res_split["val_windows_npz"]
-test_windows_npz = res_split["test_windows_npz"]
-coord_scaler = res_split["coord_scaler"]
+if targets_train["subsidence"].shape[0] == 0:
+    raise ValueError("No training sequences were generated.")
 
-print("[Split] Saved:")
-print("  train:", train_windows_npz)
-print("  val  :", val_windows_npz)
-print("  test :", test_windows_npz)
-print("  json :", splits_groups_json)
-
-# ---- Safety debug: no group overlap ----
-with open(splits_groups_json, "r", encoding="utf-8") as f:
-    _sp = json.load(f)
-tr = set(_sp["splits"]["train"])
-va = set(_sp["splits"]["val"])
-te = set(_sp["splits"]["test"])
-
-if (tr & va) or (tr & te) or (va & te):
-    raise RuntimeError(
-        "[Split] Group overlap detected across splits!"
-    )
-
-# ---- Save coord_scaler (train-fit) ----
 coord_scaler_path = None
-if normalize_coords and coord_scaler is not None:
-    coord_scaler_path = os.path.join(
-        ARTIFACTS_DIR,
-        f"{CITY_NAME}_coord_scaler.joblib",
-    )
+if normalize_coords:
+    coord_scaler_path = os.path.join(ARTIFACTS_DIR, f"{CITY_NAME}_coord_scaler.joblib")
     joblib.dump(coord_scaler, coord_scaler_path)
     print(f"  Saved coord scaler: {coord_scaler_path}")
 else:
     coord_scaler = None
-    print(
-        "  [Coords] coords NOT normalized; "
-        "no coord_scaler saved."
-    )
+    print("  [Coords] KEEP_COORDS_RAW=True -> coords NOT normalized; no coord_scaler saved.")
+#%
+# ---- DEBUG UNITS: Stage-1 target tensors ----
 
-# ---- Load TRAIN arrays (for audit + manifest shapes) ----
-npz_tr = np.load(train_windows_npz)
-inputs_train = {
-    "coords": npz_tr["coords"],
-    "dynamic_features": npz_tr["dynamic_features"],
-    "static_features": npz_tr["static_features"],
-    "future_features": npz_tr["future_features"],
-    "H_field": npz_tr["H_field"],
-}
-targets_train = {
-    "subsidence": npz_tr["subs_pred"],
-    "gwl": npz_tr["gwl_pred"],
-}
+def _np_stats(name, a):
+    a = np.asarray(a)
+    print(f"[Stage1][NPZ] {name:12s} shape={a.shape} "
+          f"min={np.nanmin(a):.4g} max={np.nanmax(a):.4g} mean={np.nanmean(a):.4g}")
 
-# ---- coord ranges for chain-rule in Stage-2 ----
+_np_stats("y_subs", targets_train["subsidence"])
+_np_stats("y_gwl",  targets_train["gwl"])
+
+#%
+# --------------------------------------------------------------
+# coord ranges for chain-rule in Stage-2
+# --------------------------------------------------------------
+
 EPS_RNG = 1e-6
-if normalize_coords and coord_scaler is not None:
-    cmin = np.asarray(coord_scaler.data_min_, float)
-    cmax = np.asarray(coord_scaler.data_max_, float)
+if normalize_coords:
+    cmin = np.asarray(coord_scaler.data_min_, dtype=float)
+    cmax = np.asarray(coord_scaler.data_max_, dtype=float)
     crng = np.maximum(cmax - cmin, EPS_RNG)
     coord_ranges = {
-        "t": float(crng[0]),
-        "x": float(crng[1]),
-        "y": float(crng[2]),
+        "t": float(crng[0]), 
+        "x": float(crng[1]), 
+        "y": float(crng[2])
     }
 else:
-    coords_raw = np.asarray(inputs_train["coords"], float)
+    coords_raw = np.asarray(inputs_train["coords"], dtype=float)
     coord_ranges = {
-        "t": float(max(
-            coords_raw[..., 0].max()
-            - coords_raw[..., 0].min(),
-            EPS_RNG,
-        )),
-        "x": float(max(
-            coords_raw[..., 1].max()
-            - coords_raw[..., 1].min(),
-            EPS_RNG,
-        )),
-        "y": float(max(
-            coords_raw[..., 2].max()
-            - coords_raw[..., 2].min(),
-            EPS_RNG,
-        )),
+        "t": float(max(coords_raw[..., 0].max() - coords_raw[..., 0].min(), EPS_RNG)),
+        "x": float(max(coords_raw[..., 1].max() - coords_raw[..., 1].min(), EPS_RNG)),
+        "y": float(max(coords_raw[..., 2].max() - coords_raw[..., 2].min(), EPS_RNG)),
     }
 
-print("[Train windows]")
 for k, v in inputs_train.items():
-    print(f"  X[{k}]: {v.shape}")
+    print(f"  Train input '{k}': {None if v is None else v.shape}")
 for k, v in targets_train.items():
-    print(f"  Y[{k}]: {v.shape}")
+    print(f"  Train target '{k}': {v.shape}")
 
 # --------------------------------------------------------------
 # Stage-1 Audit (coords + scaling + feature split + SI sanity)
@@ -1644,14 +1449,6 @@ if should_audit(AUDIT_STAGES, stage="stage1"):
         main_scaler_path=scaler_path,
         scaler_info=scaler_info,
     )
-
-# ==================================================================
-# Step 6: (removed) window-level random split
-# ==================================================================
-print(
-    "\n[Info] Step-6 window-level random split is DISABLED.\n"
-    "       Using group-holdout split to prevent leakage."
-)
 
 #%
 # ==================================================================
@@ -1710,6 +1507,7 @@ _save_npz(val_targets_npz, val_np_y)
 
 print(f"  Saved NPZs:\n    {train_inputs_npz}\n    {train_targets_npz}\n"
       f"    {val_inputs_npz}\n    {val_targets_npz}")
+
 
 
 # ==================================================================
@@ -1963,7 +1761,6 @@ manifest = {
             "val_inputs_npz": val_inputs_npz,
             "val_targets_npz": val_targets_npz,
         },
-        
         # shapes are helpful but do not define truth (derived from arrays)
         "shapes": {
             "train_inputs": {k: list(v.shape) for k, v in train_np_x.items()},
@@ -1987,27 +1784,6 @@ manifest = {
     },
 }
 
-manifest["artifacts"]["splits"] = {
-    "splits_groups_json": splits_groups_json,
-    "keys_ok_npy": keys_ok_path,
-    "split_seed": split_seed,
-    "split_ratios": list(split_ratios),
-}
-
-manifest["artifacts"]["numpy"].update({
-    "train_windows_npz": train_windows_npz,
-    "val_windows_npz": val_windows_npz,
-    "test_windows_npz": test_windows_npz,
-})
-def _npz_shapes(path: str) -> dict:
-    z = np.load(path)
-    return {k: list(z[k].shape) for k in z.files}
-
-manifest["artifacts"]["shapes"].update({
-    "train_windows": _npz_shapes(train_windows_npz),
-    "val_windows": _npz_shapes(val_windows_npz),
-    "test_windows": _npz_shapes(test_windows_npz),
-})
 
 # === Step 5b: Build TEST sequences (temporal generalization) ===
 df_test = df_scaled[df_scaled[TIME_COL] >= FORECAST_START_YEAR].copy()
@@ -2081,13 +1857,13 @@ if not df_test.empty:
          pass 
 
 # === Step 7: Build *true future* sequences (for Stage-3) ===
-future_npz_path = None
+
+future_npz_paths = None
 if BUILD_FUTURE_NPZ:
     print(f"\n{'='*18} Step 7: Future Sequences {'='*18}")
     try:
-        future_npz_path = build_future_inputs_npz(
+        future_npz_paths = build_future_sequences_npz(
             df_scaled=df_scaled,
-            artifacts_dir=ARTIFACTS_DIR,
             time_col=TIME_COL,
             time_col_num=TIME_COL_NUM,
             lon_col=COORD_X_COL,
@@ -2098,65 +1874,28 @@ if BUILD_FUTURE_NPZ:
             static_features=static_features,
             dynamic_features=dynamic_features,
             future_features=future_features,
-            group_cols=GROUP_ID_COLS,
+            group_id_cols=GROUP_ID_COLS,
             train_end_time=TRAIN_END_YEAR,
             forecast_start_time=FORECAST_START_YEAR,
-            horizon=FORECAST_HORIZON_YEARS,
+            forecast_horizon=FORECAST_HORIZON_YEARS,
             time_steps=TIME_STEPS,
             mode=MODE,
             model_name=MODEL_NAME,
-            normalize_coords=normalize_coords,
-            coord_scaler=coord_scaler,
+            artifacts_dir=ARTIFACTS_DIR,
+            prefix="future",
+            normalize_coords=normalize_coords,     
+            coord_scaler=coord_scaler,            
+            verbose=7,
         )
-        
-        print(f"  Saved future inputs: {future_npz_path}")
+        # Attach future_* NPZ paths into the manifest
+        manifest["artifacts"]["numpy"].update(future_npz_paths)
     except Exception as e:
         print(
-            f"  [Warn] BUILD_FUTURE_NPZ=True failed: {e}\n"
-            "        Continuing without future inputs NPZ."
+            f"  [Warn] BUILD_FUTURE_NPZ=True but construction failed: {e}\n"
+            "        Continuing without future_* NPZs."
         )
 
-# future_npz_paths = None
-# if BUILD_FUTURE_NPZ:
-#     print(f"\n{'='*18} Step 7: Future Sequences {'='*18}")
-#     try:
-#         future_npz_paths = build_future_sequences_npz(
-#             df_scaled=df_scaled,
-#             time_col=TIME_COL,
-#             time_col_num=TIME_COL_NUM,
-#             lon_col=COORD_X_COL,
-#             lat_col=COORD_Y_COL,
-#             subs_col=SUBS_MODEL_COL,
-#             gwl_col=GWL_TARGET_COL,
-#             h_field_col=H_FIELD_COL,
-#             static_features=static_features,
-#             dynamic_features=dynamic_features,
-#             future_features=future_features,
-#             group_id_cols=GROUP_ID_COLS,
-#             train_end_time=TRAIN_END_YEAR,
-#             forecast_start_time=FORECAST_START_YEAR,
-#             forecast_horizon=FORECAST_HORIZON_YEARS,
-#             time_steps=TIME_STEPS,
-#             mode=MODE,
-#             model_name=MODEL_NAME,
-#             artifacts_dir=ARTIFACTS_DIR,
-#             prefix="future",
-#             normalize_coords=normalize_coords,     
-#             coord_scaler=coord_scaler,            
-#             verbose=7,
-#         )
-#         # Attach future_* NPZ paths into the manifest
-#         manifest["artifacts"]["numpy"].update(future_npz_paths)
-#     except Exception as e:
-#         print(
-#             f"  [Warn] BUILD_FUTURE_NPZ=True but construction failed: {e}\n"
-#             "        Continuing without future_* NPZs."
-#         )
 
-# Attach future_* NPZ paths into the manifest
-if future_npz_path is not None:
-    manifest["artifacts"]["numpy"]["future_inputs_npz"] = future_npz_path
-    
 manifest_path = os.path.join(RUN_OUTPUT_PATH, "manifest.json")
 with open(manifest_path, "w", encoding="utf-8") as f:
     json.dump(manifest, f, indent=2)

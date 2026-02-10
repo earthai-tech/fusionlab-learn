@@ -2073,8 +2073,9 @@ class GeoPriorSubsNet(BaseAttentive):
         #   - Warm mode: allow_missing_targets=True => warn once and continue
         #
         # TODO:
-        #   Consider adding a stage5 manifest/audit line that records which
-        #   heads were supervised vs. unsupervised during warm-start.
+        #   Consider adding a stage5 (transferrability) manifest/audit line 
+        #   that records which heads were supervised vs. unsupervised 
+        #   during warm-start.
     
         targets = _canonicalize_targets(targets)
         targets = self._order_by_output_keys(targets)
@@ -2131,7 +2132,7 @@ class GeoPriorSubsNet(BaseAttentive):
             y_pred = {k: y_pred[k] for k in self.output_names}
             
             # --------------------------------------------------
-            # 2) Data loss (compiled)
+            # 2) Data loss (compiled)[old]
             # --------------------------------------------------
             # targets_aligned = {
             #     k: _align_true_for_loss(targets[k], y_pred[k])
@@ -2148,7 +2149,7 @@ class GeoPriorSubsNet(BaseAttentive):
             # )
             
             # --------------------------------------------------
-            # 2) Data loss (compiled)
+            # 2) Data loss (compiled) [new]
             # --------------------------------------------------
             # XXX: OLD (STRICT) - crashes if a head target is missing:
             # targets = {k: targets[k] for k in self.output_names}

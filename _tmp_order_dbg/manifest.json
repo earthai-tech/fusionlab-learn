@@ -1,0 +1,11 @@
+{
+  "horizon": 3,
+  "note": "toy manifest for output-order debug",
+  "quantiles": [
+    0.1,
+    0.25,
+    0.5,
+    0.75,
+    0.9
+  ]
+}

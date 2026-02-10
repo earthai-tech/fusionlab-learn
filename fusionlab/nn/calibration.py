@@ -3,6 +3,9 @@ import numpy as np
 
 from .._optdeps import with_progress 
 from ..utils.validator import check_is_fitted 
+from ._shapes import (
+    canonicalize_to_BHQO_using_ytrue,
+)
 from . import KERAS_DEPS
 
 tf_concat=KERAS_DEPS.concat 
@@ -345,6 +348,7 @@ def fit_interval_calibrator_on_val(
     ds_val,
     target=0.80,
     log_fn=None,
+    q_values =None, 
     **tqdm_kws,
 ):
     r"""
@@ -417,6 +421,14 @@ def fit_interval_calibrator_on_val(
 
         s_pred = _extract_subs_pred(model, out)
 
+        # Disambiguate BHQO vs BQHO when H == Q (e.g. 3 and 3).
+        if q_values is not None:
+            s_pred = canonicalize_to_BHQO_using_ytrue(
+                s_pred,
+                y["subs_pred"],
+                q_values=(0.1, 0.5, 0.9),
+            )
+ 
         rank = getattr(getattr(s_pred, "shape", None), "rank", None)
         if rank is not None and rank != 4:
             raise ValueError(

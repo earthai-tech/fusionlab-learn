@@ -911,10 +911,10 @@ if __name__ == "__main__":
     # )
     plot_sm3_identifiability_v32(
         csv,
-        "figs/sm3_both_clean.png",
+        "figs/sm3_both_clean_from_tau.png",
         only_identify="both",
         nx_min=5,
-        k_from_tau=False,
-        show_stats_text=False,
-        show_legend=False,
+        k_from_tau=True,
+        show_stats_text=True,
+        show_legend=True,
     )

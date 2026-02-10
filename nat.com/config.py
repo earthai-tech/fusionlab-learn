@@ -271,6 +271,15 @@ USE_EFFECTIVE_H_FIELD = True
 # If True, Stage-1 may pre-build future_* NPZ blocks for Stage-3 scenarios.
 BUILD_FUTURE_NPZ = False
 
+# ========================================================
+#   HOLD OUT STRATEGY 
+# =========================================================
+
+SPLIT_SEED = 42 
+VAL_FRAC = 0.2 
+TEST_FRAC = 0.1 
+HOLDOUT_STRATEGY = "random" 
+HOLDOUT_BLOCK_M = 2000.0 
 
 # ===================================================================
 # 4) MODEL ARCHITECTURE DEFAULTS (Stage-2)
@@ -337,10 +346,10 @@ SCALE_PDE_RESIDUALS = True
 # -------------------------------------------------------------------
 LAMBDA_CONS   = 1.0     # from 0.10 (×10)
 LAMBDA_GW     = 0.10    # from 0.005 (×10) # 0.005 # Increased from 0.05 to force head fitting
-LAMBDA_PRIOR  = 0.5   # keep/raise if K,Ss collapse # 0.05 # # Increased: strongly enforce tau = Ss*H^2/K
-LAMBDA_SMOOTH = 0.05  # # Help reduce noise in K/Ss fields # 0.01
+LAMBDA_PRIOR  = 0.2   # keep/raise if K,Ss collapse # 0.05 # # Increased: strongly enforce tau = Ss*H^2/K
+LAMBDA_SMOOTH = 0.01  # # Help reduce noise in K/Ss fields # 0.01
 LAMBDA_MV     = .01 #0.005
-LAMBDA_BOUNDS = 1. # 1e-3   # from 1e-4 1e-4 # # Strong penalty for soft bounds
+LAMBDA_BOUNDS = 0.05    # was 1.0 (too dominant)   # from 1e-4 1e-4 # # Strong penalty for soft bounds
 LAMBDA_Q      = 0.0
 
 # -------------------------------------------------------------------
@@ -365,7 +374,7 @@ LAMBDA_OFFSET_WHEN = "begin"   # {"begin", "end"}
 
 # If LAMBDA_OFFSET_SCHEDULE is None, callback uses warmup:
 # start -> end over `LAMBDA_OFFSET_WARMUP` epochs/steps.
-LAMBDA_OFFSET_WARMUP =20 # 1 # # 1–2 epochs (not 5) # Sync with Q_WARMUP
+LAMBDA_OFFSET_WARMUP = 5 # 20 # 1 # # 1–2 epochs (not 5) # Sync with Q_WARMUP
 
 # Safe defaults:
 # - start small so the model learns data scale before physics locks in
@@ -374,7 +383,7 @@ LAMBDA_OFFSET_WARMUP =20 # 1 # # 1–2 epochs (not 5) # Sync with Q_WARMUP
 # End at 1.0 -> Physics balances data.
 
 LAMBDA_OFFSET_START =0.1 # 2.0 # 0.2 # 0.05
-LAMBDA_OFFSET_END = 1.0 # 10 #1.0
+LAMBDA_OFFSET_END = 10 #1.0
 
 # Optional explicit schedule:
 # - dict  : {index: value} where index is epoch/step
@@ -424,8 +433,8 @@ TRAINING_STRATEGY = "physics_first"
  
 # --- Physics-first ------------------------------------
 Q_POLICY_PHYSICS_FIRST = "warmup_off"   # or "always_off" for NO Q ever
-Q_WARMUP_EPOCHS_PHYSICS_FIRST = 20      # Wait 20 epochs (assuming 100 total)
-Q_RAMP_EPOCHS_PHYSICS_FIRST = 10         # 0 => hard step # Smooth transition
+Q_WARMUP_EPOCHS_PHYSICS_FIRST = 5       # Wait 20 epochs (assuming 100 total)
+Q_RAMP_EPOCHS_PHYSICS_FIRST = 5         # 0 => hard step # Smooth transition
 
 # Keep Q regularization small even in physics-first (post-warmup).
 # (This is multiplied by your global physics offset as well.)
@@ -434,8 +443,8 @@ LAMBDA_Q_PHYSICS_FIRST = 1e-5
 LOSS_WEIGHT_GWL_PHYSICS_FIRST =0.5 # 0.05 1.0
 
 SUBS_RESID_POLICY_PHYSICS_FIRST = "warmup_off"
-SUBS_RESID_WARMUP_EPOCHS_PHYSICS_FIRST = 15 # 5
-SUBS_RESID_RAMP_EPOCHS_PHYSICS_FIRST = 10 # 0 => hard step
+SUBS_RESID_WARMUP_EPOCHS_PHYSICS_FIRST = 5 # 15 # 5
+SUBS_RESID_RAMP_EPOCHS_PHYSICS_FIRST = 5 # 10 # 0 => hard step
  
 # --- Data-first (uncomment to use) ---------------------
 # TRAINING_STRATEGY = "data_first"
@@ -521,7 +530,7 @@ DEBUG_PHYSICS_GRADS =False
 #
 # CONS_RELU_BETA:
 # - Curvature control for smooth_relu. Larger -> closer to hard relu.
-CONS_DRAWDOWN_MODE = "softplus"
+CONS_DRAWDOWN_MODE = "smooth_relu"  # "softplus"
 CONS_DRAWDOWN_RULE = "ref_minus_mean"
 CONS_STOP_GRAD_REF = True
 CONS_DRAWDOWN_ZERO_AT_ORIGIN = False
@@ -613,8 +622,11 @@ GEOPRIOR_H_REF = "auto"   # or 0.0
 CONSOLIDATION_STEP_RESIDUAL_METHOD = "exact"
 CONSOLIDATION_RESIDUAL_UNITS ="second"
 
-CONS_SCALE_FLOOR ="auto"
-GW_SCALE_FLOOR ="auto"
+CONS_SCALE_FLOOR =3e-11      # ~1 mm/year in m/s # "auto"
+# GW_SCALE_FLOOR ="auto"
+GW_RESIDUAL_UNITS = "second"
+GW_SCALE_FLOOR = 1e-12        # safer than 1e-9; keeps GW residual visible
+
 ALLOW_SUBS_RESIDUAL =True 
 
 DT_MIN_UNITS = 1e-6
@@ -634,7 +646,7 @@ CLIP_GLOBAL_NORM = 5.0
 # ===================================================================
 # 7) TRAINING LOOP DEFAULTS (non-tuner runs)
 # ===================================================================
-EPOCHS = 50           # Recommended: 50 to 200
+EPOCHS = 1           # Recommended: 50 to 200
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-3   # Slightly higher start, let Adam decay it
 
@@ -670,7 +682,7 @@ USE_TF_SAVEDMODEL = False  # Set to False to use the default weight-based saving
 USE_IN_MEMORY_MODEL = False # True  # Change to True for in-memory usage
 
 # If True, enable debug information during training and evaluation.
-DEBUG = False  # Enable or disable debugging
+DEBUG = True  # Enable or disable debugging
 
 # ---------------------------------------------------------------------
 # Auditing (Stage-1 / Stage-2 pipeline sanity checks)

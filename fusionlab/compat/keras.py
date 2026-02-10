@@ -490,38 +490,73 @@ def load_model_from_tf(
     return keras.Model(inp, out, name="tfsm_inference")
 
 def load_inference_model(
-    keras_path: Optional[str] = None,
-    weights_path: Optional[str] = None,
-    manifest_path: Optional[str] = None,
-    custom_objects: Optional[Dict[str, Any]] = None,
-    compile: bool = False,
-    builder: Optional[Callable[[Dict[str, Any]], Any]] = None,
-    build_inputs: Optional[Any] = None,
-    prefer_full_model: bool = True,
+    *,
+    keras_path=None,
+    weights_path=None,
+    manifest_path=None,
+    custom_objects=None,
+    compile=False,
+    builder=None,
+    build_inputs=None,
+    prefer_full_model=True,
     log_fn=print,
-    use_in_memory_model: bool = False,
+    use_in_memory_model=False,
+    in_memory_model=None,
 ):
-    """Load the model for inference based on the configuration."""
-
     if use_in_memory_model:
-        print("[INFO] Using in-memory model.")
-        # Use the in-memory model (no need to load from disk)
-        model = builder(load_manifest(manifest_path))
-        model.build(build_inputs)  # Ensure the model is built for inference
-    else:
-        # Default behavior: Load the model from disk
-        model = load_bundle_for_inference(
-            keras_path=keras_path,
-            weights_path=weights_path,
-            manifest_path=manifest_path,
-            custom_objects=custom_objects,
-            compile=compile,
-            builder=builder,
-            build_inputs=build_inputs,
-            prefer_full_model=prefer_full_model,
-            log_fn=log_fn,
-        )
-    return model
+        if in_memory_model is None:
+            raise ValueError(
+                "use_in_memory_model=True requires "
+                "in_memory_model."
+            )
+        return in_memory_model
+
+    return load_bundle_for_inference(
+        keras_path=keras_path,
+        weights_path=weights_path,
+        manifest_path=manifest_path,
+        custom_objects=custom_objects,
+        compile=compile,
+        builder=builder,
+        build_inputs=build_inputs,
+        prefer_full_model=prefer_full_model,
+        log_fn=log_fn,
+    )
+
+
+# def load_inference_model(
+#     keras_path: Optional[str] = None,
+#     weights_path: Optional[str] = None,
+#     manifest_path: Optional[str] = None,
+#     custom_objects: Optional[Dict[str, Any]] = None,
+#     compile: bool = False,
+#     builder: Optional[Callable[[Dict[str, Any]], Any]] = None,
+#     build_inputs: Optional[Any] = None,
+#     prefer_full_model: bool = True,
+#     log_fn=print,
+#     use_in_memory_model: bool = False,
+# ):
+#     """Load the model for inference based on the configuration."""
+
+#     if use_in_memory_model:
+#         print("[INFO] Using in-memory model.")
+#         # Use the in-memory model (no need to load from disk)
+#         model = builder(load_manifest(manifest_path))
+#         model.build(build_inputs)  # Ensure the model is built for inference
+#     else:
+#         # Default behavior: Load the model from disk
+#         model = load_bundle_for_inference(
+#             keras_path=keras_path,
+#             weights_path=weights_path,
+#             manifest_path=manifest_path,
+#             custom_objects=custom_objects,
+#             compile=compile,
+#             builder=builder,
+#             build_inputs=build_inputs,
+#             prefer_full_model=prefer_full_model,
+#             log_fn=log_fn,
+#         )
+#     return model
 
 def load_bundle_for_inference(
     *,
@@ -533,6 +568,7 @@ def load_bundle_for_inference(
     builder: Builder = None,
     build_inputs: Optional[Any] = None,
     prefer_full_model: bool = True,
+    allow_partial=False,
     log_fn: LogFn = None,
 ) -> Any:
     """
@@ -645,15 +681,19 @@ def load_bundle_for_inference(
             "weights_path is required for weights "
             "fallback."
         )
-
+    
+    # TF may return a status object with these methods
     status = model.load_weights(weights_path)
 
-    # TF may return a status object with these methods
-    if hasattr(status, "expect_partial"):
-        status.expect_partial()
-    elif hasattr(status, "assert_consumed"):
-        status.assert_consumed()
-
+    if not allow_partial:
+        if hasattr(status, "assert_consumed"):
+            status.assert_consumed()
+        elif hasattr(status, "assert_existing_objects_matched"):
+            status.assert_existing_objects_matched()
+    else:
+        if hasattr(status, "expect_partial"):
+            status.expect_partial()
+            
     return model
 
 def load_model(

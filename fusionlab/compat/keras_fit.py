@@ -91,6 +91,7 @@ def _as_BHO(y_true: Tensor, y_pred: Tensor | None = None):
             y = y[:, :, 0, :]
 
     return tf_cast(y, tf_float32)
+
 # ---------------------------------------------------------------------
 # Targets (missing-output placeholder)
 # ---------------------------------------------------------------------

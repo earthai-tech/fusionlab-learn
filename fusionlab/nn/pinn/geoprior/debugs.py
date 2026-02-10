@@ -106,7 +106,135 @@ def _extract_output(model: Any, out: Any, key: str):
     raise TypeError(f"Unexpected model output type: {type(out)}")
 
 
+def _weight_key(
+    w: Any,
+    occ: int,
+) -> str:
+    """
+    Build a stable, mostly-unique key for a weight.
+
+    Priority:
+      1) Keras weight `path` (unique, best)
+      2) name + occurrence index (fallback)
+    """
+    p = getattr(w, "path", None)
+    if p:
+        return f"path:{p}"
+    n = getattr(w, "name", "<noname>")
+    return f"name:{n}#{occ}"
+
+
+def _index_weights(
+    model: Any,
+) -> Tuple[
+    Dict[str, Any],
+    Dict[str, str],
+    List[str],
+]:
+    """
+    Index model weights.
+
+    Returns:
+      wmap: key -> weight
+      nmap: key -> original name
+      keys: keys in traversal order
+    """
+    weights = list(getattr(model, "weights", []) or [])
+    counts: Dict[str, int] = {}
+    wmap: Dict[str, Any] = {}
+    nmap: Dict[str, str] = {}
+    keys: List[str] = []
+
+    for w in weights:
+        name = getattr(w, "name", "<noname>")
+        occ = counts.get(name, 0)
+        counts[name] = occ + 1
+
+        key = _weight_key(w, occ)
+        wmap[key] = w
+        nmap[key] = name
+        keys.append(key)
+
+    return wmap, nmap, keys
+
 def weight_diff_report(
+    m1: Any,
+    m2: Any,
+    *,
+    top: int = 30,
+    include_ok: bool = False,
+    include_extra: bool = False,
+) -> List[Tuple[float, str, str, Any]]:
+    """
+    Compare weights between two models using stable keys.
+
+    Each row is:
+      (max_abs_diff or inf, tag, weight_id, shape_info)
+
+    Where tag in:
+      {"OK", "MISSING", "SHAPE", "EXTRA"}
+
+    Notes
+    -----
+    - Uses w.path when available (best).
+    - Otherwise uses name + occurrence index.
+    - Set top<=0 to return all rows.
+    """
+    w1, n1, k1 = _index_weights(m1)
+    w2, n2, k2 = _index_weights(m2)
+
+    rows: List[Tuple[float, str, str, Any]] = []
+
+    # --- compare m1 -> m2
+    for key in k1:
+        a_w = w1[key]
+        a_name = n1[key]
+        wid = f"{a_name} | {key}"
+
+        if key not in w2:
+            shp = tuple(getattr(a_w, "shape", ()))
+            rows.append((np.inf, "MISSING", wid, shp))
+            continue
+
+        b_w = w2[key]
+
+        a = _to_numpy(a_w)
+        b = _to_numpy(b_w)
+
+        if a.shape != b.shape:
+            rows.append((np.inf, "SHAPE", wid, (a.shape, b.shape)))
+            continue
+
+        if a.size:
+            d = float(np.nanmax(np.abs(a - b)))
+            if np.isnan(d):
+                d = float(np.inf)
+        else:
+            d = 0.0
+
+        if include_ok or d > 0.0:
+            rows.append((d, "OK", wid, a.shape))
+
+    # --- optionally report m2 extras
+    if include_extra:
+        k1_set = set(k1)
+        for key in k2:
+            if key in k1_set:
+                continue
+            b_w = w2[key]
+            b_name = n2[key]
+            wid = f"{b_name} | {key}"
+            shp = tuple(getattr(b_w, "shape", ()))
+            rows.append((np.inf, "EXTRA", wid, shp))
+
+    # Sort with inf first, then by diff desc
+    rows.sort(key=lambda x: (np.isfinite(x[0]), x[0]), reverse=True)
+
+    if top is None or int(top) <= 0:
+        return rows
+    return rows[: int(top)]
+
+def _weight_diff_report(
     m1: Any,
     m2: Any,
     *,
@@ -211,9 +339,24 @@ def debug_model_reload(
     mv_present = any("mv" in w.name.lower() for w in getattr(mem_model, "weights", []))
     kappa_present = any("kappa" in w.name.lower() for w in getattr(mem_model, "weights", []))
 
-    w_rows = weight_diff_report(mem_model, load_model, top=top_weights, include_ok=False)
-    n_missing = sum(1 for _, tag, _, _ in w_rows if tag == "MISSING")
-    n_shape   = sum(1 for _, tag, _, _ in w_rows if tag == "SHAPE")
+    # w_rows = weight_diff_report(
+    #     mem_model, load_model, top=top_weights, 
+    #     include_ok=False, 
+    #     include_extra= True, 
+    # )
+    # n_missing = sum(1 for _, tag, _, _ in w_rows if tag == "MISSING")
+    # n_shape   = sum(1 for _, tag, _, _ in w_rows if tag == "SHAPE")
+    
+    w_all = weight_diff_report(
+        mem_model,
+        load_model,
+        top=0,              # all
+        include_ok=False,
+        include_extra=True,
+    )
+    w_top = w_all[:top_weights]
+    n_missing = sum(1 for _, t, _, _ in w_all if t == "MISSING")
+    n_shape = sum(1 for _, t, _, _ in w_all if t == "SHAPE")
 
     sk_mem = model_scaling_digest(mem_model)
     sk_ld  = model_scaling_digest(load_model)
@@ -241,9 +384,9 @@ def debug_model_reload(
     log(f"  - time_units mem : {tu_mem}")
     log(f"  - time_units load: {tu_ld}")
 
-    if w_rows:
+    if w_top:
         log("[GeoPrior][Reload Debug] Top weight issues (by name)")
-        for d, tag, name, shp in w_rows:
+        for d, tag, name, shp in w_top:
             # d is inf for MISSING/SHAPE
             log(f"  {tag:7s} max_abs={d} | {name} | {shp}")
     else:
@@ -263,7 +406,7 @@ def debug_model_reload(
     report = {
         "ok": bool(ok),
         "pred": pred_report,
-        "weights_top": w_rows,
+        "weights_top": w_top,
         "n_missing_or_shape_in_top": {"missing": int(n_missing), "shape": int(n_shape)},
         "mv_in_weights": bool(mv_present),
         "kappa_in_weights": bool(kappa_present),

@@ -10,11 +10,6 @@ Shared documentation fragments for GeoPrior PINN models.
 This module stores:
 * Parameter documentation components (re-usable).
 * Long-form docstring templates (format-ready).
-
-Notes
------
-Keep docstrings ASCII-only. Use :math:`...` for inline math
-and ``.. math::`` for blocks. Wrap long lines at ~63 chars.
 """
 
 from __future__ import annotations
