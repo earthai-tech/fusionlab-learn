@@ -26,6 +26,7 @@ from .losses import (
     pack_eval_physics,
 )
 from .maths import (
+    _get_bounds_loss_cfg, 
     compose_physics_fields,
     compute_bounds_residual,
     compute_consolidation_step_residual,
@@ -580,6 +581,7 @@ def physics_core(
             logSs,
             log_tau,
             log_tau_phys,
+            loss_bounds_barrier, 
         ) = compose_physics_fields(
             model,
             coords_flat=coords,
@@ -804,6 +806,17 @@ def physics_core(
         verbose=verbose,
     )
 
+    # R_H, R_K, R_Ss, R_tau = compute_bounds_residual(
+    #     model,
+    #     H_field=H_si,
+    #     logK=logK,
+    #     logSs=logSs,
+    #     log_tau=log_tau,
+    #     verbose=verbose,
+    # )
+    # bounds_res = tf_concat([R_H, R_K, R_Ss, R_tau], axis=-1)
+    # loss_bounds = tf_reduce_mean(tf_square(bounds_res))
+    
     R_H, R_K, R_Ss, R_tau = compute_bounds_residual(
         model,
         H_field=H_si,
@@ -812,8 +825,31 @@ def physics_core(
         log_tau=log_tau,
         verbose=verbose,
     )
-    bounds_res = tf_concat([R_H, R_K, R_Ss, R_tau], axis=-1)
-    loss_bounds = tf_reduce_mean(tf_square(bounds_res))
+    
+    bounds_res = tf_concat(
+        [R_H, R_K, R_Ss, R_tau],
+        axis=-1,
+    )
+    loss_bounds_resid = tf_reduce_mean(
+        tf_square(bounds_res),
+    )
+    
+    # If we want H enforced even in "barrier" mode:
+    loss_bounds_H = tf_reduce_mean(tf_square(R_H))
+    
+    kind = str(_get_bounds_loss_cfg(
+        sk).get("kind", "barrier")).strip().lower()
+
+    if kind == "residual":
+        loss_bounds = loss_bounds_resid
+    
+    elif kind == "barrier":
+        # barrier is for K/Ss/tau; keep H from residual
+        loss_bounds = loss_bounds_barrier + loss_bounds_H
+    
+    else:  # "both"
+        # WARNING: double-penalizes K/Ss/tau if barrier+residual
+        loss_bounds = loss_bounds_resid + loss_bounds_barrier
 
     # ----------------------------------------------------------
     # 8) GW display units (raw diagnostics only)

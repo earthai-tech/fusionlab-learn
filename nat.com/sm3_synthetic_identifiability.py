@@ -14,6 +14,31 @@ Example:
     --noise-std 0.02 \
     --load-type step \
     --seed 123
+    
+What to run
+
+No profile at all (your current behavior):
+
+python sm3_synth_identifiability_v32.py \
+  --outdir results/sm3_synth \
+  --n-realizations 10 \
+  --ident-regime none
+
+
+Use model 'base' profile (conservative defaults):
+
+python sm3_synth_identifiability_v32.py \
+  --outdir results/sm3_synth \
+  --n-realizations 10 \
+  --ident-regime base
+
+Try a strong anchoring profile:
+
+python sm3_synth_identifiability_v32.py \
+  --outdir results/sm3_synth \
+  --n-realizations 10 \
+  --ident-regime anchored
+  
 """
 
 from __future__ import annotations
@@ -54,7 +79,9 @@ from fusionlab.nn.callbacks import (
     FrozenValQuantileMonitor, 
     FrozenValQuantileLogger 
 )
-
+from fusionlab.nn.pinn.geoprior.identifiability import (
+    derive_K_from_tau_np, ident_audit_dict,
+)
 from fusionlab.utils.scale_metrics import resolve_noise_std
 
 SEC_PER_YEAR = 365.25 * 24.0 * 3600.0
@@ -141,6 +168,46 @@ def build_load(
 
     return dh
 
+def apply_ident_scenario_to_payload(
+    payload: Dict[str, np.ndarray],
+    *,
+    scenario: str,
+    Ss_prior: float,
+    Hd_prior: float,
+    kappa_b: float,
+) -> Dict[str, np.ndarray]:
+    sc = str(scenario).strip().lower()
+
+    if sc in ("base", "none", ""):
+        return payload
+
+    ok = sc in ("tau_only_derive_k", "tau_only")
+    if not ok:
+        raise ValueError(
+            f"Unknown scenario: {scenario!r}"
+        )
+
+    out = dict(payload)
+
+    tau = np.asarray(out.get("tau"), dtype=float)
+    Ss0 = np.asarray(out.get("Ss"), dtype=float)
+    Hd0 = np.asarray(out.get("Hd"), dtype=float)
+
+    Ss = np.full_like(Ss0, float(Ss_prior))
+    Hd = np.full_like(Hd0, float(Hd_prior))
+
+    K = derive_K_from_tau_np(
+        tau_sec=tau,
+        Ss=Ss,
+        Hd=Hd,
+        kappa_b=float(kappa_b),
+    )
+
+    out["Ss"] = Ss
+    out["Hd"] = Hd
+    out["K"] = K
+
+    return out
 
 def settlement_from_tau(
     years: np.ndarray,
@@ -678,7 +745,6 @@ def split_tail_timeblocks(
     yva = {k: v[cut:] for k, v in y.items()}
     return Xtr, ytr, Xva, yva
 
-
 def _make_scaling_kwargs(
     *,
     t_range: float,
@@ -694,40 +760,100 @@ def _make_scaling_kwargs(
     tau_max_year: float = 10.0,
     allow_subs_residual: bool = True,
     subs_resid_policy: str = "always_on",
+    # -------------------------
+    # Bounds policy (key fix for identifiability)
+    # -------------------------
+    bounds_mode: str = "soft",
+    bounds_loss_kind: str = "both",
+    bounds_beta: float = 20.0,
+    bounds_guard: float = 5.0,
+    bounds_w: float = 1.0,
+    bounds_include_tau: bool = True,
+    bounds_tau_w: float = 1.0,
 ) -> dict[str, Any]:
     """
-    Scaling config for synthetic identifiability.
+    Scaling config for synthetic identifiability (SM3).
 
-    Contract used by physics step:
-    - depth history is meters (down+)
-    - subs history is meters (cumulative)
-    - targets are meters
-    - coords are normalized in [0,1]
+    Contract used by the physics core
+    --------------------------------
+    - dynamic history is SI meters:
+        * depth_bgs_m (down+)
+        * subsidence_cum_m (cumulative, meters)
+    - targets are SI meters:
+        * subs_pred: cumulative subsidence (m)
+        * gwl_pred : head (up+), derived as z_surf - depth
+    - coords are normalized in [0, 1]
+      (physics derivatives are re-scaled via coord_ranges).
+
+    Why these bounds settings help identifiability
+    ---------------------------------------------
+    The identifiability ridge (e.g., K ~ Ss*Hd^2/tau) makes it easy for
+    the optimizer to drift into extreme (K,Ss,tau) values that still fit
+    data, especially when gradients are weak.
+
+    We therefore prefer:
+    - bounds_mode="soft": differentiable barrier gradients near/outside
+      bounds (better conditioning than hard projection / clipping).
+    - bounds_guard: prevents overflow when mapping raw logs to fields,
+      while still letting *raw log* violations be penalized.
+    - bounds_loss_kind="both": lets you log/debug residual vs barrier
+      separately, while training uses their sum (or chosen policy).
     """
     spy = float(SEC_PER_YEAR)
 
-    # logK_min = float(np.log10(K_min))
-    # logK_max = float(np.log10(K_max))
-    # logSs_min = float(np.log10(Ss_min))
-    # logSs_max = float(np.log10(Ss_max))
-
+    # --- Convert tau bounds to seconds (internal SI convention).
     tau_min_sec = float(tau_min_year) * spy
     tau_max_sec = float(tau_max_year) * spy
-    # logTau_min = float(np.log10(tau_min_sec))
-    # logTau_max = float(np.log10(tau_max_sec))
 
-    return dict(
-        # SI scaling (we already provide meters).
+    # --- Natural-log bounds (must match tf.math.log convention).
+    # We include both linear and log keys so either accessor style works.
+    logK_min = float(np.log(max(float(K_min), 1e-30)))
+    logK_max = float(np.log(max(float(K_max), 1e-30)))
+    logSs_min = float(np.log(max(float(Ss_min), 1e-30)))
+    logSs_max = float(np.log(max(float(Ss_max), 1e-30)))
+    logTau_min = float(np.log(max(float(tau_min_sec), 1e-30)))
+    logTau_max = float(np.log(max(float(tau_max_sec), 1e-30)))
+
+    # --- Bounds payload used by:
+    #   - compute_bounds_residual()  (residual maps)
+    #   - compose_physics_fields()   (barrier term, guarded mapping)
+    bounds = dict(
+        # Linear bounds (preferred source-of-truth).
+        K_min=float(K_min),
+        K_max=float(K_max),
+        Ss_min=float(Ss_min),
+        Ss_max=float(Ss_max),
+        tau_min=float(tau_min_sec),
+        tau_max=float(tau_max_sec),
+        H_min=float(H_min),
+        H_max=float(H_max),
+        # Log bounds (natural log).
+        logK_min=logK_min,
+        logK_max=logK_max,
+        logSs_min=logSs_min,
+        logSs_max=logSs_max,
+        logTau_min=logTau_min,
+        logTau_max=logTau_max,
+    )
+
+    sk: dict[str, Any] = dict(
+        # -------------------------
+        # Unit scaling: already SI meters.
+        # -------------------------
         subs_scale_si=1.0,
         subs_bias_si=0.0,
         head_scale_si=1.0,
         head_bias_si=0.0,
-
-        # Time conversion.
+        # -------------------------
+        # Time unit metadata.
+        # Stage-1/identifiability uses years; physics needs seconds.
+        # -------------------------
         time_units="year",
         seconds_per_time_unit=spy,
-
-        # Coords are normalized in windows.
+        # -------------------------
+        # Coordinates are normalized in windows.
+        # coord_ranges are the *physical* spans used to rescale grads.
+        # -------------------------
         coords_normalized=True,
         coord_order=["t", "x", "y"],
         coord_ranges=dict(
@@ -736,53 +862,57 @@ def _make_scaling_kwargs(
             y=1.0,
         ),
         coords_in_degrees=False,
-
-        # Enable consolidation residuals.
-        allow_subs_residual=bool(allow_subs_residual),
-        subs_resid_policy=str(subs_resid_policy), 
-        
-        bounds_mode="hard", 
-        
+        # -------------------------
         # Dynamic layout (depth + subs history).
+        # -------------------------
         gwl_dyn_index=0,
         subs_dyn_index=1,
-
-        # Depth-bgs is provided as dynamic[0].
-        gwl_col="GWL_depth_bgs_m",
-        gwl_kind="depth_bgs",
-        gwl_sign="down_positive",
-
-        # Targets: head (up+).
-        gwl_target_kind="head",
-        gwl_target_sign="up_positive",
-
-        # z_surf exists in static vector.
-        z_surf_static_index=int(z_surf_static_index),
-        use_head_proxy=False,
-
         dynamic_feature_names=[
             "GWL_depth_bgs_m",
             "subsidence_cum_m",
         ],
-        # future_feature_names=["future_dummy"],
-        future_feature_names=["GWL_depth_future_bgs_m"],
+        future_feature_names=[
+            "GWL_depth_future_bgs_m",
+        ],
         static_feature_names=None,
-        
-        bounds = dict(
-        K_min=K_min,
-        K_max=K_max,
-        
-        Ss_min=Ss_min,
-        Ss_max=Ss_max,
-        
-        tau_min=tau_min_sec,
-        tau_max=tau_max_sec,
-        
-        H_min=float(H_min),
-        H_max=float(H_max),
+        # -------------------------
+        # Groundwater convention:
+        # dynamic provides depth_bgs (down+).
+        # targets/physics use head (up+).
+        # -------------------------
+        gwl_col="GWL_depth_bgs_m",
+        gwl_kind="depth_bgs",
+        gwl_sign="down_positive",
+        gwl_target_kind="head",
+        gwl_target_sign="up_positive",
+        # z_surf is carried in static vec; windows already build head.
+        z_surf_static_index=int(z_surf_static_index),
+        use_head_proxy=False,
+        # -------------------------
+        # Consolidation residual policy:
+        # allow a data residual around the physics mean if desired.
+        # -------------------------
+        allow_subs_residual=bool(allow_subs_residual),
+        subs_resid_policy=str(subs_resid_policy),
+        # -------------------------
+        # Bounds policy (THIS is the key change).
+        # -------------------------
+        bounds=bounds,
+        bounds_mode=str(bounds_mode).strip().lower(),
+        # How physics core combines: barrier vs residual vs both.
+        # Read in physics core via get_sk(..., "bounds_loss_kind", ...).
+        bounds_loss_kind=str(bounds_loss_kind).strip().lower(),
+        # Barrier sharpness (soft mode).
+        bounds_beta=float(bounds_beta),
+        # Numeric guard band for log->field mapping.
+        bounds_guard=float(bounds_guard),
+        # Relative weights inside bounds barrier term.
+        bounds_w=float(bounds_w),
+        bounds_include_tau=bool(bounds_include_tau),
+        bounds_tau_w=float(bounds_tau_w),
     )
-
-    )
+        
+    return sk
 
 def make_pinball_with_crossing(
     quantiles: list[float],
@@ -806,6 +936,12 @@ def make_pinball_with_crossing(
 
     return loss
 
+def _as_ident_regime(s: str) -> str | None:
+    v = str(s).strip().lower()
+    if v in ("none", "off", ""):
+        return None
+    return v
+
 def train_one_pixel(
     Xtr: Dict[str, np.ndarray],
     ytr: Dict[str, np.ndarray],
@@ -825,6 +961,7 @@ def train_one_pixel(
     n_lith: int,
     z_surf_static_index: int, 
     Lx_m: float =1.0, 
+    ident_regime: str | None,
     # These bounds should match your synthetic generator.
     K_min: float = 1e-15,
     K_max: float = 3e-10,
@@ -861,11 +998,24 @@ def train_one_pixel(
         tau_max_year=tau_max_year,
         allow_subs_residual=True,
     )
-
-
-    # b = sk["bounds"]
-    # print("K_max (linear):", b["K_max"])
-    # print("K_max (from log10):", 10.0 ** b["logK_max"])
+        
+    if ident_regime is not None:
+        for k in (
+            "allow_subs_residual",
+            "subs_resid_policy",
+            "bounds_loss_kind",
+            "bounds_beta",
+            "bounds_guard",
+            "bounds_w",
+            "bounds_include_tau",
+            "bounds_tau_w",
+            "physics_warmup_steps",
+            "physics_ramp_steps",
+            "stop_grad_ref",
+            "drawdown_zero_at_origin",
+        ):
+            if k in sk:
+                sk[k] = None
 
     H = int(forecast_horizon)
     
@@ -916,6 +1066,7 @@ def train_one_pixel(
 
         pde_mode=pde_mode,
         offset_mode="log10",
+        identifiability_regime=ident_regime,
         # and pass lambda_offset=0.0 for multiplier=1
         scaling_kwargs=sk,
     )
@@ -1033,6 +1184,20 @@ def train_one_pixel(
         lambda_offset=float(lambda_offset),
         lambda_q=1.0,
     )
+    
+    if ident_regime is not None:
+        physics_loss_weights = dict(
+            lambda_cons=None,
+            lambda_gw=None,
+            lambda_prior=None,
+            lambda_smooth=None,
+            lambda_bounds=None,
+            lambda_mv=None,
+            lambda_q=None,
+            lambda_offset=float(lambda_offset),
+            mv_lr_mult=1.0,
+            kappa_lr_mult=0.0,
+        )
 
     loss_weights_dict = {"subs_pred": 1.0, "gwl_pred": 0.2}
 
@@ -1114,6 +1279,11 @@ def train_one_pixel(
         verbose=1,
         callbacks=cbs + [diag_cb],
     )
+
+    audit = ident_audit_dict(model)
+    apath = os.path.join(outdir, "ident_audit.json")
+    with open(apath, "w", encoding="utf-8") as f:
+        json.dump(audit, f, indent=2)
     
     # -------------------------
     # Post-fit diagnostic (one fixed val batch)
@@ -1202,6 +1372,7 @@ def flatten_diag(diag: Dict[str, Any]) -> Dict[str, float]:
             row[f2] = float(d.get("q95", np.nan))
 
     return row
+
 def run_one_realisation(
     *,
     r: int,
@@ -1443,6 +1614,7 @@ def run_one_realisation(
             args.val_tail,
         )
 
+    ident_regime = _as_ident_regime(args.ident_regime)
     model, ds_va = train_one_pixel(
         Xtr,
         ytr,
@@ -1462,6 +1634,7 @@ def run_one_realisation(
         z_surf_static_index=z_surf_static_index,
         lambda_offset=float(args.lambda_offset),
         identify=str(args.identify),
+        ident_regime=ident_regime,
     )
 
     npz_path = os.path.join(run_dir, "phys_payload_val.npz")
@@ -1502,6 +1675,9 @@ def run_one_realisation(
     meta["z_surf_m"] = 0.0
     meta["units"]["head"] = "m"
     meta["identify"] = str(args.identify)
+    meta["scenario"] = str(args.scenario)
+    meta["ident_regime"] = ident_regime
+    meta["ident_audit_path"] = "ident_audit.json"
 
     model.export_physics_payload(
         ds_va,
@@ -1512,6 +1688,14 @@ def run_one_realisation(
     )
 
     payload, meta = load_physics_payload(npz_path)
+    
+    payload = apply_ident_scenario_to_payload(
+        payload,
+        scenario=str(args.scenario),
+        Ss_prior=float(meta["Ss_prior"]),
+        Hd_prior=float(meta["Hd_prior"]),
+        kappa_b=float(args.kappa_b),
+    )
 
     eff = summarise_effective_params(payload)
 
@@ -1590,6 +1774,7 @@ def run_one_realisation(
     }
 
     row["identify"] = str(args.identify)
+    row["scenario"] = str(args.scenario)
     row.update(flatten_diag(diag))
 
     eps = 1e-12
@@ -1872,7 +2057,7 @@ def main() -> None:
     )
     ap.add_argument(
         "--identify",
-        choices=("tau", "K", "both"),
+        choices=("tau", "k", "both"),
         default="tau",
         help=(
             "Which parameter(s) to identify. "
@@ -1908,6 +2093,34 @@ def main() -> None:
         default=0.6,
         help="Extra K spread when identify=both.",
     )
+    
+    ap.add_argument(
+        "--scenario",
+        choices=("base", "tau_only_derive_k"),
+        default="base",
+        help=(
+            "Identifiability scenario. "
+            "base: use payload as-is. "
+            "tau_only_derive_k: "
+            "freeze Ss/Hd to priors and "
+            "derive K from tau via closure."
+        ),
+    )
+    ap.add_argument(
+        "--ident-regime",
+        choices=(
+            "none",
+            "base",
+            "anchored",
+            "closure_locked",
+            "data_relaxed",
+        ),
+        default="none",
+        help=(
+            "GeoPrior identifiability profile. "
+            "'none' disables profile merge/locks."
+        ),
+    )
 
     args = ap.parse_args()
 
@@ -1935,3 +2148,12 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    
+# python sm3_synth_identifiability_v32.py \
+#   --outdir results/sm3_synth \
+#   --n-realizations 10 \
+#   --scenario base
+# python sm3_synth_identifiability_v32.py \
+#   --outdir results/sm3_synth \
+#   --n-realizations 10 \
+#   --scenario tau_only_derive_k

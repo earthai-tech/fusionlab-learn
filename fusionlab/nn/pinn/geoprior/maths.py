@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# _geoprior_maths.py
+# _geoprior.maths.py
 """
 GeoPrior maths helpers (physics terms + scaling).
 Short docs only; full docs later.
@@ -7,7 +7,12 @@ Short docs only; full docs later.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Sequence, Tuple, Union
+from typing import ( 
+    Mapping, 
+    Any, Dict, 
+    Optional, Sequence, 
+    Tuple, Union
+)
 
 import numpy as np
 
@@ -3730,51 +3735,162 @@ def compute_smoothness_prior(
 # ---------------------------------------------------------------------
 # Bounds + field composition
 # ---------------------------------------------------------------------
-def guarded_exp_from_bounds(
+def _soft_barrier_l2(
+    x: Tensor,
+    lo: Tensor,
+    hi: Tensor,
+    *,
+    beta: float = 20.0,
+) -> Tensor:
+    x = tf_cast(x, tf_float32)
+    lo = tf_cast(lo, tf_float32)
+    hi = tf_cast(hi, tf_float32)
+
+    b = tf_constant(float(beta), tf_float32)
+
+    v_lo = tf_softplus(b * (lo - x)) / b
+    v_hi = tf_softplus(b * (x - hi)) / b
+
+    return tf_square(v_lo) + tf_square(v_hi)
+
+
+def _reduce_barrier_mean(v: Tensor) -> Tensor:
+    v = tf_where(tf_math.is_finite(v), v, tf_zeros_like(v))
+    return tf_reduce_mean(v)
+
+def _soft_clip(
+    x: Tensor,
+    lo: Tensor,
+    hi: Tensor,
+    *,
+    beta: float = 20.0,
+) -> Tensor:
+    x = tf_cast(x, tf_float32)
+    lo = tf_cast(lo, tf_float32)
+    hi = tf_cast(hi, tf_float32)
+
+    b = tf_constant(float(beta), tf_float32)
+
+    y1 = tf_softplus(b * (x - lo)) / b
+    y2 = tf_softplus(b * (x - hi)) / b
+
+    return lo + y1 - y2
+
+
+# def guarded_exp_from_bounds(
+#     raw_log,
+#     log_min,
+#     log_max,
+#     *,
+#     eps=0.0,
+#     guard=5.0,
+#     dtype=None,
+#     name="",
+# ):
+#     """
+#     Safe exp() with a wide log-space guard-band around [log_min, log_max].
+
+#     - raw_log: unconstrained log-parameter (may drift during training)
+#     - log_min/log_max: physical bounds in log-space
+#     - guard: extra margin to avoid overflow; values outside are clipped only
+#              for *numerical safety*, not as a hard physical constraint.
+#     """
+#     if dtype is None:
+#         dtype = raw_log.dtype
+
+#     raw_log = tf_cast(raw_log, dtype)
+#     log_min = tf_cast(log_min, dtype)
+#     log_max = tf_cast(log_max, dtype)
+#     guard = tf_cast(tf_constant(guard), dtype)
+#     eps = tf_cast(tf_constant(eps), dtype)
+
+#     # replace NaN/Inf with 0 to avoid propagating non-finites
+#     raw_log = tf_where(
+#         tf_math.is_finite(raw_log), raw_log, 
+#         tf_zeros_like(raw_log)
+#     )
+
+#     # guard-band clip (prevents exp overflow)
+#     log_safe = tf_clip_by_value(
+#         raw_log, log_min - guard, log_max + guard
+#         )
+
+#     field = tf_exp(log_safe) + eps
+
+#     if name:
+#         tf_debugging.assert_all_finite(raw_log,  f"{name} raw_log non-finite")
+#         tf_debugging.assert_all_finite(field,    f"{name} field non-finite")
+
+#     return field, raw_log, log_safe
+
+def exp_from_bounds(
     raw_log,
     log_min,
     log_max,
     *,
-    eps=0.0,
+    mode="soft",
+    beta=20.0,
     guard=5.0,
+    eps=0.0,
     dtype=None,
     name="",
 ):
-    """
-    Safe exp() with a wide log-space guard-band around [log_min, log_max].
-
-    - raw_log: unconstrained log-parameter (may drift during training)
-    - log_min/log_max: physical bounds in log-space
-    - guard: extra margin to avoid overflow; values outside are clipped only
-             for *numerical safety*, not as a hard physical constraint.
-    """
     if dtype is None:
         dtype = raw_log.dtype
+
+    mode = str(mode).strip().lower()
+    beta_f = float(beta)
+    guard_f = float(guard)
+    eps_f = float(eps)
 
     raw_log = tf_cast(raw_log, dtype)
     log_min = tf_cast(log_min, dtype)
     log_max = tf_cast(log_max, dtype)
-    guard = tf_cast(tf_constant(guard), dtype)
-    eps = tf_cast(tf_constant(eps), dtype)
 
-    # replace NaN/Inf with 0 to avoid propagating non-finites
     raw_log = tf_where(
-        tf_math.is_finite(raw_log), raw_log, 
-        tf_zeros_like(raw_log)
+        tf_math.is_finite(raw_log),
+        raw_log,
+        tf_zeros_like(raw_log),
     )
 
-    # guard-band clip (prevents exp overflow)
-    log_safe = tf_clip_by_value(
-        raw_log, log_min - guard, log_max + guard
+    if mode == "hard":
+        log_safe = tf_clip_by_value(raw_log, log_min, log_max)
+        pen = tf_zeros_like(raw_log)
+
+    elif mode == "sigmoid":
+        t = tf_sigmoid(raw_log)
+        log_safe = log_min + (log_max - log_min) * t
+        pen = tf_zeros_like(raw_log)
+
+    elif mode == "soft":
+        # numeric safety guard-band, but smooth
+        lo_g = log_min - tf_constant(guard_f, dtype)
+        hi_g = log_max + tf_constant(guard_f, dtype)
+        log_safe = _soft_clip(raw_log, lo_g, hi_g, beta=beta_f)
+
+        # physical bounds penalty (differentiable)
+        pen = _soft_barrier_l2(
+            raw_log, log_min, log_max, beta=beta_f
         )
 
-    field = tf_exp(log_safe) + eps
+    else:  # "none"
+        lo_g = log_min - tf_constant(guard_f, dtype)
+        hi_g = log_max + tf_constant(guard_f, dtype)
+        log_safe = tf_clip_by_value(raw_log, lo_g, hi_g)
+        pen = tf_zeros_like(raw_log)
+
+    field = tf_exp(log_safe) + tf_constant(eps_f, dtype)
 
     if name:
-        tf_debugging.assert_all_finite(raw_log,  f"{name} raw_log non-finite")
-        tf_debugging.assert_all_finite(field,    f"{name} field non-finite")
+        tf_debugging.assert_all_finite(
+            raw_log, f"{name} raw_log non-finite"
+        )
+        tf_debugging.assert_all_finite(
+            field, f"{name} field non-finite"
+        )
 
-    return field, raw_log, log_safe
+    return field, raw_log, log_safe, pen
+
 
 def get_log_bounds(
     model,
@@ -4461,6 +4577,101 @@ def _finite_or_zero(x: Tensor) -> Tensor:
     x = tf_cast(x, tf_float32)
     return tf_where(tf_math.is_finite(x), x, tf_zeros_like(x))
 
+
+def _get_bounds_loss_cfg(
+    model: Any = None,
+    scaling_kwargs: Optional[dict] = None,
+) -> Dict[str, Any]:
+    def _as_map(x: Any) -> Mapping[str, Any]:
+        return x if isinstance(x, Mapping) else {}
+
+    def _attr(name: str, default: Any) -> Any:
+        if model is None:
+            return default
+        return getattr(model, name, default)
+
+    sk_model = _as_map(getattr(model, "scaling_kwargs", None))
+    sk_arg = _as_map(scaling_kwargs)
+
+    # precedence (low -> high):
+    #   model attrs < model.scaling_kwargs < scaling_kwargs arg
+    mode = _attr("bounds_mode", "soft")
+    kind = _attr("bounds_loss_kind", "both")
+
+    beta = _attr("bounds_beta", 20.0)
+    guard = _attr("bounds_guard", 5.0)
+    w_b = _attr("bounds_w", 1.0)
+
+    inc_tau = _attr("bounds_include_tau", True)
+    w_tau = _attr("bounds_tau_w", 1.0)
+
+    sources = [sk_model, sk_arg]
+
+    # 1) flat keys
+    for sk in sources:
+        if "bounds_mode" in sk:
+            mode = sk["bounds_mode"]
+        if "bounds_loss_kind" in sk:
+            kind = sk["bounds_loss_kind"]
+
+        if "bounds_beta" in sk:
+            beta = sk["bounds_beta"]
+        if "bounds_guard" in sk:
+            guard = sk["bounds_guard"]
+        if "bounds_w" in sk:
+            w_b = sk["bounds_w"]
+
+        if "bounds_include_tau" in sk:
+            inc_tau = sk["bounds_include_tau"]
+        if "bounds_tau_w" in sk:
+            w_tau = sk["bounds_tau_w"]
+
+    # 2) nested dict (highest within each source)
+    nested_keys = (
+        "bounds_loss_settings",
+        "bounds_loss_setting",
+        "bound_cfg",
+        "bound_loss_cfg",
+        "bounds_settings",
+        "bounds_config",
+        "bounds_loss_config",
+    )
+
+    for sk in sources:
+        nested: Any = {}
+        for k in nested_keys:
+            if k in sk:
+                nested = sk.get(k)
+                break
+
+        if not isinstance(nested, Mapping):
+            continue
+
+        mode = nested.get("mode", mode)
+        kind = nested.get("kind", kind)
+
+        beta = nested.get("beta", beta)
+        guard = nested.get("guard", guard)
+        w_b = nested.get("w", w_b)
+
+        inc_tau = nested.get("include_tau", inc_tau)
+
+        w_tau = nested.get("tau_w", w_tau)
+
+    mode = str(mode).strip().lower()
+    kind = str(kind).strip().lower()
+
+    return dict(
+        mode=mode,
+        kind=kind,
+        beta=float(beta),
+        guard=float(guard),
+        w=float(w_b),
+        include_tau=bool(inc_tau),
+        tau_w=float(w_tau),
+    )
+
+
 def compose_physics_fields(
     model,
     *,
@@ -4707,6 +4918,14 @@ def compose_physics_fields(
     .. [2] Bear, J. Dynamics of Fluids in Porous Media. Dover (1972).
     """
 
+    bc = _get_bounds_loss_cfg(model)
+    
+    mode = bc["mode"]
+    beta = bc["beta"]
+    guard = bc["guard"]
+    w_b = bc["w"]
+    include_tau = bc["include_tau"]
+    w_tau = bc["tau_w"]
 
     if verbose > 6:
         tf_print_nonfinite("compose/coords_flat", coords_flat)
@@ -4732,41 +4951,81 @@ def compose_physics_fields(
     rawK = K_base + K_corr
     rawSs = Ss_base + Ss_corr
 
-    bounds_mode = str(getattr(model, "bounds_mode", "soft")).strip().lower()
+    # bounds_mode = str(getattr(model, "bounds_mode", "soft")).strip().lower()
     
     logK_min, logK_max, logSs_min, logSs_max = get_log_bounds(
         model, as_tensor=True, dtype=rawK.dtype, verbose=verbose,
     )
-    # ---- K, Ss  ----
-    if bounds_mode == "hard":
-        K_field, logK = bounded_exp(
-            rawK, logK_min, logK_max, eps=eps_KSs,
-            return_log=True, verbose=verbose,
-        )
-        Ss_field, logSs = bounded_exp(
-            rawSs, logSs_min, logSs_max, eps=eps_KSs,
-            return_log=True, verbose=verbose,
-        )
+    # # ---- K, Ss  ----
+    # if bounds_mode == "hard":
+    #     K_field, logK = bounded_exp(
+    #         rawK, logK_min, logK_max, eps=eps_KSs,
+    #         return_log=True, verbose=verbose,
+    #     )
+    #     Ss_field, logSs = bounded_exp(
+    #         rawSs, logSs_min, logSs_max, eps=eps_KSs,
+    #         return_log=True, verbose=verbose,
+    #     )
 
+    # else:
+    #     # Keep raw log-params (useful for priors/diagnostics),
+    #     # but NEVER feed an unbounded log into exp() in float32.
+    #     K_field,  logK,  _ = guarded_exp_from_bounds(
+    #         rawK,  logK_min,  logK_max, eps=eps_KSs, 
+    #         guard=5.0, name="K"
+    #     )
+    #     Ss_field, logSs, _ = guarded_exp_from_bounds(
+    #         rawSs, logSs_min, logSs_max,eps=eps_KSs,
+    #         guard=5.0, name="Ss"
+    #     )
+    
+    
+    # ---- K, Ss (policy-driven) ----
+    K_field, logK_raw, logK_safe, pK = exp_from_bounds(
+        rawK,
+        logK_min,
+        logK_max,
+        mode=mode,
+        beta=beta,
+        guard=guard,
+        eps=eps_KSs,
+        dtype=rawK.dtype,
+        name="K",
+    )
+    
+    Ss_field, logSs_raw, logSs_safe, pS = exp_from_bounds(
+        rawSs,
+        logSs_min,
+        logSs_max,
+        mode=mode,
+        beta=beta,
+        guard=guard,
+        eps=eps_KSs,
+        dtype=rawSs.dtype,
+        name="Ss",
+    )
+    
+    # What to return as "logK/logSs" depends on policy:
+    # - soft/none: return raw (useful for penalties/diagnostics)
+    # - hard/sigmoid: return safe (already within bounds)
+    if mode in ("soft", "none"):
+        logK = logK_raw
+        logSs = logSs_raw
     else:
-        # Keep raw log-params (useful for priors/diagnostics),
-        # but NEVER feed an unbounded log into exp() in float32.
-        K_field,  logK,  _ = guarded_exp_from_bounds(
-            rawK,  logK_min,  logK_max, eps=eps_KSs, 
-            guard=5.0, name="K"
-        )
-        Ss_field, logSs, _ = guarded_exp_from_bounds(
-            rawSs, logSs_min, logSs_max,eps=eps_KSs,
-            guard=5.0, name="Ss"
-        )
+        logK = logK_safe
+        logSs = logSs_safe
     
-        # Optional: keep the asserts, but now they won't trip from exp overflow.
-        tf_debugging.assert_all_finite(logK,    "rawK/logK non-finite")
-        tf_debugging.assert_all_finite(logSs,   "rawSs/logSs non-finite")
-        tf_debugging.assert_all_finite(K_field, "K_field non-finite")
-        tf_debugging.assert_all_finite(Ss_field,"Ss_field non-finite")
+    loss_bounds_KSs = tf_constant(float(w_b), rawK.dtype) * (
+        _reduce_barrier_mean(pK) +
+        _reduce_barrier_mean(pS)
+    )
     
-
+    # Optional: keep the asserts, but now they won't trip from exp overflow.
+    tf_debugging.assert_all_finite(logK,    "rawK/logK non-finite")
+    tf_debugging.assert_all_finite(logSs,   "rawSs/logSs non-finite")
+    tf_debugging.assert_all_finite(K_field, "K_field non-finite")
+    tf_debugging.assert_all_finite(Ss_field,"Ss_field non-finite")
+    
     # ---- tau ( log-space composition + bounds) ----
     delta_log_tau = _finite_or_zero(tau_base + tau_corr)
 
@@ -4783,7 +5042,9 @@ def compose_physics_fields(
     
     # 2. Calculate linear tau_phys safely from log (for logging/debugging)
     tau_phys = tf_exp(log_tau_phys)
-
+    
+    # ---- tau (policy-driven) ----
+    
     # 3. Calculate total log directly (avoiding re-logging the exp)
     #    Previous bad logic: log(max(exp(log_x), eps)) -> redundant and lossy
     #    New logic: just add the logs directly.
@@ -4796,19 +5057,45 @@ def compose_physics_fields(
         verbose=0,
     )
     
-    if bounds_mode == "hard":
-        # true hard bounds: clip in log-space (keeps tau_phys anchoring)
-        log_tau = tf_clip_by_value(log_tau_total, log_tau_min, log_tau_max)
-        tau_field = tf_exp(log_tau) + tf_constant(eps_tau, log_tau.dtype)
+    # if bounds_mode == "hard":
+    #     # true hard bounds: clip in log-space (keeps tau_phys anchoring)
+    #     log_tau = tf_clip_by_value(log_tau_total, log_tau_min, log_tau_max)
+    #     tau_field = tf_exp(log_tau) + tf_constant(eps_tau, log_tau.dtype)
+    # else:
+    #     # soft mode: keep log_tau for bounds penalty, but guard exp overflow
+    #     log_tau = log_tau_total
+
+    #     guard_lo = log_tau_min - tf_constant(10.0, log_tau.dtype)
+    #     guard_hi = log_tau_max + tf_constant(10.0, log_tau.dtype)
+    #     log_tau_safe = tf_clip_by_value(log_tau, guard_lo, guard_hi)
+
+    #     tau_field = tf_exp(log_tau_safe) + tf_constant(eps_tau, log_tau.dtype)
+    
+    tau_field, logTau_raw, logTau_safe, pT = exp_from_bounds(
+        log_tau_total,
+        log_tau_min,
+        log_tau_max,
+        mode=mode,
+        beta=beta,
+        guard=guard,
+        eps=eps_tau,
+        dtype=log_tau_total.dtype,
+        name="tau",
+    )
+    
+    if mode in ("soft", "none"):
+        log_tau = logTau_raw
     else:
-        # soft mode: keep log_tau for bounds penalty, but guard exp overflow
-        log_tau = log_tau_total
-
-        guard_lo = log_tau_min - tf_constant(10.0, log_tau.dtype)
-        guard_hi = log_tau_max + tf_constant(10.0, log_tau.dtype)
-        log_tau_safe = tf_clip_by_value(log_tau, guard_lo, guard_hi)
-
-        tau_field = tf_exp(log_tau_safe) + tf_constant(eps_tau, log_tau.dtype)
+        log_tau = logTau_safe
+    
+    loss_bounds_tau = tf_zeros_like(loss_bounds_KSs)
+    
+    if include_tau:
+        loss_bounds_tau = tf_constant(float(w_tau), log_tau.dtype) * (
+            _reduce_barrier_mean(pT)
+        )
+    
+    loss_bounds = loss_bounds_KSs + loss_bounds_tau
 
     if verbose > 6:
         tf_print_nonfinite("compose/K_field", K_field)
@@ -4834,6 +5121,7 @@ def compose_physics_fields(
         logSs,
         log_tau,        # return log_tau for bounds penalty + diagnostics
         log_tau_phys,   # optional but very useful for priors/diagnostics
+        loss_bounds,
     )
 
 def _log_bounds_residual(
@@ -4956,9 +5244,22 @@ def compute_bounds_residual(
     model : Any
         Model-like object providing:
     
-        * ``scaling_kwargs`` with optional ``bounds`` mapping.
+        * ``scaling_kwargs`` with optional bounds + bounds policy keys.
         * Accessors used by ``get_log_bounds`` and ``get_log_tau_bounds``.
+        * (Optional) pre-resolved bound tensors cached by the model.
     
+        Bounds configuration is read from ``model.scaling_kwargs``:
+    
+        * ``bounds`` (dict): numeric ranges such as ``H_min/H_max``,
+          ``K_min/K_max`` or ``logK_min/logK_max``, similarly for
+          ``Ss`` and optionally ``tau``.
+        * ``bounds_mode``: one of ``{'soft','hard','sigmoid','none'}``.
+        * ``bounds_beta``: barrier sharpness for ``bounds_mode='soft'``.
+        * ``bounds_guard``: numeric guard band used by guarded mappings.
+        * ``bounds_w``: barrier weight for K + Ss.
+        * ``bounds_include_tau``: whether to include tau bounds.
+        * ``bounds_tau_w``: barrier weight for tau if included.
+
     H_field : Tensor
         Drained thickness field :math:`H` in SI meters. Shape must be
         broadcastable to ``(B, H, 1)``. Bounds are applied in linear space
@@ -5015,7 +5316,19 @@ def compute_bounds_residual(
     R_tau : Tensor
         Residual map for timescale log-bounds violations. Same shape as
         ``H_field`` (broadcasted as needed). All values are non-negative.
+        
+    loss_bounds_barrier : Tensor
+        Non-negative scalar barrier penalty induced by the configured
+        bounds policy (typically K/Ss and optionally tau). This is the
+        *barrier component only*.
     
+        Notes
+        -----
+        Any *residual-style* bound penalty (range-normalized violation
+        residuals for H/K/Ss/tau) is computed separately (e.g. via
+        ``compute_bounds_residual``) and can be combined downstream
+        according to ``bounds_loss_kind``.
+
     Notes
     -----
     Bounds configuration
@@ -5029,16 +5342,65 @@ def compute_bounds_residual(
     * ``get_log_tau_bounds(model, ...)`` for log-space bounds of
       :math:`\tau` (typically ``logTau_min`` and ``logTau_max``).
     
-    If a bound is not configured (missing keys or accessors returning
-    ``None``), the corresponding residual is returned as zeros.
+    1) Linear-space bounds (thickness)
+       * ``scaling_kwargs['bounds']['H_min']`` and
+         ``scaling_kwargs['bounds']['H_max']`` (meters)
     
+    2) Log-space bounds (K and Ss)
+       Bounds are resolved by ``get_log_bounds(model, ...)``, which
+       may be backed by any of the following configuration entries:
+    
+       * Direct log bounds:
+         ``bounds['logK_min']`` / ``bounds['logK_max']``,
+         ``bounds['logSs_min']`` / ``bounds['logSs_max']``
+    
+       * Or linear bounds that can be converted to logs:
+         ``bounds['K_min']`` / ``bounds['K_max']``,
+         ``bounds['Ss_min']`` / ``bounds['Ss_max']``
+    
+    3) Log-space bounds (tau)
+       Bounds are resolved by ``get_log_tau_bounds(model, ...)``,
+       typically from:
+    
+       * Direct log bounds:
+         ``bounds['logTau_min']`` / ``bounds['logTau_max']``
+    
+       * Or linear bounds convertible to logs:
+         ``bounds['tau_min']`` / ``bounds['tau_max']``
+    
+    If a bound is missing (or the accessor returns ``None``),
+    the corresponding residual is returned as zeros.
+    
+    Interaction with bounds policy
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    Keys such as ``bounds_mode``, ``bounds_beta``, ``bounds_guard``,
+    ``bounds_w``, ``bounds_include_tau``, and ``bounds_tau_w`` define
+    how the *barrier* term is produced (usually in
+    ``compose_physics_fields``). They do not change the definition
+    of the residual maps returned here; instead, they control how
+    the physics core combines residual penalty and barrier penalty
+    via ``bounds_loss_kind``.
+
+
     Normalization
     ~~~~~~~~~~~~~
     Residuals are normalized by the bound range to reduce sensitivity to
     the absolute scale of each parameter. This makes it easier to set a
     single loss weight such as ``lambda_bounds`` without one parameter
     dominating purely due to units.
+
+    Debugging tip
+    ~~~~~~~~~~~~~
+    To debug bounds behavior, log the two components separately:
     
+    * ``loss_bounds_resid`` from these residual maps:
+      ``mean(square(concat([R_H, R_K, R_Ss, R_tau])))``
+    * ``loss_bounds_barrier`` returned by ``compose_physics_fields``
+    
+    Then feed only their configured combination into the final
+    physics loss according to ``bounds_loss_kind``.
+
+
     Examples
     --------
     Compute residuals from raw logs (recommended in soft mode):
@@ -5220,11 +5582,45 @@ def _compute_bounds_residual(
     Ss_field: Tensor,
     H_field: Tensor,
     *,
+    eps:float=1e-12, 
     verbose: int = 0,
 ) -> Tuple[Tensor, Tensor, Tensor]:
-    """Bounds residuals for H,K,Ss."""
+    """Bounds residuals for H,K,Ss.
+    
+    Preferred usage in soft bounds mode
+    -----------------------------------
+    When ``model.scaling_kwargs['bounds_mode'] == 'soft'``, the
+    model typically enforces bounds via a *barrier* penalty (often
+    computed inside ``compose_physics_fields``) while the forward
+    mapping from logits to fields may also use a numeric guard
+    (e.g. ``bounds_guard``) to prevent overflow.
+    
+    For the most informative residual-style diagnostics, pass the
+    *raw* log-parameters (``logK``, ``logSs``, ``log_tau``) produced
+    *before* any guarded exponential / squashing is applied. This
+    ensures the residual penalty reflects the true distance of the
+    raw parameters from the configured log-bounds, even if the
+    corresponding physical fields were produced by a guarded
+    mapping.
+    
+    If raw logs are not provided, the function falls back to
+    inferring logs from the fields via ``log(max(field, eps))``.
+    This is numerically safe, but it can *under-estimate*
+    violations when the forward mapping clips or guards extreme
+    values (e.g. due to ``bounds_guard`` or hard/sigmoid modes).
+    
+    Important
+    ~~~~~~~~~
+    ``compute_bounds_residual`` always returns *violation residuals*
+    (regardless of ``bounds_mode``). The training objective chooses
+    how to combine:
+    (1) the residual penalty derived from these residual maps and
+    (2) the barrier penalty returned by ``compose_physics_fields``,
+    according to ``scaling_kwargs['bounds_loss_kind']``.
+    
+    """
     dtype = K_field.dtype
-    eps = tf_constant(1e-12, dtype=dtype)
+    eps = tf_constant(eps, dtype=dtype)
     zero = tf_constant(0.0, dtype=dtype)
 
     K_safe = tf_maximum(K_field, eps)

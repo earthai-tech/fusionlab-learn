@@ -43,6 +43,7 @@ from fusionlab.compat.keras import (
     save_manifest,
     save_model,
 )
+from fusionlab.compat.keras_fit import normalize_predict_output
 from fusionlab.registry.utils import _find_stage1_manifest
 from fusionlab.utils.nat_utils import (
     build_censor_mask,
@@ -344,6 +345,19 @@ def _coerce_quantile_weights(d: dict, default: dict) -> dict:
         out[q] = float(v)
     return out
 
+def _norm_ident_regime(v):
+    if v is None:
+        return None
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return None
+        s_low = s.lower()
+        if s_low in ("none", "off", "false", "0"):
+            return None
+        return s
+    # allow dict / other JSON-safe payloads
+    return v
 # Probabilistic outputs
 QUANTILES = cfg.get("QUANTILES", [0.1, 0.5, 0.9])
 
@@ -388,6 +402,29 @@ LAMBDA_BOUNDS = cfg.get("LAMBDA_BOUNDS", 0.0)
 # Global physics bounds (from config.py)
 PHYSICS_BOUNDS_CFG = cfg.get("PHYSICS_BOUNDS", {}) or {}
 PHYSICS_BOUNDS_MODE = (cfg.get("PHYSICS_BOUNDS_MODE", "soft") or "soft").strip().lower()
+if PHYSICS_BOUNDS_MODE not in ("soft", "hard", "off", "none"):
+    raise ValueError(
+        "PHYSICS_BOUNDS_MODE must be one of "
+        "('soft','hard','off'). "
+        f"Got: {PHYSICS_BOUNDS_MODE!r}"
+    )
+if PHYSICS_BOUNDS_MODE in ("off", "none"):
+    PHYSICS_BOUNDS_MODE = "off"
+    
+BOUNDS_LOSS_KIND = str(
+    cfg.get("BOUNDS_LOSS_KIND", "both")
+).strip().lower()
+
+BOUNDS_BETA = float(cfg.get("BOUNDS_BETA", 20.0))
+BOUNDS_GUARD = float(cfg.get("BOUNDS_GUARD", 5.0))
+BOUNDS_W = float(cfg.get("BOUNDS_W", 1.0))
+
+BOUNDS_INCLUDE_TAU = bool(
+    cfg.get("BOUNDS_INCLUDE_TAU", True)
+)
+
+BOUNDS_TAU_W = float(cfg.get("BOUNDS_TAU_W", 1.0))
+
 # Time units for physics (controls d/dt scaling inside PINN residuals)
 TIME_UNITS = (cfg.get("TIME_UNITS", "year") or "year").strip().lower()
 
@@ -395,6 +432,15 @@ TIME_UNITS = (cfg.get("TIME_UNITS", "year") or "year").strip().lower()
 units_prov = cfg.get("units_provenance", {}) or {}
 SUBS_UNIT_TO_SI_APPLIED = float(
     units_prov.get("subs_unit_to_si_applied_stage1", cfg.get("SUBS_UNIT_TO_SI", 1e-3))
+)
+IDENTIFIABILITY_REGIME = cfg.get("IDENTIFIABILITY_REGIME", None)
+IDENTIFIABILITY_REGIME = _norm_ident_regime(
+    IDENTIFIABILITY_REGIME
+)
+
+print(
+    "[Info] IDENTIFIABILITY_REGIME:",
+    IDENTIFIABILITY_REGIME,
 )
 # -------------------------------------------------------------------------
 # Unit post-processing for evaluation JSON (controlled by config).
@@ -1256,6 +1302,16 @@ subsmodel_params["scaling_kwargs"].update({
     'Q_length_in_si' : sk.get("Q_length_in_si", cfg.get("Q_LENGTH_IN_SI", False )), 
     'drainage_mode': sk.get("drainage_mode", cfg.get("DRAINAGE_MODE", "double")), 
     
+    "bounds_config": {
+        "mode": PHYSICS_BOUNDS_MODE, 
+        "kind": BOUNDS_LOSS_KIND,
+        "beta": BOUNDS_BETA,
+        "guard": BOUNDS_GUARD,
+        "w": BOUNDS_W,
+        "include_tau": BOUNDS_INCLUDE_TAU,
+        "tau_w": BOUNDS_TAU_W,
+    }, 
+    
     "clip_global_norm": cfg.get("CLIP_GLOBAL_NORM", 5.0),
     "debug_physics_grads": cfg.get("DEBUG_PHYSICS_GRADS", False), 
     "scaling_error_policy": cfg.get('SCALING_ERROR_POLICY','warn'), 
@@ -1391,6 +1447,9 @@ q_ramp_steps = max(0, q_ramp_epochs) * steps_per_epoch
 subs_resid_warmup_steps = max(0, subs_resid_warmup_epochs) * steps_per_epoch
 subs_resid_ramp_steps = max(0, subs_resid_ramp_epochs) * steps_per_epoch
 
+if PHYSICS_BOUNDS_MODE == "off":
+    LAMBDA_BOUNDS = 0.0
+
 print("=" * 72)
 print(
     f"[TRAINING_STRATEGY] {TRAINING_STRATEGY} | "
@@ -1457,6 +1516,10 @@ subsmodel_params["scaling_kwargs"] = override_scaling_kwargs(
     strict=True,
     log_fn=print,
 )
+# Always keep it in scaling_kwargs for audit trail
+subsmodel_params["scaling_kwargs"].update({
+    "identifiability_regime": IDENTIFIABILITY_REGIME,
+})
 
 # Optional: drop Nones to keep scaling_kwargs clean
 subsmodel_params["scaling_kwargs"] = {
@@ -1530,6 +1593,7 @@ subs_model_inst = model_cls(
     forecast_horizon=FORECAST_HORIZON_YEARS,
     quantiles=QUANTILES,
     pde_mode=PDE_MODE_CONFIG,
+    identifiability_regime=IDENTIFIABILITY_REGIME,
     verbose = 0, # XXX TOREMOVE :  gFOR DEBUG ONLY
     **subsmodel_params,
 )
@@ -1719,6 +1783,9 @@ model_init_manifest = {
         "scaling_kwargs": subsmodel_params.get("scaling_kwargs", {}),
     },
 }
+model_init_manifest["config"].update({
+    "identifiability_regime": IDENTIFIABILITY_REGIME,
+})
 
 save_manifest(model_init_manifest_path, model_init_manifest)
 print(f"[OK] Saved model init manifest -> {model_init_manifest_path}")
@@ -1859,7 +1926,7 @@ training_summary = {
             "coords_normalized": coords_normalized,
             "coord_ranges": coord_ranges or {},
         },
-        
+        "identifiability_regime": IDENTIFIABILITY_REGIME,
     },
     "paths": {
         "run_dir": RUN_OUTPUT_PATH,
@@ -1907,6 +1974,7 @@ run_manifest = {
             "bounds": bounds_for_scaling,
             "time_units": TIME_UNITS,   
         },
+        "identifiability_regime": IDENTIFIABILITY_REGIME,
     },
     "paths": training_summary["paths"],
     "artifacts": {
@@ -1928,6 +1996,7 @@ run_manifest["config"]["scaling_kwargs"].update({
     
     "deg_to_m_lon": deg_to_m_lon,
     "deg_to_m_lat": deg_to_m_lat,
+    
 })
 
 run_manifest["config"]["scaling_kwargs"].update({
@@ -2152,33 +2221,44 @@ X_fore = ensure_input_shapes(
 )
 y_fore_fmt = map_targets_for_training(y_fore)
 
+def _pick_q50_np(arr, quantiles):
+    a = np.asarray(arr)
+    if a.ndim == 3:
+        a = a[..., None]
+    a = canonicalize_BHQO_quantiles_np(
+        a,
+        n_q=len(quantiles),
+        verbose=0,
+    )
+    q = np.asarray(quantiles, dtype=float)
+    q50_i = int(np.argmin(np.abs(q - 0.5)))
+    return a[:, :, q50_i, 0]
+
+
+def _map_pred_list_by_mae(pred_list, y_subs, quantiles):
+    y = np.asarray(y_subs)[:, :, 0]
+    p0 = _pick_q50_np(pred_list[0], quantiles)
+    p1 = _pick_q50_np(pred_list[1], quantiles)
+    mae0 = float(np.mean(np.abs(p0 - y)))
+    mae1 = float(np.mean(np.abs(p1 - y)))
+
+    if mae0 <= mae1:
+        return {"subs_pred": pred_list[0], "gwl_pred": pred_list[1]}
+    return {"subs_pred": pred_list[1], "gwl_pred": pred_list[0]}
+
+
 print(f"\nPredicting on {dataset_name_for_forecast}...")
 pred_out = model_inf.predict(X_fore, verbose=0)
 
-# ------------------------------------------------------------
-# Normalize predict() output (Keras can return dict or list)
-# ------------------------------------------------------------
-if isinstance(pred_out, dict):
-    pred_dict = pred_out
-elif isinstance(pred_out, (list, tuple)):
-    names = list(getattr(model_inf, "output_names", []) or [])
-    if names:
-        pred_dict = {
-            names[i]: pred_out[i]
-            for i in range(min(len(names), len(pred_out)))
-        }
-    else:
-        # fallback: assume [subs_pred, gwl_pred]
-        pred_dict = {"subs_pred": pred_out[0]}
-        if len(pred_out) > 1:
-            pred_dict["gwl_pred"] = pred_out[1]
-else:
-    raise TypeError(
-        "Unexpected predict() output type: "
-        f"{type(pred_out)}"
-    )
+pred_dict = normalize_predict_output(
+    model_inf,
+    x=X_fore,
+    pred_out=pred_out,
+    required=("subs_pred", "gwl_pred"),
+    batch_n=32,
+    log_fn=print if DEBUG else None,
+)
 
-# v3.2+ contract: explicit heads (no more `data_final`).
 if "subs_pred" not in pred_dict or "gwl_pred" not in pred_dict:
     raise KeyError(
         "predict() must return 'subs_pred' and "
@@ -2188,6 +2268,65 @@ if "subs_pred" not in pred_dict or "gwl_pred" not in pred_dict:
 
 s_pred = pred_dict["subs_pred"]
 h_pred = pred_dict["gwl_pred"]
+
+# ------------------------------------------------------------
+# Normalize predict() output (Keras can return dict or list)
+# ------------------------------------------------------------
+# if isinstance(pred_out, dict):
+#     pred_dict = pred_out
+# elif isinstance(pred_out, (list, tuple)):
+#     names = list(getattr(model_inf, "output_names", []) or [])
+#     if names:
+#         pred_dict = {
+#             names[i]: pred_out[i]
+#             for i in range(min(len(names), len(pred_out)))
+#         }
+#     else:
+#         # fallback: assume [subs_pred, gwl_pred]
+#         pred_dict = {"subs_pred": pred_out[0]}
+#         if len(pred_out) > 1:
+#             pred_dict["gwl_pred"] = pred_out[1]
+# if isinstance(pred_out, dict):
+#     pred_dict = pred_out
+
+# elif isinstance(pred_out, (list, tuple)):
+#     if len(pred_out) < 2:
+#         raise ValueError("predict() returned <2 outputs.")
+
+#     if QUANTILES:
+#         pred_dict = _map_pred_list_by_mae(
+#             pred_out[:2],
+#             y_fore_fmt["subs_pred"],
+#             QUANTILES,
+#         )
+#     else:
+#         # point case: compare directly
+#         y = np.asarray(y_fore_fmt["subs_pred"])[:, :, 0]
+#         p0 = np.asarray(pred_out[0])[:, :, 0]
+#         p1 = np.asarray(pred_out[1])[:, :, 0]
+#         mae0 = float(np.mean(np.abs(p0 - y)))
+#         mae1 = float(np.mean(np.abs(p1 - y)))
+#         if mae0 <= mae1:
+#             pred_dict = {"subs_pred": pred_out[0], "gwl_pred": pred_out[1]}
+#         else:
+#             pred_dict = {"subs_pred": pred_out[1], "gwl_pred": pred_out[0]}
+
+# else:
+#     raise TypeError(
+#         "Unexpected predict() output type: "
+#         f"{type(pred_out)}"
+#     )
+
+# # v3.2+ contract: explicit heads (no more `data_final`).
+# if "subs_pred" not in pred_dict or "gwl_pred" not in pred_dict:
+#     raise KeyError(
+#         "predict() must return 'subs_pred' and "
+#         "'gwl_pred'. Got keys="
+#         f"{list(pred_dict.keys())}"
+#     )
+
+# s_pred = pred_dict["subs_pred"]
+# h_pred = pred_dict["gwl_pred"]
 
 # Shapes expected for debugging:
 # - quantiles:
@@ -2224,6 +2363,13 @@ if QUANTILES:
         n_q=len(QUANTILES),
         verbose=0,
     )  # -> (B,H,Q,O_s)
+
+    q50_i = int(np.argmin(np.abs(np.asarray(QUANTILES) - 0.5)))
+    s_q50 = s_pred_cal[:, :, q50_i, 0]
+    h_q50 = h_pred[:, :, q50_i, 0]
+    
+    print("subs q50 pctl:", np.percentile(s_q50, [1, 50, 99]))
+    print("gwl  q50 pctl:", np.percentile(h_q50, [1, 50, 99]))
 
     predictions_for_formatter = {
         "subs_pred": s_pred_cal,

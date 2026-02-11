@@ -98,6 +98,15 @@ FORECAST_HORIZON_YEARS = 3
 TIME_STEPS = 5
 MODE = "tft_like"   # {"pihal_like", "tft_like"}
 
+# XXX: Optimize: preset:
+# TRAIN_END_YEAR = 2022
+# FORECAST_START_YEAR = 2023
+# FORECAST_HORIZON_YEARS = 3
+
+# # real data: slightly longer memory helps (still cheap)
+# TIME_STEPS = 6
+# MODE = "tft_like"
+
 # -------------------------------------------------------------------
 # 1.4 Column names and groundwater conventions
 # -------------------------------------------------------------------
@@ -153,6 +162,23 @@ GWL_DYN_INDEX = None         # e.g. 0 if z_GWL is the first dynamic channel
 NORMALIZE_COORDS = True          # preferred knob
 KEEP_COORDS_RAW  = False         # legacy knob, keep for backward compat
 SHIFT_RAW_COORDS = True          # only matters when KEEP_COORDS_RAW=True
+
+
+# XXX: Optimize: preset:
+# GWL_KIND = "depth_bgs"
+# GWL_SIGN = "down_positive"
+# USE_HEAD_PROXY = False
+
+# Z_SURF_COL = "z_surf_m"
+# INCLUDE_Z_SURF_AS_STATIC = True
+
+# SCALE_GWL = False
+# SCALE_H_FIELD = False
+# SCALE_Z_SURF = False
+# NORMALIZE_COORDS = True
+# KEEP_COORDS_RAW = False
+
+
 
 # Keep H_field in meters (recommended):
 SCALE_H_FIELD = False
@@ -278,8 +304,15 @@ BUILD_FUTURE_NPZ = False
 SPLIT_SEED = 42 
 VAL_FRAC = 0.2 
 TEST_FRAC = 0.1 
-HOLDOUT_STRATEGY = "random" 
+HOLDOUT_STRATEGY = "random" #  # (or "spatial_block" )
 HOLDOUT_BLOCK_M = 2000.0 
+
+# SPLIT_SEED = 42
+# VAL_FRAC = 0.15
+# TEST_FRAC = 0.15
+
+# HOLDOUT_STRATEGY = "block"   # (or "spatial_block" if that’s your accepted token)
+# HOLDOUT_BLOCK_M = 2500.0
 
 # ===================================================================
 # 4) MODEL ARCHITECTURE DEFAULTS (Stage-2)
@@ -297,14 +330,29 @@ ATTENTION_UNITS = 64
 NUMBER_HEADS = 2
 DROPOUT_RATE = 0.10
 
-# Additional BaseAttentive / GeoPriorSubsNet knobs
-MEMORY_SIZE = 50
-SCALES = [1, 2]
-USE_RESIDUALS = True
-USE_BATCH_NORM = False
-USE_VSN = True
-VSN_UNITS = 32
+# XXX: Optimize: preset:
+# # Additional BaseAttentive / GeoPriorSubsNet knobs
+# MEMORY_SIZE = 50
+# SCALES = [1, 2]
+# USE_RESIDUALS = True
+# USE_BATCH_NORM = False
+# USE_VSN = True
+# VSN_UNITS = 32
 
+# EMBED_DIM = 48
+# HIDDEN_UNITS = 96
+# LSTM_UNITS = 96
+# ATTENTION_UNITS = 64
+# NUMBER_HEADS = 4
+# DROPOUT_RATE = 0.15
+
+# MEMORY_SIZE = 80
+# SCALES = [1, 2]
+# USE_RESIDUALS = True
+# USE_BATCH_NORM = False
+
+# USE_VSN = True
+# VSN_UNITS = 48
 
 # -------------------------------------------------------------------
 # 4.2 Probabilistic outputs and asymmetric loss weights
@@ -316,10 +364,35 @@ QUANTILES = [0.1, 0.5, 0.9]
 SUBS_WEIGHTS = {0.1: 3.0, 0.5: 1.0, 0.9: 3.0}
 GWL_WEIGHTS  = {0.1: 1.5, 0.5: 1.0, 0.9: 1.5}
 
+# XXX: optimize preset
+# QUANTILES = [0.1, 0.5, 0.9]
+
+# SUBS_WEIGHTS = {0.1: 2.0, 0.5: 1.0, 0.9: 2.0}
+# GWL_WEIGHTS  = {0.1: 1.2, 0.5: 1.0, 0.9: 1.2}
+
 
 # ===================================================================
 # 5) PHYSICS CONFIGURATION (GeoPrior PINN block)
 # ===================================================================
+
+# XXX: oPTIMIZE PRESET:
+# PDE_MODE_CONFIG = "on"
+# PHYSICS_BOUNDS_MODE = "soft"
+# SCALE_PDE_RESIDUALS = True
+
+# TRAINING_STRATEGY = "data_first"
+# LOSS_WEIGHT_GWL_DATA_FIRST = 1.0
+# LAMBDA_Q_DATA_FIRST = 1e-4
+# Q_POLICY_DATA_FIRST = "always_on"
+# SUBS_RESID_POLICY_DATA_FIRST = "always_on"
+
+# LAMBDA_CONS   = 0.15
+# LAMBDA_GW     = 0.05
+# LAMBDA_PRIOR  = 0.10
+# LAMBDA_SMOOTH = 3e-4
+# LAMBDA_BOUNDS = 5e-3
+# LAMBDA_MV     = 5e-3
+# LAMBDA_Q      = 0.0
 
 # -------------------------------------------------------------------
 # 5.1 Which residuals are active
@@ -340,7 +413,6 @@ PHYSICS_RAMP_STEPS = 500
 # If True, use internal scale factors (c*, g*) so residual terms are comparable.
 SCALE_PDE_RESIDUALS = True 
 
-
 # -------------------------------------------------------------------
 # 5.2 Relative weights of each physics term (compile-time)
 # -------------------------------------------------------------------
@@ -348,7 +420,7 @@ LAMBDA_CONS   = 1.0     # from 0.10 (×10)
 LAMBDA_GW     = 0.10    # from 0.005 (×10) # 0.005 # Increased from 0.05 to force head fitting
 LAMBDA_PRIOR  = 0.2   # keep/raise if K,Ss collapse # 0.05 # # Increased: strongly enforce tau = Ss*H^2/K
 LAMBDA_SMOOTH = 0.01  # # Help reduce noise in K/Ss fields # 0.01
-LAMBDA_MV     = .01 #0.005
+LAMBDA_MV     = .01   #0.005
 LAMBDA_BOUNDS = 0.05    # was 1.0 (too dominant)   # from 1e-4 1e-4 # # Strong penalty for soft bounds
 LAMBDA_Q      = 0.0
 
@@ -391,6 +463,18 @@ LAMBDA_OFFSET_END = 10 #1.0
 LAMBDA_OFFSET_SCHEDULE = None
 # Example:
 # LAMBDA_OFFSET_SCHEDULE = {0: 0.1, 5: 0.5, 10: 1.0}
+
+
+# XXX TOD: oPTIMIZE PRESET:
+# OFFSET_MODE = "mul"
+# USE_LAMBDA_OFFSET_SCHEDULER = True
+
+# LAMBDA_OFFSET = 0.05          # start value used at compile
+# LAMBDA_OFFSET_WARMUP = 8
+
+# LAMBDA_OFFSET_START = 0.05
+# LAMBDA_OFFSET_END = 1.5       # 1.0–2.0 is the real-data zone
+# LAMBDA_OFFSET_SCHEDULE = None
 
 # Learning-rate multipliers for scalar physics parameters.
 MV_LR_MULT = 1.0
@@ -491,6 +575,28 @@ PHYSICS_BOUNDS = {
 # Use SOFT to keep gradients alive
 PHYSICS_BOUNDS_MODE = "soft" #"hard" #"hard"
 
+# -------------------------------------------------------------------
+# 5.4b Bounds-loss shaping (v3.2)
+# -------------------------------------------------------------------
+# How bounds loss is applied:
+#   "both" | "K" | "Ss" | "tau" | ...
+BOUNDS_LOSS_KIND = "both"
+
+# Smooth barrier sharpness (softplus-like)
+BOUNDS_BETA = 20.0
+
+# Guard margin (in "log" or "linear" space)
+BOUNDS_GUARD = 5.0
+
+# Base weight inside the bounds loss (separate from LAMBDA_BOUNDS)
+BOUNDS_W = 1.0
+
+# If True, include tau bounds term (if tau exists)
+BOUNDS_INCLUDE_TAU = True
+
+# Extra relative weight for tau part
+BOUNDS_TAU_W = 1.0
+
 # Time coordinate units used by physics conversions (rate_to_per_second etc.)
 # Must match what `TIME_COL` represents in your dataset.
 TIME_UNITS = "year"
@@ -536,6 +642,10 @@ CONS_STOP_GRAD_REF = True
 CONS_DRAWDOWN_ZERO_AT_ORIGIN = False
 CONS_DRAWDOWN_CLIP_MAX = None
 CONS_RELU_BETA = 20.0
+
+#XXX: Preset:
+# CONS_SCALE_FLOOR = 1e-10
+# GW_SCALE_FLOOR = 1e-11
 
 # -------------------------------------------------------------------
 # 5.5 Model->SI affine mapping for physics residuals
@@ -650,6 +760,29 @@ EPOCHS = 100           # Recommended: 50 to 200
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-3   # Slightly higher start, let Adam decay it
 
+# XXX preset:
+# EPOCHS = 150
+# BATCH_SIZE = 32
+# LEARNING_RATE = 5e-4
+
+# -------------------------------------------------------------------
+# 7.1 Identifiability controls (GeoPrior)
+# -------------------------------------------------------------------
+# IDENTIFIABILITY_REGIME selects an identifiability "profile" used by
+# GeoPriorSubsNet to reduce ambiguous parameter tradeoffs (e.g.
+# K vs Ss vs tau vs H, MV/kappa) during training.
+#
+# Accepted values:
+#   - None : use the model default regime (recommended; "base")
+#   - str  : name of a built-in regime/profile (e.g. "base",
+#            "strict", "relaxed", ...)
+#   - dict : advanced explicit switches/priors (must stay JSON-
+#            serializable; used only if your model supports it)
+#
+# NOTE:
+#   This only affects Stage-2 GeoPrior models. Other model flavours
+#   may ignore it safely.
+IDENTIFIABILITY_REGIME = None
 
 # ===================================================================
 # 8) HARDWARE / RUNTIME (TensorFlow)

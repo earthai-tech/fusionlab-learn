@@ -120,6 +120,101 @@ pde_mode : {{'consolidation', 'gw_flow', 'both', 'none', \
     depending on how the training step is configured. For a fully
     data-driven run, ensure physics loss weights are also set to zero.
 """,
+    identifiability_regime=r"""
+identifiability_regime : {{None, 'base', 'anchored', \
+'closure_locked', 'data_relaxed'}}, default None
+    Select an *identifiability profile* that configures
+    physics/regularization knobs to mitigate parameter
+    non-identifiability (ridge-like trade-offs) in the
+    poroelastic closure.
+
+    In GeoPrior-style poroelastic closures, a key time-scale
+    relation is used (drainage / consolidation closure):
+
+    .. math::
+
+       \tau
+       = \frac{H_d^2 \, S_s}{\pi^2 \, \kappa_b \, K}
+
+    where :math:`K` is hydraulic conductivity, :math:`S_s`
+    is specific storage, :math:`H_d` is an effective drainage
+    thickness, :math:`\kappa_b` is a consistency factor, and
+    :math:`\tau` is a relaxation time scale (seconds).
+
+    This implies the equivalent inverse mapping:
+
+    .. math::
+
+       K
+       = \frac{H_d^2 \, S_s}{\pi^2 \, \kappa_b \, \tau}
+
+    Identifiability issue (typical ridge)
+    -------------------------------------
+    When the loss is driven by physics residuals that depend
+    on these fields, multiple parameter combinations can
+    explain the data similarly. For example, the product-like
+    structure in the closure means increasing :math:`K` can be
+    compensated by increasing :math:`\tau` (or adjusting
+    :math:`S_s` or :math:`H_d`) with weak change in the
+    residual, creating a ridge in parameter space.
+
+    Regimes help break such ridges by construction, e.g.
+    locking a head, freezing a field over the horizon, or
+    strengthening priors/bounds to anchor solutions.
+
+    Meanings
+    --------
+    None
+        Disable the identifiability module entirely.
+        No profile merge is applied to ``scaling_kwargs``,
+        no compile defaults are injected, and no physics
+        heads are locked.
+
+    'base'
+        Apply conservative defaults intended to be safe for
+        general training, while providing mild regularization
+        for stability (e.g., freezing physics fields over the
+        horizon and enabling bounds/prior terms).
+
+    'anchored'
+        Stronger anchoring regime to reduce degeneracy between
+        :math:`K`, :math:`S_s`, and :math:`\tau`. Typically
+        increases bounds and prior penalties and uses a more
+        structured warmup/ramp.
+
+    'closure_locked'
+        Identifiability stress-test regime that *locks* the
+        ``tau_head`` (non-trainable) while keeping strong
+        prior/bounds control. Useful to probe whether the
+        closure structure alone can explain observations.
+
+    'data_relaxed'
+        Data-dominant regime with relaxed physics pressure.
+        Typically allows residual freedom and reduces or
+        disables prior terms, useful for diagnosing mismatch
+        between physics assumptions and the data.
+
+    What a profile may change
+    -------------------------
+    - Selected keys in ``scaling_kwargs`` (only if missing),
+      such as field-freezing, bounds-loss kind, and physics
+      warmup/ramp schedules.
+    - Default physics weights passed to ``compile()`` for
+      lambdas (only when the user does not provide them).
+    - Optional locks that set some physics heads as
+      non-trainable (e.g., ``tau_head``).
+
+    Notes
+    -----
+    User-provided settings always take precedence:
+    profile values are merged as *defaults only* and never
+    override explicit user keys in ``scaling_kwargs`` or
+    explicit lambda values passed to ``compile()``.
+
+    For reproducibility, use :func:`ident_audit_dict` to
+    export a JSON-safe summary of the effective regime,
+    resolved lambda weights, and key scaling toggles.
+""",
     mv=r"""
 mv : LearnableMV or float, default LearnableMV(1e-7)
     Compressibility-like coefficient for the consolidation closure.
@@ -738,28 +833,75 @@ or None, default None
 
     Q_length_in_si : bool, optional
         Whether any length scale used in Q conversions is in SI.
-
+        
     6) Priors, bounds, and constraint metadata
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     bounds : dict, optional
-        Bounds for learned fields and/or their log transforms.
-        Common entries include:
-        * ``K_min`` / ``K_max``,
-        * ``Ss_min`` / ``Ss_max``,
-        * ``tau_min`` / ``tau_max``,
-        * ``H_min`` / ``H_max``,
-        * ``logK_min`` / ``logK_max``, etc.
-
+        Bounds for learned physics fields and/or their log transforms.
+    
+        Common entries (linear space):
+        * ``H_min`` / ``H_max`` (meters)
+    
+        Common entries (either linear or log space):
+        * ``K_min`` / ``K_max`` (m/s)  OR  ``logK_min`` / ``logK_max``
+        * ``Ss_min`` / ``Ss_max`` (1/m) OR  ``logSs_min`` / ``logSs_max``
+        * ``tau_min`` / ``tau_max`` (s) OR  ``logTau_min`` / ``logTau_max``
+    
         Notes
         -----
-        Bounds can be enforced softly (penalty) or hard (projection),
-        depending on the model's bounds policy.
-
+        If log keys are not provided but linear keys exist, the system
+        may derive log-bounds internally via ``log(max(val, eps))``.
+    
+    bounds_mode : {'soft', 'hard', 'sigmoid', 'none'}, optional
+        Policy used to enforce configured bounds.
+    
+        * ``'soft'``:
+          Use a differentiable barrier penalty (returned by
+          ``compose_physics_fields`` as a scalar barrier term).
+        * ``'hard'``:
+          Enforce bounds by projection/clipping in the mapping from
+          logits to physical fields (non-differentiable at the boundary).
+        * ``'sigmoid'``:
+          Use a smooth bounded mapping (e.g., sigmoid/tanh squashing)
+          from logits to the bounded interval.
+        * ``'none'``:
+          Disable bound enforcement.
+    
+    bounds_beta : float, optional
+        Barrier sharpness used when ``bounds_mode='soft'``. Larger values
+        make the barrier steeper near the bounds.
+    
+    bounds_guard : float, optional
+        Numeric guard band used by guarded exponentials / mappings to
+        prevent overflow and stabilize penalties.
+    
+    bounds_w : float, optional
+        Weight for the K + Ss bounds barrier term (when enabled).
+    
+    bounds_include_tau : bool, optional
+        Whether to include tau in bounds enforcement / penalty.
+    
+    bounds_tau_w : float, optional
+        Weight for the tau bounds barrier term when ``bounds_include_tau``
+        is True.
+    
+    bounds_loss_kind : {'residual', 'barrier', 'both'}, optional
+        How the training loss combines bound penalties in the physics core.
+    
+        * ``'residual'``:
+          Use only residual-style bound violations (e.g.,
+          ``compute_bounds_residual`` -> mean(square(residuals))).
+        * ``'barrier'``:
+          Use only the barrier penalty returned by ``compose_physics_fields``
+          (optionally plus an H residual if you keep H enforced via residual).
+        * ``'both'``:
+          Sum residual-style and barrier penalties.
+    
     drainage_mode : {'single', 'double'}, optional
         Declares drainage assumption used for the tau prior. When
-        'double', a typical effective thickness rule is used
-        internally (e.g., Hd_factor=0.5).
-
+        'double', a typical effective thickness rule is used internally
+        (e.g., Hd_factor=0.5).
+    
     scaling_error_policy : {'raise', 'warn', 'ignore'}, optional
         Policy used when resolving scaling inconsistencies (missing
         keys, invalid ranges, unknown conventions). 'raise' is

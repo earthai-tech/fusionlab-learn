@@ -523,41 +523,6 @@ def load_inference_model(
         log_fn=log_fn,
     )
 
-
-# def load_inference_model(
-#     keras_path: Optional[str] = None,
-#     weights_path: Optional[str] = None,
-#     manifest_path: Optional[str] = None,
-#     custom_objects: Optional[Dict[str, Any]] = None,
-#     compile: bool = False,
-#     builder: Optional[Callable[[Dict[str, Any]], Any]] = None,
-#     build_inputs: Optional[Any] = None,
-#     prefer_full_model: bool = True,
-#     log_fn=print,
-#     use_in_memory_model: bool = False,
-# ):
-#     """Load the model for inference based on the configuration."""
-
-#     if use_in_memory_model:
-#         print("[INFO] Using in-memory model.")
-#         # Use the in-memory model (no need to load from disk)
-#         model = builder(load_manifest(manifest_path))
-#         model.build(build_inputs)  # Ensure the model is built for inference
-#     else:
-#         # Default behavior: Load the model from disk
-#         model = load_bundle_for_inference(
-#             keras_path=keras_path,
-#             weights_path=weights_path,
-#             manifest_path=manifest_path,
-#             custom_objects=custom_objects,
-#             compile=compile,
-#             builder=builder,
-#             build_inputs=build_inputs,
-#             prefer_full_model=prefer_full_model,
-#             log_fn=log_fn,
-#         )
-#     return model
-
 def load_bundle_for_inference(
     *,
     keras_path: Optional[str] = None,
@@ -596,10 +561,37 @@ def load_bundle_for_inference(
     if prefer_full_model and keras_path:
         try:
             with _custom_object_scope(keras, custom_objects):
-                return keras.models.load_model(
-                    keras_path,
-                    compile=compile,
-                )
+               model = keras.models.load_model(
+                     keras_path,
+                     compile=compile,
+                 )
+            
+            # Safety: ensure vars exist before load_weights().
+            if weights_path:
+                if build_inputs is not None:
+                    x = _extract_x(build_inputs)
+                    _ = model(x, training=False)
+
+                try:
+                    status = model.load_weights(weights_path)
+                    if not allow_partial:
+                        if hasattr(status, "assert_consumed"):
+                            status.assert_consumed()
+                        elif hasattr(
+                            status,
+                            "assert_existing_objects_matched",
+                        ):
+                            status.assert_existing_objects_matched()
+                    else:
+                        if hasattr(status, "expect_partial"):
+                            status.expect_partial()
+                except Exception as e:
+                    log(
+                        "[compat.keras] load_weights after "
+                        f"load_model failed: {e!r}"
+                    )
+
+            return model
         except Exception as e:
             log(
                 "[compat.keras] load_model failed: "
@@ -615,44 +607,6 @@ def load_bundle_for_inference(
                     keras_path,
                     custom_objects=custom_objects,
                 )
-                # layer = keras.layers.TFSMLayer(
-                #     keras_path,
-                #     call_endpoint="serving_default",
-                # )
-
-                # x = _extract_x(build_inputs) if build_inputs else None
-                # inp_shape = getattr(layer, "input_shape", None)
-
-                # if isinstance(inp_shape, (list, tuple)):
-                #     if inp_shape and isinstance(
-                #         inp_shape[0],
-                #         (list, tuple),
-                #     ):
-                #         # Multi-input SavedModel
-                #         raise ValueError(
-                #             "TFSMLayer multi-input is "
-                #             "not supported here."
-                #         )
-
-                # if isinstance(inp_shape, (list, tuple)) and len(
-                #     inp_shape
-                # ) >= 2:
-                #     shape = tuple(inp_shape[1:])
-                # elif x is not None and hasattr(x, "shape"):
-                #     shape = tuple(x.shape[1:])
-                # else:
-                #     raise ValueError(
-                #         "Cannot infer input shape for "
-                #         "TFSMLayer wrapper."
-                #     )
-
-                # inp = keras.Input(shape=shape)
-                # out = layer(inp)
-                # return keras.Model(
-                #     inp,
-                #     out,
-                #     name="tfsm_inference",
-                # )
             except Exception as e:
                 log(
                     "[compat.keras] TFSMLayer failed: "

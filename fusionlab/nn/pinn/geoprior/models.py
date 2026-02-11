@@ -50,6 +50,11 @@ from .debugs import (
     dbg_term_grads_finite,
 )
 from .doc import GEOPRIOR_SUBSNET_DOC, POROELASTIC_SUBSNET_DOC
+from .identifiability import ( 
+    init_identifiability, 
+    apply_ident_locks, 
+    resolve_compile_weights
+)
 from .losses import pack_step_results
 from .maths import (
     _EPSILON,
@@ -212,6 +217,17 @@ class GeoPriorSubsNet(BaseAttentive):
             "residual_method": [
                 StrOptions({"exact", "euler"}),
             ],
+            "identifiability_regime": [
+                StrOptions(
+                    {
+                        "base",
+                        "anchored",
+                        "closure_locked",
+                        "data_relaxed",
+                    }
+                ),
+                None,
+            ],
             "scaling_kwargs": [
                 Mapping,
                 str,
@@ -245,6 +261,7 @@ class GeoPriorSubsNet(BaseAttentive):
         use_residuals: bool = True,
         use_batch_norm: bool = False,
         pde_mode: Union[str, List[str]] = 'both',
+        identifiability_regime: str | None = None,
         mv: Union[LearnableMV, float] = LearnableMV(initial_value=1e-7),
         kappa: Union[LearnableKappa, float] = LearnableKappa(initial_value=1.0),
         gamma_w: Union[FixedGammaW, float] = FixedGammaW(value=9810.0),
@@ -291,7 +308,7 @@ class GeoPriorSubsNet(BaseAttentive):
             kwargs.pop ('output_dim') 
             
         self.bounds_mode = bounds_mode or "soft"
-
+        
         # --------------------------------------------------------------
         # Scaling kwargs: accept None / Mapping / path / config.
         # Always resolve to a canonical, validated dict.
@@ -319,6 +336,15 @@ class GeoPriorSubsNet(BaseAttentive):
             )
             raise
         
+        (
+            self.identifiability_regime,
+            self._ident_profile,
+            self.scaling_kwargs,
+        ) = init_identifiability(
+            identifiability_regime,
+            self.scaling_kwargs,
+        )
+            
         # Ensure nested bounds is a plain dict.
         b = self.scaling_kwargs.get("bounds", None)
         if isinstance(b, Mapping) and not isinstance(b, dict):
@@ -654,8 +680,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 out.append(m)
                 seen.add(id(m))
         return out
-
-
+    
     def _assert_dynamic_names_match_tensor(self, Xh):
         sk = self.scaling_kwargs or {}
         names = sk.get("dynamic_feature_names", None)
@@ -673,8 +698,11 @@ class GeoPriorSubsNet(BaseAttentive):
 
     def _build_attentive_layers(self):
         super()._build_attentive_layers()
-        self._build_physics_layers()
+        self._build_physics_layers() 
     
+    def _apply_identifiability_locks(self) -> None:
+        apply_ident_locks(self)
+
     def _build_physics_layers(self):
         logK_min, logK_max, logSs_min, logSs_max = get_log_bounds(
             self, as_tensor=False, verbose=self.verbose
@@ -737,8 +765,9 @@ class GeoPriorSubsNet(BaseAttentive):
         self.eps_prior_metric = Mean(name="epsilon_prior")
         self.eps_cons_metric = Mean(name="epsilon_cons")
         self.eps_gw_metric =  Mean(name="epsilon_gw")
+        
+        self._apply_identifiability_locks()
 
-    
     def _init_coordinate_corrections(
         self,
         gwl_units: Union[int, None] = None,
@@ -1703,6 +1732,7 @@ class GeoPriorSubsNet(BaseAttentive):
             _logSs,
             _log_tau,
             _log_tau_phys,
+            _, # _loss_bounds_barrier: ignored 
         ) = compose_physics_fields(
             self,
             coords_flat=coords_for_decoder,
@@ -3436,13 +3466,13 @@ class GeoPriorSubsNet(BaseAttentive):
 
     def compile(
         self,
-        lambda_cons: float = 1.0,
-        lambda_gw: float = 1.0,
-        lambda_prior: float = 1.0,
-        lambda_smooth: float = 1.0,
-        lambda_mv: float = 0.0,
-        lambda_bounds: float = 0.0,
-        lambda_q: float = 0.0,
+        lambda_cons: float | None = None,
+        lambda_gw: float | None = None,
+        lambda_prior: float | None = None,
+        lambda_smooth: float | None = None,
+        lambda_mv: float | None = None,
+        lambda_bounds: float | None = None,
+        lambda_q: float | None = None,
         lambda_offset: float = 1.0,
         mv_lr_mult: float = 1.0,
         kappa_lr_mult: float = 1.0,
@@ -3753,14 +3783,25 @@ class GeoPriorSubsNet(BaseAttentive):
         .. [3] Terzaghi, K. Theoretical Soil Mechanics. Wiley, 1943.
         """
 
-        # Let the base class set up optimizer/loss/metrics first.
+        # Let base class set optimizer/loss/metrics first.
         super().compile(**kwargs)
     
-        # Store core physics weights.
-        self.lambda_cons = float(lambda_cons)
-        self.lambda_gw = float(lambda_gw)
-        self.lambda_q = float(lambda_q)
+        w = resolve_compile_weights(
+            getattr(self, "_ident_profile", None),
+            lambda_cons=lambda_cons,
+            lambda_gw=lambda_gw,
+            lambda_prior=lambda_prior,
+            lambda_smooth=lambda_smooth,
+            lambda_mv=lambda_mv,
+            lambda_bounds=lambda_bounds,
+            lambda_q=lambda_q,
+        )
         
+        # Store core physics weights.
+        self.lambda_cons = float(w["lambda_cons"])
+        self.lambda_gw = float(w["lambda_gw"])
+        self.lambda_q = float(w["lambda_q"])
+    
         self._scale_mv_with_offset = bool(scale_mv_with_offset)
         self._scale_q_with_offset = bool(scale_q_with_offset)
     
@@ -3771,28 +3812,29 @@ class GeoPriorSubsNet(BaseAttentive):
             self.lambda_mv = 0.0
             self.lambda_q = 0.0
             self.lambda_bounds = 0.0
-    
             # Keep neutral; avoids any assertion trouble and keeps logs stable.
             self._lambda_offset.assign(1.0)
         else:
-            self.lambda_prior = float(lambda_prior)
-            self.lambda_smooth = float(lambda_smooth)
-            self.lambda_mv = float(lambda_mv)
-            self.lambda_bounds = float(lambda_bounds)
+            self.lambda_prior = float(w["lambda_prior"])
+            self.lambda_smooth = float(w["lambda_smooth"])
+            self.lambda_mv = float(w["lambda_mv"])
+            self.lambda_bounds = float(w["lambda_bounds"])
+    
             if self.bounds_mode == "hard":
                 self.lambda_bounds = 0.0
     
-            # Validate once, in Python, per run.
             lo = float(lambda_offset)
             if self.offset_mode == "mul" and lo <= 0.0:
                 raise ValueError(
-                    "lambda_offset must be > 0 when offset_mode='mul'."
+                    "lambda_offset must be > 0 when "
+                    "offset_mode='mul'."
                 )
             self._lambda_offset.assign(lo)
     
         # Per-parameter LR multipliers for log_mv and log_kappa.
         self._mv_lr_mult = float(mv_lr_mult)
         self._kappa_lr_mult = float(kappa_lr_mult)
+        
 
     def export_physics_payload(
         self,
@@ -4115,6 +4157,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 ),
                 "output_gwl_dim": self.output_gwl_dim,
                 "pde_mode": self.pde_modes_active,
+                "identifiability_regime": self.identifiability_regime,
                 "mv": self.mv_config,
                 "kappa": self.kappa_config,
                 "gamma_w": self.gamma_w_config,

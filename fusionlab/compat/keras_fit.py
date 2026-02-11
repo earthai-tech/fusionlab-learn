@@ -3,7 +3,7 @@
 # Author: LKouadio <etanoyau@gmail.com>
 
 """
-fusionlab.compat.fit_compat
+fusionlab.compat.keras_fit
 
 Keras 2/3 helpers for:
 - filling missing targets for multi-output models
@@ -16,17 +16,23 @@ from __future__ import annotations
 
 import contextlib
 import warnings
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence
+from collections.abc import Mapping
+import itertools
+from typing import ( 
+    Any, 
+    Callable, 
+    Dict, 
+    Optional, 
+    Sequence
+)
+import numpy as np
 
-# from .keras import _import_keras  # internal reuse is OK
-
-#  unified deps (tf.keras / keras ops)
 from ._config import import_keras_dependencies
 
 
 # Custom message for missing dependencies
 EXTRA_MSG = ( 
-    "`fit-compat` module expects the `tensorflow` or"
+    "`keras-fit` module expects the `tensorflow` or"
     " `keras` library to be installed."
     )
 # Configure and install dependencies if needed
@@ -46,6 +52,189 @@ tf_expand_dims = KERAS_DEPS.expand_dims
 
 LogFn = Optional[Callable[[str], None]]
 
+def _slice_first_batch(x: Any, n: int) -> Any:
+
+    if x is None:
+        return None
+
+    if isinstance(x, Mapping):
+        return {k: _slice_first_batch(v, n) for k, v in x.items()}
+
+    if isinstance(x, (list, tuple)):
+        return type(x)(_slice_first_batch(v, n) for v in x)
+
+    try:
+        a = np.asarray(x)
+    except Exception:
+        return x
+
+    if a.ndim == 0:
+        return x
+
+    try:
+        return x[:n]
+    except Exception:
+        return x
+
+
+def _match_score(a: Any, b: Any) -> float:
+
+
+    aa = np.asarray(a)
+    bb = np.asarray(b)
+
+    if aa.shape != bb.shape:
+        return float("inf")
+
+    af = aa.reshape(-1)
+    bf = bb.reshape(-1)
+
+    m = int(min(256, af.size))
+    if m <= 0:
+        return 0.0
+
+    return float(np.mean(np.abs(af[:m] - bf[:m])))
+
+
+def normalize_predict_output(
+    model: Any,
+    *,
+    x: Any,
+    pred_out: Any,
+    required: Sequence[str] = ("subs_pred", "gwl_pred"),
+    batch_n: int = 8,
+    log_fn: LogFn = None,
+) -> Dict[str, Any]:
+    """
+    Normalize model.predict() output to a dict with required keys.
+
+    Why:
+    - Keras predict() may return a list/tuple even if call()
+      returns a dict.
+    - List order can be ambiguous across TF/Keras/compat paths.
+    - This function uses a one-batch call() to robustly map
+      list outputs to dict keys.
+
+    Returns:
+    - dict containing at least the `required` keys.
+    """
+
+    log = log_fn or (lambda *_: None)
+
+    req = list(required)
+
+    if isinstance(pred_out, Mapping):
+        d = dict(pred_out)
+        missing = [k for k in req if k not in d]
+        if not missing:
+            return d
+
+        raise KeyError(
+            "predict() dict missing keys: "
+            f"{missing}. got={list(d.keys())}"
+        )
+
+    if not isinstance(pred_out, (list, tuple)):
+        raise TypeError(
+            "Unexpected predict() output type: "
+            f"{type(pred_out)}"
+        )
+
+    pred_list = list(pred_out)
+    if len(pred_list) < len(req):
+        raise ValueError(
+            "predict() returned too few outputs: "
+            f"{len(pred_list)} < {len(req)}"
+        )
+
+    # Candidate mapping via output_names (best-effort)
+    names = list(getattr(model, "output_names", []) or [])
+    cand = None
+    if names:
+        tmp = {}
+        for i in range(min(len(names), len(pred_list))):
+            tmp[names[i]] = pred_list[i]
+        if all(k in tmp for k in req):
+            cand = tmp
+
+    # Strong mapping via one-batch call()
+    xb = _slice_first_batch(x, int(batch_n))
+    try:
+        out_call = model(xb, training=False)
+    except Exception:
+        out_call = None
+
+    if isinstance(out_call, Mapping) and all(k in out_call for k in req):
+        ref = {k: out_call[k] for k in req}
+
+        idxs = list(range(len(pred_list)))
+        k = len(req)
+
+        best = None
+        best_perm = None
+
+        for perm in itertools.permutations(idxs, k):
+            tot = 0.0
+            ok = True
+            for j, pi in enumerate(perm):
+                s = _match_score(pred_list[pi], ref[req[j]])
+                if not (s < float("inf")):
+                    ok = False
+                    break
+                tot += s
+
+            if not ok:
+                continue
+
+            if best is None or tot < best:
+                best = tot
+                best_perm = perm
+
+        if best_perm is None:
+            if cand is not None:
+                log(
+                    "normalize_predict_output: "
+                    "call()-mapping failed; "
+                    "using output_names mapping."
+                )
+                return cand
+            raise RuntimeError(
+                "Could not map predict() list outputs "
+                "to required keys using call()."
+            )
+
+        out = {}
+        for j, pi in enumerate(best_perm):
+            out[req[j]] = pred_list[pi]
+
+        if cand is not None:
+            for k2, v2 in cand.items():
+                if k2 not in out:
+                    out[k2] = v2
+
+        log(
+            "normalize_predict_output: "
+            f"mapped via call(): {best_perm} "
+            f"score={best:.6g}"
+        )
+        return out
+
+    # Fallbacks
+    if cand is not None:
+        log(
+            "normalize_predict_output: "
+            "call() not usable; using output_names."
+        )
+        return cand
+
+    # Last-resort positional mapping (avoid if possible)
+    log(
+        "normalize_predict_output: "
+        "no call()/output_names; "
+        "using positional fallback."
+    )
+    out = {req[i]: pred_list[i] for i in range(len(req))}
+    return out
 
 # ---------------------------------------------------------------------
 # Warnings (optional)

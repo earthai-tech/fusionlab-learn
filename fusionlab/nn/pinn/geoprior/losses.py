@@ -19,7 +19,7 @@ from ....compat.keras_fit import (
     compiled_metrics_dict,
 )
 from ... import KERAS_DEPS
-from ..._shapes import _as_BHO
+# from ..._shapes import _as_BHO
 
 from .utils import get_sk
 
