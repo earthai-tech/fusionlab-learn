@@ -1,0 +1,43 @@
+{
+  "csv": "F:\\repositories\\fusionlab-learn\\results\\sm3_synth_1d\\sm3_synth_runs.csv",
+  "bounds_inferred": {
+    "K_min": 5.503663497163913e-12,
+    "K_max": 4.1171559217456626e-11,
+    "tau_min": 48556304.0,
+    "tau_max": 63988296.0,
+    "Hd_min": 4.130241394042969,
+    "Hd_max": 18.0
+  },
+  "ridge_thr": 2.0,
+  "rtol": 1e-06,
+  "summary_primary": {
+    "n": 10,
+    "clipped": 5,
+    "ridge_strong": 3,
+    "both_clipped_and_ridge": 1,
+    "clipped_only": 4,
+    "ridge_only": 2,
+    "neither": 3,
+    "clipped_frac": 0.5,
+    "ridge_strong_frac": 0.3,
+    "both_frac": 0.1,
+    "clipped_only_frac": 0.4,
+    "ridge_only_frac": 0.2,
+    "neither_frac": 0.3
+  },
+  "summary_any": {
+    "n": 10,
+    "clipped": 6,
+    "ridge_strong": 3,
+    "both_clipped_and_ridge": 1,
+    "clipped_only": 5,
+    "ridge_only": 2,
+    "neither": 2,
+    "clipped_frac": 0.6,
+    "ridge_strong_frac": 0.3,
+    "both_frac": 0.1,
+    "clipped_only_frac": 0.5,
+    "ridge_only_frac": 0.2,
+    "neither_frac": 0.2
+  }
+}

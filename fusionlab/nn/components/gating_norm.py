@@ -24,15 +24,13 @@ from ._config import (
     BatchNormalization, 
     LayerNormalization,
     Softmax, 
-
+    tf_ones_like,
     tf_shape, 
     tf_expand_dims, tf_tile,
     tf_add, 
     tf_multiply,
     tf_stack, 
     tf_reduce_sum,
-    tf_equal,
-    tf_cond,
     tf_TensorShape,  
     register_keras_serializable,
     tf_autograph, 
@@ -636,7 +634,13 @@ class VariableSelectionNetwork(Layer, NNLearner):
 
         # 2. Apply Softmax across the variable dimension (N, axis=-2)
         _logger.debug("  Calculating importance weights (softmax)...")
-        weights = self.softmax(importance_logits)
+        # If N == 1, softmax is always 1 anyway.
+        # weights = self.softmax(importance_logits)
+        if self.num_inputs == 1:
+            weights = tf_ones_like(importance_logits)
+        else:
+            weights = self.softmax(importance_logits)
+        
         _logger.debug(f"  Importance weights shape: {weights.shape}")
         # Shape: (B, [T,] N, 1)
         self.variable_importances_ = weights # Store weights

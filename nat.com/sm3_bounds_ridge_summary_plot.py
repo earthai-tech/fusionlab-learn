@@ -675,7 +675,7 @@ if __name__ == "__main__":
 
 # python sm3_bounds_ridge_summary_plot.py \
 #   --csv sm3_synth_runs.csv \
-#   --out sm3_clip_vs_ridge.png \
+#   --ou.png \
 #   --no-show-legend \
 #   --no-show-titles
 

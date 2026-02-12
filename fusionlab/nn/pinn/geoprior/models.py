@@ -788,7 +788,7 @@ class GeoPriorSubsNet(BaseAttentive):
             when used in a time-distributed manner.
             """
             return Sequential([
-                InputLayer(input_shape=(None, 3)),
+                InputLayer(shape=(None, 3)),
                 Dense(hidden[0], activation=act, name=f"{name}_dense1"),
                 Dense(hidden[1], activation=act, name=f"{name}_dense2"),
                 Dense(

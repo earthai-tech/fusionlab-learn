@@ -4577,7 +4577,6 @@ def _finite_or_zero(x: Tensor) -> Tensor:
     x = tf_cast(x, tf_float32)
     return tf_where(tf_math.is_finite(x), x, tf_zeros_like(x))
 
-
 def _get_bounds_loss_cfg(
     model: Any = None,
     scaling_kwargs: Optional[dict] = None,
@@ -4590,6 +4589,14 @@ def _get_bounds_loss_cfg(
             return default
         return getattr(model, name, default)
 
+    def _take(sk: Mapping[str, Any], key: str, cur: Any) -> Any:
+        # If user/profile put None by mistake, ignore it
+        if key in sk:
+            v = sk.get(key)
+            if v is not None:
+                return v
+        return cur
+
     sk_model = _as_map(getattr(model, "scaling_kwargs", None))
     sk_arg = _as_map(scaling_kwargs)
 
@@ -4598,35 +4605,28 @@ def _get_bounds_loss_cfg(
     mode = _attr("bounds_mode", "soft")
     kind = _attr("bounds_loss_kind", "both")
 
-    beta = _attr("bounds_beta", 20.0)
+    beta  = _attr("bounds_beta", 20.0)
     guard = _attr("bounds_guard", 5.0)
-    w_b = _attr("bounds_w", 1.0)
+    w_b   = _attr("bounds_w", 1.0)
 
     inc_tau = _attr("bounds_include_tau", True)
-    w_tau = _attr("bounds_tau_w", 1.0)
+    w_tau   = _attr("bounds_tau_w", 1.0)
 
     sources = [sk_model, sk_arg]
 
     # 1) flat keys
     for sk in sources:
-        if "bounds_mode" in sk:
-            mode = sk["bounds_mode"]
-        if "bounds_loss_kind" in sk:
-            kind = sk["bounds_loss_kind"]
+        mode  = _take(sk, "bounds_mode", mode)
+        kind  = _take(sk, "bounds_loss_kind", kind)
 
-        if "bounds_beta" in sk:
-            beta = sk["bounds_beta"]
-        if "bounds_guard" in sk:
-            guard = sk["bounds_guard"]
-        if "bounds_w" in sk:
-            w_b = sk["bounds_w"]
+        beta  = _take(sk, "bounds_beta", beta)
+        guard = _take(sk, "bounds_guard", guard)
+        w_b   = _take(sk, "bounds_w", w_b)
 
-        if "bounds_include_tau" in sk:
-            inc_tau = sk["bounds_include_tau"]
-        if "bounds_tau_w" in sk:
-            w_tau = sk["bounds_tau_w"]
+        inc_tau = _take(sk, "bounds_include_tau", inc_tau)
+        w_tau   = _take(sk, "bounds_tau_w", w_tau)
 
-    # 2) nested dict (highest within each source)
+    # 2) nested dict
     nested_keys = (
         "bounds_loss_settings",
         "bounds_loss_setting",
@@ -4643,20 +4643,18 @@ def _get_bounds_loss_cfg(
             if k in sk:
                 nested = sk.get(k)
                 break
-
         if not isinstance(nested, Mapping):
             continue
 
-        mode = nested.get("mode", mode)
-        kind = nested.get("kind", kind)
+        mode  = _take(nested, "mode", mode)
+        kind  = _take(nested, "kind", kind)
 
-        beta = nested.get("beta", beta)
-        guard = nested.get("guard", guard)
-        w_b = nested.get("w", w_b)
+        beta  = _take(nested, "beta", beta)
+        guard = _take(nested, "guard", guard)
+        w_b   = _take(nested, "w", w_b)
 
-        inc_tau = nested.get("include_tau", inc_tau)
-
-        w_tau = nested.get("tau_w", w_tau)
+        inc_tau = _take(nested, "include_tau", inc_tau)
+        w_tau   = _take(nested, "tau_w", w_tau)
 
     mode = str(mode).strip().lower()
     kind = str(kind).strip().lower()
@@ -4670,7 +4668,6 @@ def _get_bounds_loss_cfg(
         include_tau=bool(inc_tau),
         tau_w=float(w_tau),
     )
-
 
 def compose_physics_fields(
     model,

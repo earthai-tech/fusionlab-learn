@@ -1228,9 +1228,8 @@ def train_one_pixel(
         if "tau" in str(nm).lower():
             tau_vars.append(str(nm))
     
-    print("Trainable tau vars:", tau_vars)
+    # print("Trainable tau vars:", tau_vars)
     
-        
     model.compile(
         optimizer=tf.keras.optimizers.Adam(
             learning_rate=float(lr),

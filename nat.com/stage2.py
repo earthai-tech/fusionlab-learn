@@ -1498,10 +1498,6 @@ subsmodel_params["scaling_kwargs"] = finalize_scaling_kwargs(
     subsmodel_params["scaling_kwargs"]
 )
 
-subsmodel_params["scaling_kwargs"] = finalize_scaling_kwargs(
-    subsmodel_params["scaling_kwargs"]
-)
-
 # ---------------------------------------------------------------------
 # Optional precedence override: load scaling_kwargs from JSON (if provided)
 # and let it override anything computed in Stage-2.

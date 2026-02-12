@@ -370,238 +370,296 @@ GWL_WEIGHTS  = {0.1: 1.5, 0.5: 1.0, 0.9: 1.5}
 # SUBS_WEIGHTS = {0.1: 2.0, 0.5: 1.0, 0.9: 2.0}
 # GWL_WEIGHTS  = {0.1: 1.2, 0.5: 1.0, 0.9: 1.2}
 
-
 # ===================================================================
-# 5) PHYSICS CONFIGURATION (GeoPrior PINN block)
+# 5) PHYSICS + TRAINING SCHEDULE (GeoPrior PINN block)
 # ===================================================================
+# This section is the SINGLE place where you control:
+#   (A) what physics is enabled,
+#   (B) how strong each physics term is,
+#   (C) how physics strength is scheduled during training,
+#   (D) when auxiliary constraints (Q, subs-residual) turn on,
+#   (E) bounds / guards / diagnostics.
+#
+# Mental model
+# ------------
+# Total loss is conceptually:
+#   L_total =
+#       L_data(subs) + LOSS_WEIGHT_GWL * L_data(head)
+#     + physics_mult(step) * (
+#           LAMBDA_CONS   * L_cons
+#         + LAMBDA_GW     * L_gw
+#         + LAMBDA_PRIOR  * L_prior
+#         + LAMBDA_SMOOTH * L_smooth
+#         + LAMBDA_BOUNDS * L_bounds
+#         + LAMBDA_MV     * L_mvprior
+#         + LAMBDA_Q      * L_Q_reg * gate_Q(step)
+#         + (optional)    L_subs_resid * gate_subs_resid(step)
+#       )
+#
+# where:
+#   - physics_mult(step) is the GLOBAL physics strength scheduler
+#     (either PHYSICS_*_STEPS OR lambda_offset scheduler).
+#   - gate_Q and gate_subs_resid are ON/OFF/RAMP gates controlled by
+#     TRAINING_STRATEGY-specific policies.
+#
+# IMPORTANT RULE: avoid double scheduling
+# --------------------------------------
+# You should use ONE global scheduling mechanism:
+#   - Preferred: PHYSICS_WARMUP_STEPS / PHYSICS_RAMP_STEPS (step-based).
+#   - Alternative: USE_LAMBDA_OFFSET_SCHEDULER (epoch/step based).
+# If you set PHYSICS_*_STEPS, keep USE_LAMBDA_OFFSET_SCHEDULER = False.
 
-# XXX: oPTIMIZE PRESET:
-# PDE_MODE_CONFIG = "on"
-# PHYSICS_BOUNDS_MODE = "soft"
-# SCALE_PDE_RESIDUALS = True
-
-# TRAINING_STRATEGY = "data_first"
-# LOSS_WEIGHT_GWL_DATA_FIRST = 1.0
-# LAMBDA_Q_DATA_FIRST = 1e-4
-# Q_POLICY_DATA_FIRST = "always_on"
-# SUBS_RESID_POLICY_DATA_FIRST = "always_on"
-
-# LAMBDA_CONS   = 0.15
-# LAMBDA_GW     = 0.05
-# LAMBDA_PRIOR  = 0.10
-# LAMBDA_SMOOTH = 3e-4
-# LAMBDA_BOUNDS = 5e-3
-# LAMBDA_MV     = 5e-3
-# LAMBDA_Q      = 0.0
 
 # -------------------------------------------------------------------
-# 5.1 Which residuals are active
+# 5.1 Physics switches (what residuals are active)
 # -------------------------------------------------------------------
-# PDE_MODE_CONFIG:
-#   - "both" or "on"   : consolidation + groundwater flow
-#   - "consolidation"  : consolidation only
-#   - "gw_flow"        : groundwater flow only
-#   - "none" or "off"  : physics switched off
+# PDE_MODE_CONFIG selects which PDE residual blocks are included.
+# Accepted values (case-insensitive):
+#   - "on" / "both"          : consolidation + groundwater flow
+#   - "consolidation"        : consolidation only
+#   - "gw_flow"              : groundwater flow only
+#   - "off" / "none"         : physics disabled
 PDE_MODE_CONFIG = "on"
 
-# For data-only baselines, scripts may ignore physics even if enabled above.
+# PHYSICS_BASELINE_MODE is for "data-only baselines" in scripts.
+# Typical:
+#   - "none" : do not override (normal behavior)
+#   - other values may be used by your training script to force-disable
 PHYSICS_BASELINE_MODE = "none"
 
-PHYSICS_WARMUP_STEPS = 500 
-PHYSICS_RAMP_STEPS = 500 
- 
-# If True, use internal scale factors (c*, g*) so residual terms are comparable.
-SCALE_PDE_RESIDUALS = True 
+# If True, internally scale PDE residuals (c*, g*) so magnitudes are comparable.
+# Recommended: True (especially for real data, mixed units, and stability).
+SCALE_PDE_RESIDUALS = True
+
 
 # -------------------------------------------------------------------
-# 5.2 Relative weights of each physics term (compile-time)
+# 5.2 Compile-time physics weights (relative importance INSIDE physics)
 # -------------------------------------------------------------------
-LAMBDA_CONS   = 1.0     # from 0.10 (×10)
-LAMBDA_GW     = 0.10    # from 0.005 (×10) # 0.005 # Increased from 0.05 to force head fitting
-LAMBDA_PRIOR  = 0.2   # keep/raise if K,Ss collapse # 0.05 # # Increased: strongly enforce tau = Ss*H^2/K
-LAMBDA_SMOOTH = 0.01  # # Help reduce noise in K/Ss fields # 0.01
-LAMBDA_MV     = .01   #0.005
-LAMBDA_BOUNDS = 0.05    # was 1.0 (too dominant)   # from 1e-4 1e-4 # # Strong penalty for soft bounds
-LAMBDA_Q      = 0.0
+# These are multipliers for each physics component BEFORE applying the
+# global physics multiplier (physics_mult).
+#
+# Guidance:
+# - LAMBDA_CONS / LAMBDA_GW control how much the PDE residuals matter.
+# - LAMBDA_PRIOR stabilizes the closure (e.g., tau prior / physical coherence).
+# - LAMBDA_SMOOTH suppresses noisy spatial fields (K, Ss).
+# - LAMBDA_BOUNDS penalizes constraint violations (soft bounds).
+# - LAMBDA_MV controls MV-prior penalty (scalar regularization).
+# - LAMBDA_Q is the base weight for Q regularization; it can still be
+#   effectively OFF early via gating (TRAINING_STRATEGY section).
+LAMBDA_CONS = 1.0
+LAMBDA_GW = 0.10
+LAMBDA_PRIOR = 0.20
+LAMBDA_SMOOTH = 0.01
+LAMBDA_BOUNDS = 0.05
+LAMBDA_MV = 0.01
+LAMBDA_Q = 0.0
+
 
 # -------------------------------------------------------------------
-# 5.3 Global physics-loss multiplier (offset)
+# 5.3 Global physics strength (choose ONE scheduling mechanism)
 # -------------------------------------------------------------------
-# OFFSET_MODE controls how lambda_offset is interpreted:
-#   - "mul"   : physics_mult = lambda_offset
-#   - "log10" : physics_mult = 10 ** lambda_offset
-OFFSET_MODE = "mul"     # {"mul", "log10"}
+# Option A (RECOMMENDED): step-based global warmup/ramp inside the model.
+# -------------------------------------------------------------------
+# PHYSICS_WARMUP_STEPS:
+#   Number of optimizer steps where global physics is "soft" / warming up.
+# PHYSICS_RAMP_STEPS:
+#   Number of optimizer steps used to ramp to full physics strength.
+#
+# Because config.py cannot reference runtime variables (like steps_per_epoch),
+# you MUST paste numeric values here.
+#
+# Typical values:
+#   - data_first   : warmup ~ 2–3 epochs, ramp ~ 5–10 epochs
+#   - physics_first: warmup ~ 0–1 epoch, ramp ~ 2–5 epochs
+#
+# Example (if steps_per_epoch = 600):
+#   data_first warmup=3*600=1800, ramp=8*600=4800
+PHYSICS_WARMUP_STEPS = 1800
+PHYSICS_RAMP_STEPS = 4800
 
-# Initial value used in model.compile(lambda_offset=...)
+# Option B (ALTERNATIVE): lambda_offset scheduler (do NOT combine with Option A)
+# -------------------------------------------------------------------
+# OFFSET_MODE controls how LAMBDA_OFFSET is interpreted:
+#   - "mul"   : physics_mult = LAMBDA_OFFSET
+#   - "log10" : physics_mult = 10 ** LAMBDA_OFFSET
+OFFSET_MODE = "mul"
+
+# Base value used in model.compile(lambda_offset=...)
 LAMBDA_OFFSET = 1.0
 
-# Optional scheduler (recommended when physics can dominate early).
-USE_LAMBDA_OFFSET_SCHEDULER = True
+# If you use PHYSICS_*_STEPS above, keep this False (avoid double scheduling).
+USE_LAMBDA_OFFSET_SCHEDULER = False
 
-# Scheduler semantics:
-# - LAMBDA_OFFSET_UNIT: step vs epoch schedule indexing
-# - LAMBDA_OFFSET_WHEN: update at begin vs end
+# If you enable the scheduler, it can run over epochs or steps.
 LAMBDA_OFFSET_UNIT = "epoch"   # {"epoch", "step"}
 LAMBDA_OFFSET_WHEN = "begin"   # {"begin", "end"}
 
-# If LAMBDA_OFFSET_SCHEDULE is None, callback uses warmup:
-# start -> end over `LAMBDA_OFFSET_WARMUP` epochs/steps.
-LAMBDA_OFFSET_WARMUP = 5 # 20 # 1 # # 1–2 epochs (not 5) # Sync with Q_WARMUP
-
-# Safe defaults:
-# - start small so the model learns data scale before physics locks in
-# - end at 1.0 (neutral)
-# Start small (0.1) -> Data dominates, getting rough shape right.
-# End at 1.0 -> Physics balances data.
-
-LAMBDA_OFFSET_START =0.1 # 2.0 # 0.2 # 0.05
-LAMBDA_OFFSET_END = 10 #1.0
+# If LAMBDA_OFFSET_SCHEDULE is None, use warmup-based interpolation:
+# start -> end over LAMBDA_OFFSET_WARMUP epochs/steps.
+LAMBDA_OFFSET_WARMUP = 5
+LAMBDA_OFFSET_START = 0.1
+LAMBDA_OFFSET_END = 1.0
 
 # Optional explicit schedule:
-# - dict  : {index: value} where index is epoch/step
-# - list  : values[index]
+#   - dict: {index: value}   (index is epoch/step depending on UNIT)
+#   - list: values[index]
 LAMBDA_OFFSET_SCHEDULE = None
-# Example:
-# LAMBDA_OFFSET_SCHEDULE = {0: 0.1, 5: 0.5, 10: 1.0}
 
 
-# XXX TOD: oPTIMIZE PRESET:
-# OFFSET_MODE = "mul"
-# USE_LAMBDA_OFFSET_SCHEDULER = True
-
-# LAMBDA_OFFSET = 0.05          # start value used at compile
-# LAMBDA_OFFSET_WARMUP = 8
-
-# LAMBDA_OFFSET_START = 0.05
-# LAMBDA_OFFSET_END = 1.5       # 1.0–2.0 is the real-data zone
-# LAMBDA_OFFSET_SCHEDULE = None
-
-# Learning-rate multipliers for scalar physics parameters.
+# -------------------------------------------------------------------
+# 5.4 Learning-rate multipliers for scalar physics parameters
+# -------------------------------------------------------------------
+# These apply to specific scalar parameters in the physics block.
 MV_LR_MULT = 1.0
 KAPPA_LR_MULT = 5.0
 
-MV_PRIOR_UNITS ="strict" 
-MV_ALPHA_DISP = 0.1
-MV_HUBER_DELTA = 1.0 
-# MV prior scheduling (independent from lambda_offset)
-MV_PRIOR_MODE = "calibrate"   # stop_gradient(Ss_field) by default
-MV_WEIGHT = 1e-3              # final mv weight (small)
 
-# --- MV prior scheduler (preferred: epoch-based, robust to batch size) ---
+# -------------------------------------------------------------------
+# 5.5 MV prior (scalar regularization) scheduling
+# -------------------------------------------------------------------
+# MV_PRIOR_MODE controls how MV prior interacts with learned fields:
+#   - "calibrate" : typical mode; may stop gradients through Ss_field
+#   - other modes depend on your implementation
+MV_PRIOR_MODE = "calibrate"
+
+# MV prior weight is usually small (it is also inside physics_mult scaling).
+MV_WEIGHT = 1e-3
+
+# Units/shape controls for MV prior penalty (implementation-specific).
+MV_PRIOR_UNITS = "strict"
+MV_ALPHA_DISP = 0.1
+MV_HUBER_DELTA = 1.0
+
+# MV scheduler is independent from the global physics scheduler.
+# Recommended: epoch-based (robust to batch size).
 MV_SCHEDULE_UNIT = "epoch"   # {"epoch", "step"}
 
-# epoch-based schedule (recommended)
-MV_DELAY_EPOCHS  = 1         # wait 1 epoch before mv starts
-MV_WARMUP_EPOCHS = 2         # ramp mv over 2 epochs
+# Epoch-based ramp:
+MV_DELAY_EPOCHS = 1
+MV_WARMUP_EPOCHS = 2
 
-# step-based schedule (optional, only used if MV_SCHEDULE_UNIT="step")
-MV_DELAY_STEPS   = None
-MV_WARMUP_STEPS  = None
+# Step-based ramp (used only if MV_SCHEDULE_UNIT="step"):
+MV_DELAY_STEPS = None
+MV_WARMUP_STEPS = None
 
+# If True, log extra auxiliary diagnostics/metrics (more verbose logs).
 TRACK_AUX_METRICS = False
 
-# ===================================================================
-# 7.x TRAINING STRATEGY (Physics-first vs Data-first)
-# ===================================================================
-# Strategy choices:
-#   - "physics_first": warm up the network with PDE constraints dominating
-#     (optionally keep Q and subs residuals off early).
-#   - "data_first"   : fit observations first, then let physics catch up.
-#
-# Policies:
-#   - "always_on"  : gate = 1
-#   - "always_off" : gate = 0
-#   - "warmup_off" : gate = 0 for warmup, then ramps to 1
-#
-TRAINING_STRATEGY = "physics_first"
- 
-# --- Physics-first ------------------------------------
-Q_POLICY_PHYSICS_FIRST = "warmup_off"   # or "always_off" for NO Q ever
-Q_WARMUP_EPOCHS_PHYSICS_FIRST = 5       # Wait 20 epochs (assuming 100 total)
-Q_RAMP_EPOCHS_PHYSICS_FIRST = 5         # 0 => hard step # Smooth transition
 
-# Keep Q regularization small even in physics-first (post-warmup).
-# (This is multiplied by your global physics offset as well.)
-LAMBDA_Q_PHYSICS_FIRST = 1e-5
-# Increase if logs showed GWL_MSE was high (44.0)
-LOSS_WEIGHT_GWL_PHYSICS_FIRST =0.5 # 0.05 1.0
+# -------------------------------------------------------------------
+# 5.6 Training strategy: when constraints turn on (Q + subs residual)
+# -------------------------------------------------------------------
+# TRAINING_STRATEGY controls *gating* of:
+#   - Q regularization (lambda_q term)
+#   - subsidence residual contribution (if ALLOW_SUBS_RESIDUAL=True)
+# and also controls which LOSS_WEIGHT_GWL / LAMBDA_Q values are used.
+#
+# Choose ONE:
+#   - "data_first"   : fit observations early, then tighten constraints
+#   - "physics_first": enforce constraints early, then let data refine
+TRAINING_STRATEGY = "data_first"   # {"data_first", "physics_first"}
+
+# Gate policies (for Q and subs residual):
+#   - "always_on"  : gate = 1 from step 0
+#   - "always_off" : gate = 0 forever (and lambda_q is forced to 0)
+#   - "warmup_off" : gate = 0 during warmup, then ramps to 1
+#
+# NOTE:
+# The actual conversion of epochs -> steps uses steps_per_epoch inside
+# the training script (not here). Here you define warmup/ramp in epochs.
+#
+# ----------------------------
+# A) PHYSICS-FIRST preset
+# ----------------------------
+# In physics-first, you often keep Q + subs residual OFF early so the PDE
+# residuals/priors shape the solution manifold first.
+Q_POLICY_PHYSICS_FIRST = "warmup_off"     # {"always_on","always_off","warmup_off"}
+Q_WARMUP_EPOCHS_PHYSICS_FIRST = 5
+Q_RAMP_EPOCHS_PHYSICS_FIRST = 5
 
 SUBS_RESID_POLICY_PHYSICS_FIRST = "warmup_off"
-SUBS_RESID_WARMUP_EPOCHS_PHYSICS_FIRST = 5 # 15 # 5
-SUBS_RESID_RAMP_EPOCHS_PHYSICS_FIRST = 5 # 10 # 0 => hard step
- 
-# --- Data-first (uncomment to use) ---------------------
-# TRAINING_STRATEGY = "data_first"
-# LOSS_WEIGHT_GWL_DATA_FIRST = 1.0   # raise from 0.5
-# LAMBDA_Q_DATA_FIRST = 1e-3         # start small (try 1e-4 to 1e-2)
-# Q_POLICY_DATA_FIRST = "always_on"
-# Q_WARMUP_EPOCHS_DATA_FIRST = 0
-# Q_RAMP_EPOCHS_DATA_FIRST = 0
-# SUBS_RESID_POLICY_DATA_FIRST = "always_on"
-# SUBS_RESID_WARMUP_EPOCHS_DATA_FIRST = 0
-# SUBS_RESID_RAMP_EPOCHS_DATA_FIRST = 0
+SUBS_RESID_WARMUP_EPOCHS_PHYSICS_FIRST = 5
+SUBS_RESID_RAMP_EPOCHS_PHYSICS_FIRST = 5
 
+# Head (GWL) observation weighting and Q regularization used in physics-first.
+LOSS_WEIGHT_GWL_PHYSICS_FIRST = 0.5
+LAMBDA_Q_PHYSICS_FIRST = 1e-5
 
-# Log extra Q/subs-residual diagnostics in train/val logs
+# ----------------------------
+# B) DATA-FIRST preset (DEFAULT)
+# ----------------------------
+# In data-first, observations dominate early, then constraints ramp in.
+LOSS_WEIGHT_GWL_DATA_FIRST = 0.8
+LAMBDA_Q_DATA_FIRST = 5e-4
+
+Q_POLICY_DATA_FIRST = "warmup_off"
+Q_WARMUP_EPOCHS_DATA_FIRST = 2
+Q_RAMP_EPOCHS_DATA_FIRST = 6
+
+SUBS_RESID_POLICY_DATA_FIRST = "warmup_off"
+SUBS_RESID_WARMUP_EPOCHS_DATA_FIRST = 1
+SUBS_RESID_RAMP_EPOCHS_DATA_FIRST = 4
+
+# Log extra Q/subs-residual diagnostics in train/val logs.
 LOG_Q_DIAGNOSTICS = True
 
-# -------------------------------------------------------------------
-# 5.4 Physics bounds (specified in LINEAR space here)
-# -------------------------------------------------------------------
-# Bounds are used for:
-# - soft penalties (PHYSICS_BOUNDS_MODE)
-# - residual scaling / prior anchoring (Stage-2 converts as needed)
-PHYSICS_BOUNDS = {
-    "H_min": 0.1,
-    "H_max": 30.0,      # match censor cap for thickness
 
-    "K_min": 1e-12,     # [m/s]
+# -------------------------------------------------------------------
+# 5.7 Bounds (constraints) for learned physical fields
+# -------------------------------------------------------------------
+# Bounds are specified in LINEAR space here (Stage-2 converts as needed).
+# Used for:
+#   - soft penalties (PHYSICS_BOUNDS_MODE="soft")
+#   - optional hard clamping/rejection (PHYSICS_BOUNDS_MODE="hard")
+PHYSICS_BOUNDS = {
+    # Effective thickness H [m]
+    "H_min": 0.1,
+    "H_max": 30.0,
+
+    # Hydraulic conductivity K [m/s]
+    "K_min": 1e-12,
     "K_max": 1e-7,
 
-    "Ss_min": 1e-6,     # [1/m]
+    # Specific storage Ss [1/m]
+    "Ss_min": 1e-6,
     "Ss_max": 1e-3,
-    
-    # tau bounds (seconds)
+
+    # Time constant tau [s]
     "tau_min": 7.0 * 86400.0,
     "tau_max": 300.0 * 31556952.0,
-    # (optional) or directly:
-    # "logTau_min": np.log(7*86400.0),
-    # "logTau_max": np.log(300*31556952.0),
 }
 
-# Bounds penalty mode:
-# - "soft" : penalize violations (recommended)
-# - "hard" : clamp or reject (only if you know what you are doing)
-# Use SOFT to keep gradients alive
-PHYSICS_BOUNDS_MODE = "soft" #"hard" #"hard"
+# Bounds enforcement mode:
+#   - "soft" : penalize violations (recommended; keeps gradients alive)
+#   - "hard" : clamp/reject (only if you know exactly why)
+PHYSICS_BOUNDS_MODE = "soft"
+
 
 # -------------------------------------------------------------------
-# 5.4b Bounds-loss shaping (v3.2)
+# 5.8 Bounds-loss shaping (v3.2)
 # -------------------------------------------------------------------
-# How bounds loss is applied:
-#   "both" | "K" | "Ss" | "tau" | ...
-BOUNDS_LOSS_KIND = "both"
-
-# Smooth barrier sharpness (softplus-like)
-BOUNDS_BETA = 20.0
-
-# Guard margin (in "log" or "linear" space)
-BOUNDS_GUARD = 5.0
-
-# Base weight inside the bounds loss (separate from LAMBDA_BOUNDS)
-BOUNDS_W = 1.0
-
-# If True, include tau bounds term (if tau exists)
+# These parameters shape the *form* of the bounds penalty (not its weight).
+# The overall weight is still controlled by LAMBDA_BOUNDS.
+BOUNDS_LOSS_KIND = "both"   # {"both","K","Ss","tau",...}
+BOUNDS_BETA = 20.0          # barrier sharpness (larger -> harder wall)
+BOUNDS_GUARD = 5.0          # guard margin (linear/log depending on impl)
+BOUNDS_W = 1.0              # base weight inside bounds loss
 BOUNDS_INCLUDE_TAU = True
-
-# Extra relative weight for tau part
 BOUNDS_TAU_W = 1.0
 
-# Time coordinate units used by physics conversions (rate_to_per_second etc.)
-# Must match what `TIME_COL` represents in your dataset.
+
+# -------------------------------------------------------------------
+# 5.9 Time/units hooks for physics conversions
+# -------------------------------------------------------------------
+# Must match the meaning of TIME_COL in your dataset.
 TIME_UNITS = "year"
 
-DEBUG_PHYSICS_GRADS =False  
+
+# -------------------------------------------------------------------
+# 5.10 Debug hooks
+# -------------------------------------------------------------------
+DEBUG_PHYSICS_GRADS = False
+
 
 # ------------------------------------------------------------
 # Consolidation drawdown gating (s_eq = Ss * delta_h * H)
@@ -764,25 +822,6 @@ LEARNING_RATE = 1e-3   # Slightly higher start, let Adam decay it
 # EPOCHS = 150
 # BATCH_SIZE = 32
 # LEARNING_RATE = 5e-4
-
-# -------------------------------------------------------------------
-# 7.1 Identifiability controls (GeoPrior)
-# -------------------------------------------------------------------
-# IDENTIFIABILITY_REGIME selects an identifiability "profile" used by
-# GeoPriorSubsNet to reduce ambiguous parameter tradeoffs (e.g.
-# K vs Ss vs tau vs H, MV/kappa) during training.
-#
-# Accepted values:
-#   - None : use the model default regime (recommended; "base")
-#   - str  : name of a built-in regime/profile (e.g. "base",
-#            "strict", "relaxed", ...)
-#   - dict : advanced explicit switches/priors (must stay JSON-
-#            serializable; used only if your model supports it)
-#
-# NOTE:
-#   This only affects Stage-2 GeoPrior models. Other model flavours
-#   may ignore it safely.
-IDENTIFIABILITY_REGIME = None
 
 # ===================================================================
 # 8) HARDWARE / RUNTIME (TensorFlow)
