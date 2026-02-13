@@ -823,7 +823,7 @@ LEARNING_RATE = 1e-3   # Slightly higher start, let Adam decay it
 # BATCH_SIZE = 32
 # LEARNING_RATE = 5e-4
 
-VERBOSE = 2 
+VERBOSE = 1 
 # ===================================================================
 # 8) HARDWARE / RUNTIME (TensorFlow)
 # ===================================================================

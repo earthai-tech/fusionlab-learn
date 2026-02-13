@@ -42,7 +42,9 @@ from ..utils.forecast_utils import (
     get_value_prefixes_in, 
     detect_forecast_type, 
     get_step_names, 
-    calibrate_quantile_forecasts, 
+) 
+from ..utils.calibrate import (
+    calibrate_forecasts, 
     calibrate_probability_forecast
     
 )
@@ -287,7 +289,7 @@ def plot_calibration_comparison(
 
         # Quantile-based calibration
         if quantiles and q_prefix and actual_col:
-            df_calib = calibrate_quantile_forecasts(
+            df_calib = calibrate_forecasts(
                 df, quantiles, q_prefix, actual_col,
                 method=method,
                 out_prefix=out_prefix,

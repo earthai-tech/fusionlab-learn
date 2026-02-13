@@ -36,6 +36,8 @@ PATTERNS = {
     ),
     # Eval diagnostics fallback JSON
     "eval_diag_json": (
+        "*GeoPriorSubsNet_eval_diagnostics*_calibrated.json",
+        "*GeoPriorSubsNet_eval_diagnostics*.json",
         "eval_diagnostics*.json",
         "diagnostics*.json",
         "*eval*diagnostic*.json",

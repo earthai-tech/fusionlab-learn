@@ -44,11 +44,9 @@ def _collect_one(
     variant: str,
     src: Path,
 ) -> Dict[str, Any]:
+    
     phys_p = utils.find_phys_json(src)
-    diag_p = utils.find_latest(
-        src,
-        cfg.PATTERNS["eval_diag_json"],
-    )
+    diag_p = utils.find_eval_diag_json(src)
 
     phys = utils.safe_load_json(phys_p)
     diag = utils.safe_load_json(diag_p)
@@ -481,7 +479,7 @@ def _add_plot_fig3_args(ap: argparse.ArgumentParser) -> None:
         choices=["rmse", "mse"],
         default="mse",
     )
-
+    
     ap.add_argument("--dpi", type=int, default=cfg.PAPER_DPI)
 
     ap.add_argument(

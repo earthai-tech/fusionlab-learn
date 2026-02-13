@@ -414,6 +414,40 @@ def _iter_candidates(
     for pat in patterns:
         yield from root.rglob(pat)
 
+def find_preferred(
+    src: Any,
+    patterns: Sequence[str],
+    *,
+    must_exist: bool = False,
+) -> Optional[Path]:
+    """
+    Try patterns in order, returning the first match.
+
+    Unlike find_latest() with multiple patterns,
+    this respects priority order.
+    """
+    root = as_path(src)
+    if root.is_file():
+        root = root.parent
+
+    for pat in patterns:
+        p = find_latest(root, [pat], must_exist=False)
+        if p is not None:
+            return p
+
+    if must_exist:
+        raise FileNotFoundError(
+            f"No match under {root} for {patterns}"
+        )
+
+    return None
+
+
+def find_eval_diag_json(src: Any) -> Optional[Path]:
+    pats = cfg.PATTERNS.get("eval_diag_json", ())
+    if not pats:
+        return None
+    return find_preferred(src, pats)
 
 def find_latest(
     src: Any,
@@ -491,10 +525,8 @@ def detect_artifacts(src: Any) -> Artifacts:
     out = Artifacts(src=root)
 
     out.phys_json = find_latest(root, cfg.PATTERNS["phys_json"])
-    out.eval_diag_json = find_latest(
-        root,
-        cfg.PATTERNS["eval_diag_json"],
-    )
+    out.eval_diag_json = find_eval_diag_json(root)
+
     out.forecast_val_csv = find_latest(
         root,
         cfg.PATTERNS["forecast_val_csv"],
@@ -701,10 +733,35 @@ def pick_interval_metrics(
     return (to_float(cov), to_float(shp))
 
 
+# def flatten_eval_diag(diag: Dict[str, Any]) -> Dict[str, float]:
+#     """
+#     eval_diagnostics.json is not always a flat schema.
+#     We flatten only what we need for paper figures/tables.
+#     """
+#     if not diag:
+#         return {}
+
+#     out: Dict[str, float] = {}
+
+#     for k in ["r2", "mae", "mse", "rmse"]:
+#         if k in diag:
+#             out[k] = to_float(diag.get(k))
+
+#     # Some versions store uncertainty metrics nested
+#     for k in ["coverage80", "sharpness80"]:
+#         if k in diag:
+#             out[k] = to_float(diag.get(k))
+
+#     return out
+
 def flatten_eval_diag(diag: Dict[str, Any]) -> Dict[str, float]:
     """
-    eval_diagnostics.json is not always a flat schema.
-    We flatten only what we need for paper figures/tables.
+    Flatten eval diagnostics into keys used by plots.
+
+    Supports:
+    - legacy flat schema: {"r2":..., "mae":...}
+    - calibration schema:
+        {"eval_after": {"coverage":..., "sharpness":...}}
     """
     if not diag:
         return {}
@@ -715,10 +772,28 @@ def flatten_eval_diag(diag: Dict[str, Any]) -> Dict[str, float]:
         if k in diag:
             out[k] = to_float(diag.get(k))
 
-    # Some versions store uncertainty metrics nested
     for k in ["coverage80", "sharpness80"]:
         if k in diag:
             out[k] = to_float(diag.get(k))
+
+    overall_key = str(diag.get("overall_key") or "")
+    eval_after = diag.get("eval_after") or {}
+    if isinstance(eval_after, dict):
+        if overall_key and overall_key in eval_after:
+            blk = eval_after.get(overall_key) or {}
+            if isinstance(blk, dict):
+                eval_after = blk
+
+        cov = eval_after.get("coverage", None)
+        shp = eval_after.get("sharpness", None)
+
+        if "coverage80" not in out:
+            if cov is not None:
+                out["coverage80"] = to_float(cov)
+
+        if "sharpness80" not in out:
+            if shp is not None:
+                out["sharpness80"] = to_float(shp)
 
     return out
 

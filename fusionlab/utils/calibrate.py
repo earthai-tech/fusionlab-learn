@@ -855,7 +855,7 @@ def calibrate_probability_forecast(
 @SaveFile 
 @check_empty(["df"])
 @isdf
-def calibrate_qforecasts(
+def calibrate_forecasts(
     df: pd.DataFrame,
     quantiles: Sequence[float],
     q_prefix: str,
