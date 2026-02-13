@@ -476,69 +476,6 @@ def canonicalize_BHQO_quantiles_np(
 
     return best_arr
 
-
-# def canonicalize_BHQO_quantiles_np(y, n_q=3):
-#     """
-#     Return y in canonical (B,H,Q,O).
-#     Accepts common layouts:
-#       - (B,H,Q,O) -> unchanged
-#       - (B,Q,H,O) -> transpose(0,2,1,3)
-#       - (B,H,O,Q) -> transpose(0,1,3,2)
-#     If ambiguous (H==Q), choose the axis that minimizes quantile crossing.
-#     """
-#     y = np.asarray(y)
-#     if y.ndim != 4:
-#         return y
-
-#     B, d1, d2, d3 = y.shape
-
-#     # candidates: interpret which axis is Q among {1,2,3}
-#     cand = [ax for ax in (1,2,3) if y.shape[ax] == n_q]
-#     if not cand:
-#         return y  # not quantile mode
-
-#     def crossing_score(arr, q_axis):
-#         q10 = np.take(arr, 0, axis=q_axis)
-#         q50 = np.take(arr, 1, axis=q_axis)
-#         q90 = np.take(arr, 2, axis=q_axis)
-#         # squeeze last dim if O=1
-#         if q10.ndim >= 3 and q10.shape[-1] == 1:
-#             q10 = q10[..., 0]; q50 = q50[..., 0]; q90 = q90[..., 0]
-#         return (np.mean(q10 > q50) + np.mean(q50 > q90) + np.mean(q10 > q90))
-
-#     # build possible canonical transforms and pick best by crossing score
-#     options = []
-
-#     # already (B,H,Q,O): q_axis=2 and O axis=3
-#     if y.shape[2] == n_q:
-#         options.append(("BHQO", y))
-
-#     # (B,Q,H,O) -> (B,H,Q,O)
-#     if y.shape[1] == n_q:
-#         options.append(("BQHO->BHQO", np.transpose(y, (0,2,1,3))))
-
-#     # (B,H,O,Q) -> (B,H,Q,O)
-#     if y.shape[3] == n_q:
-#         options.append(("BHOQ->BHQO", np.transpose(y, (0,1,3,2))))
-
-#     if not options:
-#         return y
-
-#     # score in canonical (B,H,Q,O) along axis=2
-#     best_name, best_arr = None, None
-#     best_score = 1e9
-#     for name, arr in options:
-#         sc = crossing_score(arr, q_axis=2)
-#         if sc < best_score:
-#             best_score = sc
-#             best_name, best_arr = name, arr
-
-#     # optional: print which transform chosen
-#     print("[canonicalize] chose:", best_name, "score:", best_score)
-
-#     return best_arr
-
-
 def _to_numpy(x: Any) -> np.ndarray:
     """Convert tensor/array-like to numpy array."""
     if hasattr(x, "numpy"):

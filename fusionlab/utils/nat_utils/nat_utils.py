@@ -1525,7 +1525,9 @@ def resolve_hybrid_config(
         # --- 10. Training Loop & Logging ---
         "EPOCHS", "BATCH_SIZE", "LEARNING_RATE", "PATIENCE",
         "LOG_Q_DIAGNOSTICS", "AUDIT_STAGES",
-        "EVAL_JSON_UNITS_MODE", "EVAL_JSON_UNITS_SCOPE"
+        "EVAL_JSON_UNITS_MODE", "EVAL_JSON_UNITS_SCOPE", 
+        
+        "VERBOSE"
     }
 
     updates = []

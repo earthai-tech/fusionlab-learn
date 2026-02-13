@@ -164,11 +164,28 @@ def _bar_values(
                 fontsize=8,
             )
 
+def _metric_meta(
+    key: str,
+) -> Tuple[str, str, str]:
+    md = cfg.PLOT_METRIC_META.get(str(key))
+    if not md:
+        raise KeyError(str(key))
+
+    unit = str(md.get("unit", "") or "")
+    ctx = {"unit": unit}
+
+    title = str(md["title"]).format(**ctx)
+    ylabel = str(md["ylabel"]).format(**ctx)
+    fmt = str(md.get("fmt", "{:.2f}"))
+
+    return title, ylabel, fmt
+
 
 def plot_fig3_core_ablation(
     df: pd.DataFrame,
     *,
     cities: List[str],
+    core_metric: str,
     err_metric: str,
     out: str,
     out_csv: str,
@@ -194,10 +211,30 @@ def plot_fig3_core_ablation(
         raise ValueError("err_metric must be rmse or mse")
 
     err_key = err_metric
-    err_lab = "RMSE" if err_metric == "rmse" else "MSE"
 
-    unit = "mm"
-    err_unit = "mm²" if err_metric == "mse" else "mm"
+    cm = str(core_metric or "mae").strip().lower()
+    if cm not in {"mae", "r2"}:
+        raise ValueError(
+            "core_metric must be mae or r2"
+        )
+
+    if cm == "mae":
+        big_key = "mae"
+        top_key = "r2"
+        ab_key = "mae"
+    else:
+        big_key = "r2"
+        top_key = "mae"
+        ab_key = "r2"
+
+    # def _meta(k: str) -> Tuple[str, str, str]:
+    #     if k == "r2":
+    #         return ("R² (↑)", "R²", "{:.2f}")
+    #     if k == "mae":
+    #         t = f"MAE (↓, {unit})"
+    #         y = f"MAE ({unit})"
+    #         return (t, y, "{:.2f}")
+    #     raise KeyError(k)
 
     def _vals(metric: str, variant: str) -> np.ndarray:
         outv: List[float] = []
@@ -238,49 +275,67 @@ def plot_fig3_core_ablation(
     _add_panel_label(ax_f, "f", show_panel_labels)
     _add_panel_label(ax_g, "g", show_panel_labels)
 
-    r2 = _vals("r2", "with-phys")
-    mae = _vals("mae", "with-phys")
-    err = _vals(err_key, "with-phys")
+    big_v = _vals(big_key, "with-phys")
+    top_v = _vals(top_key, "with-phys")
+    err_v = _vals(err_key, "with-phys")
 
-    bars = ax_a.bar(x, r2, color=colors, edgecolor="none")
-    _bar_values(ax_a, bars, "{:.2f}", show_values)
+    _, big_y, big_f = _metric_meta(big_key)
+    top_t, top_y, top_f = _metric_meta(top_key)
+    err_t, err_y, err_f = _metric_meta(err_key)
+
+    bars = ax_a.bar(
+        x,
+        big_v,
+        color=colors,
+        edgecolor="none",
+    )
+    _bar_values(ax_a, bars, big_f, show_values)
     if show_panel_titles:
         ax_a.set_title("Core (with physics)")
     if show_labels:
-        ax_a.set_ylabel("R²")
+        ax_a.set_ylabel(big_y)
     if show_ticklabels:
         ax_a.set_xticks(x, cities)
     else:
         ax_a.set_xticks([])
         ax_a.tick_params(labelleft=False)
 
-    bars = ax_b.bar(x, mae, color=colors, edgecolor="none")
-    _bar_values(ax_b, bars, "{:.2f}", show_values)
+    bars = ax_b.bar(
+        x,
+        top_v,
+        color=colors,
+        edgecolor="none",
+    )
+    _bar_values(ax_b, bars, top_f, show_values)
     if show_panel_titles:
-        ax_b.set_title(f"MAE (↓, {unit})")
+        ax_b.set_title(top_t)
     if show_labels:
-        ax_b.set_ylabel(f"MAE ({unit})")
+        ax_b.set_ylabel(top_y)
     if show_ticklabels:
         ax_b.set_xticks(x, cities)
     else:
         ax_b.set_xticks([])
         ax_b.tick_params(labelleft=False)
 
-    bars = ax_c.bar(x, err, color=colors, edgecolor="none")
-    _bar_values(ax_c, bars, "{:.2f}", show_values)
+    bars = ax_c.bar(
+        x,
+        err_v,
+        color=colors,
+        edgecolor="none",
+    )
+    _bar_values(ax_c, bars, err_f, show_values)
     if show_panel_titles:
-        ax_c.set_title(f"{err_lab} (↓, {err_unit})")
+        ax_c.set_title(err_t)
     if show_labels:
-        ax_c.set_ylabel(f"{err_lab} ({err_unit})")
+        ax_c.set_ylabel(err_y)
     if show_ticklabels:
         ax_c.set_xticks(x, cities)
     else:
         ax_c.set_xticks([])
         ax_c.tick_params(labelleft=False)
 
+
     width = 0.36
-    with_r2 = _vals("r2", "with-phys")
-    no_r2 = _vals("r2", "no-phys")
 
     def _grouped(
         ax: plt.Axes,
@@ -309,6 +364,14 @@ def plot_fig3_core_ablation(
             hatch="///",
             label="no physics",
         )
+        
+        if metric == "r2":
+            ax.axhline(
+                0.0,
+                linestyle="--",
+                linewidth=0.6,
+                alpha=0.6,
+            )
 
         if show_values:
             _bar_values(ax, b1, fmt, True)
@@ -326,16 +389,31 @@ def plot_fig3_core_ablation(
         ax.grid(axis="y", alpha=0.2)
         return b1, b2
 
-    _grouped(ax_d, "r2", "{:.2f}", "R² (with vs no)")
-    _grouped(ax_e, err_key, "{:.2f}", f"{err_lab} (with vs no)")
-    _grouped(ax_f, "coverage80", "{:.3f}", "Coverage@80% (↑)")
-    _grouped(ax_g, "sharpness80", "{:.3f}", "Sharpness@80% (↓)")
+    ab_t, ab_y, ab_f = _metric_meta(ab_key)
+    err_t2, err_y2, err_f2 = _metric_meta(err_key)
+    cov_t, cov_y, cov_f = _metric_meta("coverage80")
+    shp_t, shp_y, shp_f = _metric_meta("sharpness80")
+
+    _grouped(
+        ax_d,
+        ab_key,
+        ab_f,
+        f"{ab_t} (with vs no)",
+    )
+    _grouped(
+        ax_e,
+        err_key,
+        err_f2,
+        f"{err_t2} (with vs no)",
+    )
+    _grouped(ax_f, "coverage80", cov_f, cov_t)
+    _grouped(ax_g, "sharpness80", shp_f, shp_t)
 
     if show_labels:
-        ax_d.set_ylabel("R²")
-        ax_e.set_ylabel(f"{err_lab} ({err_unit})")
-        ax_f.set_ylabel("Coverage")
-        ax_g.set_ylabel(f"Sharpness ({unit})")
+        ax_d.set_ylabel(ab_y)
+        ax_e.set_ylabel(err_y2)
+        ax_f.set_ylabel(cov_y)
+        ax_g.set_ylabel(shp_y)
 
     if show_legend:
         h, lab = ax_d.get_legend_handles_labels()
@@ -387,10 +465,21 @@ def _add_plot_fig3_args(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--zh-no", type=str, default=None)
 
     ap.add_argument(
+        "--core-metric",
+        type=str,
+        choices=["mae", "r2"],
+        default="mae",
+        help=(
+            "Big core metric. "
+            "mae=new default, r2=legacy."
+        ),
+    )
+
+    ap.add_argument(
         "--err-metric",
         type=str,
         choices=["rmse", "mse"],
-        default="rmse",
+        default="mse",
     )
 
     ap.add_argument("--dpi", type=int, default=cfg.PAPER_DPI)
@@ -479,6 +568,7 @@ def plot_fig3_core_ablation_main(
     plot_fig3_core_ablation(
         df,
         cities=cities,
+        core_metric=args.core_metric,
         err_metric=args.err_metric,
         out=args.out,
         out_csv=args.out_csv,
@@ -494,6 +584,7 @@ def plot_fig3_core_ablation_main(
         show_panel_labels=show_pl,
         title=args.title,
     )
+
     
 def main(argv: Optional[List[str]] = None) -> None:
     plot_fig3_core_ablation_main(argv)
@@ -501,3 +592,21 @@ def main(argv: Optional[List[str]] = None) -> None:
 
 if __name__ == "__main__":
     main()
+
+# 5) How to call it
+
+# New default (MAE-first, MSE default):
+
+# python -m scripts plot-core-ablation
+
+
+# New layout + RMSE:
+
+# python -m scripts plot-core-ablation \
+#   --err-metric rmse
+
+
+# Legacy layout (R²-first):
+
+# python -m scripts plot-core-ablation \
+#   --core-metric r2

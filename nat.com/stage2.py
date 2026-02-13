@@ -72,16 +72,23 @@ from fusionlab.utils.generic_utils import (
     print_config_table,
     save_all_figures,
 )
-
-from fusionlab.utils.forecast_utils import format_and_forecast
-from fusionlab.utils.scale_metrics import (
-    inverse_scale_target,
-    per_horizon_metrics,
-    point_metrics,
+from fusionlab.utils.calibrate import calibrate_quantile_forecasts
+from fusionlab.utils.forecast_utils import ( 
+    format_and_forecast, 
+    evaluate_forecast
 )
+from fusionlab.utils.scale_metrics import (
+    evaluate_point_forecast,
+    inverse_scale_target,
+    # per_horizon_metrics,
+    # point_metrics,
+)
+from fusionlab.utils.shapes import canonicalize_BHQO
+
 from fusionlab.utils.spatial_utils import deg_to_m_from_lat
 from fusionlab.utils.subsidence_utils import ( 
-    convert_eval_payload_units, postprocess_eval_json
+    convert_eval_payload_units, 
+    postprocess_eval_json
     )
 from fusionlab.plot.forecast import plot_eval_future
 
@@ -99,8 +106,6 @@ from fusionlab.nn.pinn.geoprior.scaling import (
 from fusionlab.nn.pinn.op import extract_physical_parameters
 from fusionlab.nn._shapes import (
     _logs_to_py,
-    canonicalize_BHQO_quantiles_np,
-    canonicalize_to_BHQO_using_ytrue,
     debug_quantile_crossing_np,
     debug_tensor_interval,
     debug_val_interval,
@@ -1694,7 +1699,8 @@ subs_model_inst.compile(
     **physics_loss_weights,
 )
 
-print([m.name for m in subs_model_inst.metrics if "coverage" in m.name or "sharpness" in m.name])
+# print(
+#       [m.name for m in subs_model_inst.metrics if "coverage80" in m.name or "sharpness80" in m.name])
 
 print(f"{MODEL_NAME} compiled.")
 print("TRACK_AUX_METRICS:", TRACK_AUX_METRICS)
@@ -1834,7 +1840,7 @@ history = subs_model_inst.fit(
     validation_data=val_dataset,
     epochs=EPOCHS,
     callbacks=callbacks,
-    verbose=1,  
+    verbose=cfg.get("VERBOSE", 1),  
 )
 print(f"Best val_loss: {min(history.history.get('val_loss', [np.inf])):.4f}")
 #%
@@ -2193,7 +2199,12 @@ if DEBUG and (model_inf is not subs_model_inst):
 # Calibrate on validation set (BEFORE formatting)
 # =============================================================================
 print("\nFitting interval calibrator (target 80%) on validation set...")
-cal80 = fit_interval_calibrator_on_val(model_inf, val_dataset, target=0.80)
+cal80 = fit_interval_calibrator_on_val(
+    model_inf, 
+    val_dataset, 
+    target=0.80, 
+    q_values = QUANTILES, 
+)
 np.save(os.path.join(RUN_OUTPUT_PATH, "interval_factors_80.npy"), cal80.factors_)
 print("Calibrator saved.")
 
@@ -2217,24 +2228,44 @@ X_fore = ensure_input_shapes(
 )
 y_fore_fmt = map_targets_for_training(y_fore)
 
-def _pick_q50_np(arr, quantiles):
+# def _pick_q50_np(arr, quantiles):
+#     a = np.asarray(arr)
+#     if a.ndim == 3:
+#         a = a[..., None]
+#     a = canonicalize_BHQO_quantiles_np(
+#         a,
+#         n_q=len(quantiles),
+#         verbose=0,
+#     )
+#     q = np.asarray(quantiles, dtype=float)
+#     q50_i = int(np.argmin(np.abs(q - 0.5)))
+#     return a[:, :, q50_i, 0]
+
+def _pick_q50_np(arr, quantiles, y_true=None):
     a = np.asarray(arr)
-    if a.ndim == 3:
-        a = a[..., None]
-    a = canonicalize_BHQO_quantiles_np(
+
+    a = canonicalize_BHQO(
         a,
+        y_true=y_true,
+        q_values=quantiles,
         n_q=len(quantiles),
+        enforce_monotone=False,
         verbose=0,
+        # log_fn=(lambda *_: None),
     )
+
     q = np.asarray(quantiles, dtype=float)
     q50_i = int(np.argmin(np.abs(q - 0.5)))
+    a = np.asarray(a)
     return a[:, :, q50_i, 0]
-
 
 def _map_pred_list_by_mae(pred_list, y_subs, quantiles):
     y = np.asarray(y_subs)[:, :, 0]
-    p0 = _pick_q50_np(pred_list[0], quantiles)
-    p1 = _pick_q50_np(pred_list[1], quantiles)
+    # p0 = _pick_q50_np(pred_list[0], quantiles)
+    # p1 = _pick_q50_np(pred_list[1], quantiles)
+    p0 = _pick_q50_np(pred_list[0], quantiles, y_true=y_subs)
+    p1 = _pick_q50_np(pred_list[1], quantiles, y_true=y_subs)
+
     mae0 = float(np.mean(np.abs(p0 - y)))
     mae1 = float(np.mean(np.abs(p1 - y)))
 
@@ -2268,104 +2299,99 @@ h_pred = pred_dict["gwl_pred"]
 # ------------------------------------------------------------
 # Normalize predict() output (Keras can return dict or list)
 # ------------------------------------------------------------
-# if isinstance(pred_out, dict):
-#     pred_dict = pred_out
-# elif isinstance(pred_out, (list, tuple)):
-#     names = list(getattr(model_inf, "output_names", []) or [])
-#     if names:
-#         pred_dict = {
-#             names[i]: pred_out[i]
-#             for i in range(min(len(names), len(pred_out)))
-#         }
-#     else:
-#         # fallback: assume [subs_pred, gwl_pred]
-#         pred_dict = {"subs_pred": pred_out[0]}
-#         if len(pred_out) > 1:
-#             pred_dict["gwl_pred"] = pred_out[1]
-# if isinstance(pred_out, dict):
-#     pred_dict = pred_out
 
-# elif isinstance(pred_out, (list, tuple)):
-#     if len(pred_out) < 2:
-#         raise ValueError("predict() returned <2 outputs.")
+# if QUANTILES:
+#     # Some builds return (B,H,Q) with implicit O=1.
+#     s_np = np.asarray(s_pred)
+#     h_np = np.asarray(h_pred)
+#     if s_np.ndim == 3:
+#         s_np = s_np[..., None]  # (B,H,Q,1)
+#     if h_np.ndim == 3:
+#         h_np = h_np[..., None]  # (B,H,Q,1)
 
-#     if QUANTILES:
-#         pred_dict = _map_pred_list_by_mae(
-#             pred_out[:2],
-#             y_fore_fmt["subs_pred"],
-#             QUANTILES,
-#         )
-#     else:
-#         # point case: compare directly
-#         y = np.asarray(y_fore_fmt["subs_pred"])[:, :, 0]
-#         p0 = np.asarray(pred_out[0])[:, :, 0]
-#         p1 = np.asarray(pred_out[1])[:, :, 0]
-#         mae0 = float(np.mean(np.abs(p0 - y)))
-#         mae1 = float(np.mean(np.abs(p1 - y)))
-#         if mae0 <= mae1:
-#             pred_dict = {"subs_pred": pred_out[0], "gwl_pred": pred_out[1]}
-#         else:
-#             pred_dict = {"subs_pred": pred_out[1], "gwl_pred": pred_out[0]}
+#     s_pred = canonicalize_BHQO_quantiles_np(
+#         s_np,
+#         n_q=len(QUANTILES),
+#         verbose=1,
+#     )  # -> (B,H,Q,O_s)
+#     h_pred = canonicalize_BHQO_quantiles_np(
+#         h_np,
+#         n_q=len(QUANTILES),
+#         verbose=1,
+#     )  # -> (B,H,Q,O_g)
 
+#     # Calibrate subsidence quantiles only.
+#     s_pred_cal = apply_calibrator_to_subs(cal80, s_pred)
+#     s_pred_cal = canonicalize_BHQO_quantiles_np(
+#         s_pred_cal,
+#         n_q=len(QUANTILES),
+#         verbose=0,
+#     )  # -> (B,H,Q,O_s)
+
+#     q50_i = int(np.argmin(np.abs(np.asarray(QUANTILES) - 0.5)))
+#     s_q50 = s_pred_cal[:, :, q50_i, 0]
+#     h_q50 = h_pred[:, :, q50_i, 0]
+    
+#     print("subs q50 pctl:", np.percentile(s_q50, [1, 50, 99]))
+#     print("gwl  q50 pctl:", np.percentile(h_q50, [1, 50, 99]))
+
+#     predictions_for_formatter = {
+#         "subs_pred": s_pred_cal,
+#         "gwl_pred": h_pred,
+#     }
 # else:
-#     raise TypeError(
-#         "Unexpected predict() output type: "
-#         f"{type(pred_out)}"
-#     )
-
-# # v3.2+ contract: explicit heads (no more `data_final`).
-# if "subs_pred" not in pred_dict or "gwl_pred" not in pred_dict:
-#     raise KeyError(
-#         "predict() must return 'subs_pred' and "
-#         "'gwl_pred'. Got keys="
-#         f"{list(pred_dict.keys())}"
-#     )
-
-# s_pred = pred_dict["subs_pred"]
-# h_pred = pred_dict["gwl_pred"]
-
-# Shapes expected for debugging:
-# - quantiles:
-#   subs_pred: (B,H,Q,O_s)  (or BQHO / BHOQ)
-#   gwl_pred : (B,H,Q,O_g)  (or BQHO / BHOQ)
-# - no quantiles:
-#   subs_pred: (B,H,O_s)
-#   gwl_pred : (B,H,O_g)
+#     predictions_for_formatter = {
+#         "subs_pred": s_pred,
+#         "gwl_pred": h_pred,
+#     }
 
 if QUANTILES:
-    # Some builds return (B,H,Q) with implicit O=1.
-    s_np = np.asarray(s_pred)
-    h_np = np.asarray(h_pred)
-    if s_np.ndim == 3:
-        s_np = s_np[..., None]  # (B,H,Q,1)
-    if h_np.ndim == 3:
-        h_np = h_np[..., None]  # (B,H,Q,1)
+    _silent = (lambda *_: None)
+    _log = print if DEBUG else _silent
 
-    s_pred = canonicalize_BHQO_quantiles_np(
-        s_np,
+    y_subs_true = y_fore_fmt.get("subs_pred")
+    y_gwl_true = y_fore_fmt.get("gwl_pred")
+
+    s_pred = canonicalize_BHQO(
+        s_pred,
+        y_true=y_subs_true,
+        q_values=QUANTILES,
         n_q=len(QUANTILES),
-        verbose=1,
-    )  # -> (B,H,Q,O_s)
-    h_pred = canonicalize_BHQO_quantiles_np(
-        h_np,
+        enforce_monotone=False,
+        verbose=1 if DEBUG else 0,
+        log_fn=_log,
+    )
+
+    h_pred = canonicalize_BHQO(
+        h_pred,
+        y_true=y_gwl_true,
+        q_values=QUANTILES,
         n_q=len(QUANTILES),
-        verbose=1,
-    )  # -> (B,H,Q,O_g)
+        enforce_monotone=False,
+        verbose=1 if DEBUG else 0,
+        log_fn=_log,
+    )
 
     # Calibrate subsidence quantiles only.
     s_pred_cal = apply_calibrator_to_subs(cal80, s_pred)
-    s_pred_cal = canonicalize_BHQO_quantiles_np(
-        s_pred_cal,
-        n_q=len(QUANTILES),
-        verbose=0,
-    )  # -> (B,H,Q,O_s)
 
-    q50_i = int(np.argmin(np.abs(np.asarray(QUANTILES) - 0.5)))
+    # After calibration, enforce monotone intervals.
+    s_pred_cal = canonicalize_BHQO(
+        s_pred_cal,
+        y_true=y_subs_true,
+        q_values=QUANTILES,
+        n_q=len(QUANTILES),
+        enforce_monotone=True,
+        verbose=0,
+        log_fn=_silent,
+    )
+
+    q50_i = int(np.argmin(
+        np.abs(np.asarray(QUANTILES) - 0.5)
+    ))
+
     s_q50 = s_pred_cal[:, :, q50_i, 0]
     h_q50 = h_pred[:, :, q50_i, 0]
-    
-    print("subs q50 pctl:", np.percentile(s_q50, [1, 50, 99]))
-    print("gwl  q50 pctl:", np.percentile(h_q50, [1, 50, 99]))
 
     predictions_for_formatter = {
         "subs_pred": s_pred_cal,
@@ -2377,7 +2403,6 @@ else:
         "gwl_pred": h_pred,
     }
 
-
 if DEBUG and QUANTILES:
     debug_quantile_crossing_np(
         predictions_for_formatter["subs_pred"],
@@ -2386,6 +2411,22 @@ if DEBUG and QUANTILES:
         verbose=1,
     )
 
+ev_point = evaluate_point_forecast(
+    model_inf,
+    predictions_for_formatter,
+    y_true_subs=y_fore_fmt["subs_pred"],
+    y_true_gwl=y_fore_fmt.get("gwl_pred"),
+    n_q=(len(QUANTILES) if QUANTILES else 3),
+    quantiles=(QUANTILES if QUANTILES else None),
+    use_physical=True,
+    scaler_info=scaler_info_dict,
+    subs_target_name=SUBS_SCALER_KEY,
+    gwl_target_name=GWL_SCALER_KEY,
+)
+
+metrics_point = ev_point["subs_metrics"]
+per_h_mae_dict = ev_point["subs_mae_h"]
+per_h_r2_dict = ev_point["subs_r2_h"]
 
 target_mapping = {"subs_pred": SUBSIDENCE_COL, "gwl_pred": GWL_COL}
 output_dims = {"subs_pred": OUT_S_DIM, "gwl_pred": OUT_G_DIM}
@@ -2395,12 +2436,13 @@ y_true_for_format = {
     "gwl": y_fore_fmt["gwl_pred"],
 }
 
-
+#
+# --- raw outputs (from format_and_forecast) ---
 csv_eval = os.path.join(
     RUN_OUTPUT_PATH,
     f"{CITY_NAME}_{MODEL_NAME}_forecast_"
     f"{dataset_name_for_forecast}_H"
-    f"{FORECAST_HORIZON_YEARS}_calibrated.csv",
+    f"{FORECAST_HORIZON_YEARS}_eval.csv",
 )
 csv_future = os.path.join(
     RUN_OUTPUT_PATH,
@@ -2409,7 +2451,32 @@ csv_future = os.path.join(
     f"{FORECAST_HORIZON_YEARS}_future.csv",
 )
 
+# --- calibrated outputs ---
+csv_eval_cal = os.path.join(
+    RUN_OUTPUT_PATH,
+    f"{CITY_NAME}_{MODEL_NAME}_forecast_"
+    f"{dataset_name_for_forecast}_H"
+    f"{FORECAST_HORIZON_YEARS}_eval_calibrated.csv",
+)
+csv_future_cal = os.path.join(
+    RUN_OUTPUT_PATH,
+    f"{CITY_NAME}_{MODEL_NAME}_forecast_"
+    f"{dataset_name_for_forecast}_H"
+    f"{FORECAST_HORIZON_YEARS}_future_calibrated.csv",
+)
+cal_stats_path = os.path.join(
+    RUN_OUTPUT_PATH,
+    f"{CITY_NAME}_{MODEL_NAME}_calibration_stats_"
+    f"{dataset_name_for_forecast}_H"
+    f"{FORECAST_HORIZON_YEARS}.json",
+)
 
+metrics_json = os.path.join(
+    RUN_OUTPUT_PATH,
+    f"{CITY_NAME}_{MODEL_NAME}_eval_diagnostics_"
+    f"{dataset_name_for_forecast}_H{FORECAST_HORIZON_YEARS}.json",
+)
+#
 # Build future grid in physical units (years)
 future_grid = np.arange(
     FORECAST_START_YEAR,
@@ -2451,9 +2518,7 @@ df_eval, df_future = format_and_forecast(
     metrics_per_horizon=True,
     metrics_extra=["pss"],  # uses get_metric
     metrics_extra_kwargs=None,
-    metrics_savefile=os.path.join(
-        RUN_OUTPUT_PATH, 
-        "eval_diagnostics.json"),         # auto name, or give explicit path
+    metrics_savefile=metrics_json,         # auto name, or give explicit path
     metrics_save_format=".json",
     metrics_time_as_str=True,
     value_mode="cumulative", # set to "rate" to convert back to rate 
@@ -2468,7 +2533,7 @@ df_eval, df_future = format_and_forecast(
 
 if df_eval is not None and not df_eval.empty:
     print(
-        "Saved calibrated EVAL forecast CSV -> "
+        "Saved EVAL forecast CSV -> "
         f"{csv_eval}"
     )
 else:
@@ -2476,13 +2541,59 @@ else:
 
 if df_future is not None and not df_future.empty:
     print(
-        "Saved calibrated FUTURE forecast CSV -> "
+        "Saved FUTURE forecast CSV -> "
         f"{csv_future}"
     )
 else:
     print("[Warn] Empty future forecast DF.")
+    
+# --- calibrate (auto: no-op if already done) ---
+
+df_eval_cal, df_future_cal, cal_stats = calibrate_quantile_forecasts(
+    df_eval=df_eval,
+    df_future=df_future,
+    target_name="subsidence",   # IMPORTANT: base name for *_qXX columns
+    interval=(0.1, 0.9),
+    target_coverage=0.8,
+    use="auto",
+    tol=0.02,
+    f_max=5.0,
+    enforce_monotonic="cummax",
+    save_eval=csv_eval_cal,
+    save_future=csv_future_cal,
+    save_stats=cal_stats_path,
+    verbose=2,
+)
+
+# --- keep using calibrated outputs downstream ---
+if df_eval_cal is not None:
+    df_eval = df_eval_cal
+if df_future_cal is not None:
+    df_future = df_future_cal
+
+if cal_stats.get("skipped", False):
+    print("[OK] calibration skipped:", cal_stats.get("reason"))
+else:
+    print("[OK] calibration applied")
+
+print("[OK] calib stats ->", cal_stats_path)
+
+if df_eval is not None and not df_eval.empty:
+    _ = evaluate_forecast(
+        df_eval,
+        target_name="subsidence",
+        quantile_interval=(0.1, 0.9),
+        per_horizon=True,
+        extra_metrics=["pss"],
+        savefile=os.path.join(
+            RUN_OUTPUT_PATH,
+            f"{CITY_NAME}_{MODEL_NAME}_eval_diagnostics_"
+            f"{dataset_name_for_forecast}_H{FORECAST_HORIZON_YEARS}_calibrated.json",
+        ),
+        verbose=1,
+    )
+
 #%
-#
 # =============================================================================
 # Evaluate metrics & physics on the forecasting split (+ optional censoring)
 # =============================================================================
@@ -2499,18 +2610,26 @@ ds_eval = make_tf_dataset(
     forecast_horizon=FORECAST_HORIZON_YEARS,
 )
 
-xb, yb = next(iter(ds_eval))
-out = model_inf(xb, training=False)
-sp = out["subs_pred"]
-print("subs_pred shape:", sp.shape)
-print("subs_pred static:", sp.shape)
-print("subs_pred dyn   :", tf.shape(sp).numpy())
-
-# Try both interpretations explicitly:
-sp_fix = canonicalize_to_BHQO_using_ytrue(
-    sp, yb["subs_pred"], q_values=QUANTILES
-)
-print("canonicalized shape:", sp_fix.shape)
+if DEBUG:
+    xb, yb = next(iter(ds_eval))
+    out = model_inf(xb, training=False)
+    sp = out["subs_pred"]
+    print("subs_pred shape:", sp.shape)
+    print("subs_pred static:", sp.shape)
+    print("subs_pred dyn   :", tf.shape(sp).numpy())
+    
+    # Try both interpretations explicitly:
+    sp_fix = canonicalize_BHQO(
+        sp,
+        y_true=yb["subs_pred"],
+        q_values=QUANTILES,
+        n_q=(len(QUANTILES) if QUANTILES else None),
+        enforce_monotone=False,
+        verbose=0,
+        log_fn=(lambda *_: None),
+    )
+    
+    print("canonicalized shape:", sp_fix.shape)
 
 # 1) Dataset debug (safe)
 _ = debug_val_interval(
@@ -2598,7 +2717,15 @@ for xb, yb in with_progress(ds_eval, desc="Interval-Censoring Diagnostics"):
     out = model_inf(xb, training=False)
 
     s_pred_b, _ = extract_preds(model_inf, out)   # <- (B,H,1) or (B,H,Q,1)
-
+    s_pred_b = canonicalize_BHQO(
+        s_pred_b,
+        y_true=yb["subs_pred"],
+        q_values=QUANTILES,
+        n_q=(len(QUANTILES) if QUANTILES else None),
+        enforce_monotone=True,
+        verbose=0,
+        log_fn=(lambda *_: None),
+    )
     y_true_b = yb["subs_pred"]                    # (B,H,1)
     y_true_list.append(y_true_b)
 
@@ -2621,6 +2748,27 @@ for xb, yb in with_progress(ds_eval, desc="Interval-Censoring Diagnostics"):
 y_true = tf.concat(y_true_list, axis=0) if y_true_list else None  # (N,H,1)
 s_q = tf.concat(s_q_list, axis=0) if s_q_list else None           # (N,H,Q,1)
 mask = tf.concat(mask_list, axis=0) if mask_list else None        # (N,H,1) booleans
+#%
+#=========================test of axis shape 
+# s_q is (N,H,Q,1), y_true is (N,H,1)
+q10 = s_q[..., 0, :]      # (N,H,1)
+q90 = s_q[..., -1, :]     # (N,H,1)
+
+cov_manual = tf.reduce_mean(
+    tf.cast((y_true >= q10) & (y_true <= q90), tf.float32)
+).numpy()
+
+print("cov_manual:", cov_manual)
+print("cov_fn    :", float(coverage80_fn(y_true, s_q).numpy()))
+
+sharp_manual = tf.reduce_mean((q90 - q10)).numpy()
+print("sharp_manual:", sharp_manual)
+print("sharp_fn    :", float(sharpness80_fn(y_true, s_q).numpy()))
+
+hit = tf.cast((y_true >= q10) & (y_true <= q90), tf.float32)  # (N,H,1)
+cov_per_h = tf.reduce_mean(hit, axis=[0, 2])  # (H,)
+
+print("cov_per_h:", cov_per_h.numpy())
 
 # --- 2.3.a Interval coverage/sharpness (scaled + physical) ---------------
 cov80_uncal_phys = cov80_cal_phys = None
@@ -2705,13 +2853,22 @@ if (y_true is not None) and (mask is not None):
         for xb2, yb2 in with_progress(ds_eval,
                               desc="Point preds for censor-MAE"):
             out2 = model_inf(xb2, training=False)
-            # s2 = subs_point_from_out(model_inf, out2, QUANTILES, _med_idx)  # (B,H,1)
+            s2 = subs_point_from_out(model_inf, out2, QUANTILES, _med_idx)  # (B,H,1)
             s_pred = out2["subs_pred"]
-            s_pred = canonicalize_to_BHQO_using_ytrue(
-                    s_pred,
-                    yb2["subs_pred"],
-                    q_values=QUANTILES,
-                )
+            # s_pred = canonicalize_to_BHQO_using_ytrue(
+            #         s_pred,
+            #         yb2["subs_pred"],
+            #         q_values=QUANTILES,
+            #     )
+            s_pred = canonicalize_BHQO(
+                s_pred,
+                y_true=yb2["subs_pred"],
+                q_values=QUANTILES,
+                n_q=(len(QUANTILES) if QUANTILES else None),
+                enforce_monotone=True,
+                verbose=0,
+                log_fn=(lambda *_: None),
+            )
             s2 = s_pred[:, :, int(_med_idx), :]
             s_pred_list.append(s2)
 
@@ -2767,65 +2924,6 @@ if DEBUG:
           float(yt_phys.max()), float(yt_phys.mean()), 
           float(yt_phys.var())
       )
-
-# --- 2.4 Point metrics (MAE/MSE/R²), overall + per-horizon -------------
-metrics_point = {}
-per_h_mae_dict, per_h_r2_dict = None, None
-
-if y_true is not None:
-
-    if QUANTILES and (s_q is not None):
-        # median index
-        med_idx = _med_idx
-        s_med_uncal = s_q[..., med_idx, :]  # (N,H,1)
-
-        # Prefer calibrated median if available
-        s_used = (s_q_cal[..., med_idx, :] if (s_q_cal is not None) else s_med_uncal)
-
-        metrics_point = point_metrics(
-            y_true,
-            s_used,
-            use_physical=True,
-            scaler_info=scaler_info_dict,
-            target_name=SUBSIDENCE_COL,
-        )
-        per_h_mae_dict, per_h_r2_dict = per_horizon_metrics(
-            y_true,
-            s_used,
-            use_physical=True,
-            scaler_info=scaler_info_dict,
-            target_name=SUBSIDENCE_COL,
-        )
-
-    else:
-        # point-forecast branch: we need predictions (N,H,1)
-        # If you already computed s_med in the censor block above, you can reuse it.
-        if "s_med" not in locals() or s_med is None:
-            s_pred_list = []
-            for xb2, _ in with_progress(ds_eval, desc="Point-forecast Diagnostics"):
-                out2 = model_inf(xb2, training=False)
-                s2 = subs_point_from_out(model_inf, out2, QUANTILES, _med_idx)  # (B,H,1)
-                s_pred_list.append(s2)
-
-            if not s_pred_list:
-                raise RuntimeError("No batches collected for point-forecast diagnostics.")
-
-            s_med = tf.concat(s_pred_list, axis=0)  # (N,H,1) scaled/model space
-
-        metrics_point = point_metrics(
-            y_true,
-            s_med,
-            use_physical=True,
-            scaler_info=scaler_info_dict,
-            target_name=SUBSIDENCE_COL,
-        )
-        per_h_mae_dict, per_h_r2_dict = per_horizon_metrics(
-            y_true,
-            s_med,
-            use_physical=True,
-            scaler_info=scaler_info_dict,
-            target_name=SUBSIDENCE_COL,
-        )
 
 # Normalize coverage/sharpness choices for ablation record (prefer calibrated)
 coverage80_for_abl = (
@@ -2890,7 +2988,6 @@ if per_h_mae_dict:
 if per_h_r2_dict:
     payload.setdefault("per_horizon", {})
     payload["per_horizon"]["r2"] = per_h_r2_dict
-
 
 # -------------------------------------------------------------------------
 # Unit post-processing for evaluation JSON (controlled by config).
@@ -3014,41 +3111,6 @@ except:
 # =============================================================================
 
 print("\nPlotting forecast views...")
-
-# def _as_year(df, src="coord_t", dst="year"):
-#     if df is None or df.empty or src not in df:
-#         return df
-#     out = df.copy()
-#     out[dst] = np.round(out[src]).astype(int)
-#     return out
-
-# df_eval = _as_year(df_eval)
-# df_future = _as_year(df_future)
-
-# eval_years = [int(FORECAST_START_YEAR - 1)]
-# future_years = [int(y) for y in np.round(future_grid)]
-
-# plot_eval_future(
-#     df_eval=df_eval,
-#     df_future=df_future,
-#     target_name=SUBSIDENCE_COL,
-#     quantiles=QUANTILES,
-#     spatial_cols=("coord_x", "coord_y"),
-#     time_col="year",                 # <--- changed
-#     eval_years=eval_years,
-#     future_years=future_years,
-#     eval_view_quantiles=[0.5],
-#     future_view_quantiles=QUANTILES,
-#     spatial_mode="hexbin",
-#     hexbin_gridsize=40,
-#     savefig_prefix=os.path.join(
-#         RUN_OUTPUT_PATH,
-#         f"{CITY_NAME}_subsidence_view",
-#     ),
-#     save_fmts=[".png", ".pdf"],
-#     show=False,
-#     verbose=1,
-# )
 
 try:
     plot_eval_future(

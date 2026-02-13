@@ -426,7 +426,7 @@ def fit_interval_calibrator_on_val(
             s_pred = canonicalize_to_BHQO_using_ytrue(
                 s_pred,
                 y["subs_pred"],
-                q_values=(0.1, 0.5, 0.9),
+                q_values=q_values,
             )
  
         rank = getattr(getattr(s_pred, "shape", None), "rank", None)

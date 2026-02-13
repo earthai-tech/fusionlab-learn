@@ -35,8 +35,6 @@ import numpy as np
 import pandas as pd
 
 from sklearn.preprocessing import MinMaxScaler 
-from sklearn.isotonic import IsotonicRegression
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     mean_absolute_error,
     mean_squared_error,
@@ -47,10 +45,11 @@ from .._fusionlog import fusionlog
 
 from ..core.handlers import columns_manager 
 from ..core.checks import check_spatial_columns, check_empty  
-from ..core.io import is_data_readable, SaveFile
+from ..core.io import is_data_readable
 from ..decorators import isdf 
 from ..metrics._registry import get_metric
-from .generic_utils import vlog, normalize_model_inputs, ensure_directory_exists  
+from .calibrate import calibrate_quantile_forecasts
+from .generic_utils import vlog, ensure_directory_exists  
 from .validator import is_frame 
 from .subsidence_utils import (
     convert_target_units_df,
@@ -70,7 +69,6 @@ __all__= [
      'adjust_time_predictions', 
      'add_forecast_times', 
      'pivot_forecast', 
-     'calibrate_forecasts', 
      'plot_reliability_diagram', 
      'format_and_forecast', 
      'evaluate_forecast'
@@ -92,6 +90,7 @@ def evaluate_forecast(
     extra_metric_kwargs: Optional[
         Mapping[str, Mapping[str, Any]]
     ] = None,
+    overall_key: Optional[str]  =  "__overall__",   
     savefile: Optional[Union[str, os.PathLike, bool]] = None,
     save_format: str = ".json",
     time_as_str: bool = True,
@@ -302,6 +301,7 @@ def evaluate_forecast(
       - ``per_horizon_mae``, ``per_horizon_mse``,
         ``per_horizon_r2``.
     """
+    
     vlog(
         "[evaluate_forecast] Starting metrics computation.",
         verbose=verbose,
@@ -539,6 +539,9 @@ def evaluate_forecast(
             metrics_here["overall_mse"] = float(
                 mean_squared_error(y_true, y_pred)
             )
+            metrics_here["overall_rmse"] = float(
+                np.sqrt(metrics_here["overall_mse"])
+            )
             # R² requires at least 2 samples
             if y_true.size >= 2:
                 metrics_here["overall_r2"] = float(
@@ -603,6 +606,7 @@ def evaluate_forecast(
         if per_horizon and step_col in g.columns:
             per_mae: Dict[int, float] = {}
             per_mse: Dict[int, float] = {}
+            per_rmse: Dict[int, float] = {}
             per_r2: Dict[int, float] = {}
 
             for h, g_h in g.groupby(step_col):
@@ -613,9 +617,10 @@ def evaluate_forecast(
                 per_mae[h_int] = float(
                     mean_absolute_error(yt_h, yp_h)
                 )
-                per_mse[h_int] = float(
-                    mean_squared_error(yt_h, yp_h)
-                )
+                mse_h = float(mean_squared_error(yt_h, yp_h))
+                per_mse[h_int] = mse_h
+                per_rmse[h_int] = float(np.sqrt(mse_h))
+                
                 if yt_h.size >= 2:
                     per_r2[h_int] = float(
                         r2_score(yt_h, yp_h)
@@ -625,43 +630,166 @@ def evaluate_forecast(
 
             metrics_here["per_horizon_mae"] = per_mae
             metrics_here["per_horizon_mse"] = per_mse
+            metrics_here["per_horizon_rmse"] = per_rmse
             metrics_here["per_horizon_r2"] = per_r2
 
         # ---- 5d. Extra metrics ----------------------------------------
-        for m_name, fn in metric_fns.items():
-            kwargs = dict(extra_metric_kwargs.get(m_name, {}) or {})
+        # for m_name, fn in metric_fns.items():
+        #     kwargs = dict(extra_metric_kwargs.get(m_name, {}) or {})
         
-            sig = inspect.signature(fn)
-            param_names = list(sig.parameters.keys())
+        #     sig = inspect.signature(fn)
+        #     param_names = list(sig.parameters.keys())
         
-            # Case 1: standard supervised metric: metric(y_true, y_pred, ...)
-            if ("y_true" in param_names) and ("y_pred" in param_names):
-                # Prefer explicit kw usage if supported
-                try:
-                    m_val = fn(y_true=y_true, y_pred=y_pred, **kwargs)
-                except TypeError:
-                    # Fall back to positional (y_true, y_pred)
-                    m_val = fn(y_true, y_pred, **kwargs)
+        #     # Case 1: standard supervised metric: metric(y_true, y_pred, ...)
+        #     if ("y_true" in param_names) and ("y_pred" in param_names):
+        #         # Prefer explicit kw usage if supported
+        #         try:
+        #             m_val = fn(y_true=y_true, y_pred=y_pred, **kwargs)
+        #         except TypeError:
+        #             # Fall back to positional (y_true, y_pred)
+        #             m_val = fn(y_true, y_pred, **kwargs)
         
-            # Case 2: prediction-only metric: metric(y_pred, sample_weight=..., ...)
-            elif param_names and param_names[0] in ("y_pred", "y_forecast", "y_hat"):
-                # e.g. prediction_stability_score(y_pred, sample_weight=None, ...)
-                m_val = fn(y_pred, **kwargs)
+        #     # Case 2: prediction-only metric: metric(y_pred, sample_weight=..., ...)
+        #     elif param_names and param_names[0] in ("y_pred", "y_forecast", "y_hat"):
+        #         # e.g. prediction_stability_score(y_pred, sample_weight=None, ...)
+        #         m_val = fn(y_pred, **kwargs)
         
-            else:
-                # Fallback heuristic: try (y_true, y_pred) then (y_pred,)
-                try:
-                    m_val = fn(y_true, y_pred, **kwargs)
-                except TypeError:
-                    m_val = fn(y_pred, **kwargs)
+        #     else:
+        #         # Fallback heuristic: try (y_true, y_pred) then (y_pred,)
+        #         try:
+        #             m_val = fn(y_true, y_pred, **kwargs)
+        #         except TypeError:
+        #             m_val = fn(y_pred, **kwargs)
         
-            # Try to convert scalar arrays to Python floats
-            if isinstance(m_val, np.ndarray) and m_val.size == 1:
-                m_val = float(m_val.reshape(()))
+        #     # Try to convert scalar arrays to Python floats
+        #     if isinstance(m_val, np.ndarray) and m_val.size == 1:
+        #         m_val = float(m_val.reshape(()))
         
-            metrics_here[m_name] = m_val
+        #     metrics_here[m_name] = m_val
+        
+        apply_extra_metrics(
+            dest=metrics_here,
+            y_true=y_true,
+            y_pred=y_pred,
+            metric_fns=metric_fns,
+            extra_metric_kwargs=extra_metric_kwargs,
+            horizon_steps=(g[step_col].to_numpy() if step_col in g.columns else None),
+            verbose=verbose,
+            logger=logger,
+        )
 
         results_by_time[t_key] = metrics_here
+        
+    # ------------------------------------------------------------------
+    # 5bis. Overall totals across *all* rows (all times/horizons)
+    # ------------------------------------------------------------------
+    # When we group by time (e.g. coord_t) and each time slice corresponds
+    # to a single forecast horizon, per-time "per_horizon_*" metrics will
+    # naturally contain only one entry. Adding a global summary makes it
+    # easier to track the model's overall behavior across the full eval
+    # split (all horizons together).
+    
+    # overall_key: Optional[str] (or str but allow None)
+    _write_overall = (
+        (overall_key is not None)
+        and (str(overall_key).strip() != "")
+    )
+    
+    if ( has_time and len(results_by_time) > 1) and _write_overall :
+        y_true_all = df[actual_col].astype(float).to_numpy()
+        y_pred_all = df[median_col].astype(float).to_numpy()
+        horizon_all = (
+            df[step_col].to_numpy()
+            if step_col in df.columns
+            else None
+        )
+    
+        metrics_all: Dict[str, Any] = {}
+        metrics_all["overall_mae"] = float(
+            mean_absolute_error(y_true_all, y_pred_all)
+        )
+        metrics_all["overall_mse"] = float(
+            mean_squared_error(y_true_all, y_pred_all)
+        )
+        metrics_all["overall_rmse"] = float(
+            np.sqrt(metrics_all["overall_mse"])
+        )
+        metrics_all["overall_r2"] = (
+            float(r2_score(y_true_all, y_pred_all))
+            if y_true_all.size >= 2
+            else float("nan")
+        )
+    
+        # Coverage / sharpness for overall (quantile mode)
+        if quantile_mode:
+            qs_sorted = sorted(quantile_map.keys())
+            q_low = min(qs_sorted, key=lambda q: abs(q - q_lower_target))
+            q_high = min(qs_sorted, key=lambda q: abs(q - q_upper_target))
+    
+            y_lower_all = df[quantile_map[q_low]].astype(float).to_numpy()
+            y_upper_all = df[quantile_map[q_high]].astype(float).to_numpy()
+    
+            if coverage_fn is not None and miw_fn is not None:
+                try:
+                    cov_val = coverage_fn(
+                        y_true_all, y_lower_all, y_upper_all,
+                        nan_policy="omit", verbose=0,
+                    )
+                except TypeError:
+                    cov_val = coverage_fn(y_true_all, y_lower_all, y_upper_all)
+                metrics_all["coverage80"] = float(cov_val)
+    
+                try:
+                    miw_val = miw_fn(
+                        y_lower_all, y_upper_all,
+                        nan_policy="omit", verbose=0,
+                    )
+                except TypeError:
+                    miw_val = miw_fn(y_lower_all, y_upper_all)
+                metrics_all["sharpness80"] = float(miw_val)
+    
+        # Per-horizon totals across all rows
+        if horizon_all is not None:
+            per_mae: Dict[int, float] = {}
+            per_mse: Dict[int, float] = {}
+            per_rmse: Dict[int, float] = {}
+            per_r2: Dict[int, float] = {}
+    
+            for h in sorted(set(horizon_all.tolist())):
+                h_int = int(h)
+                mask_h = horizon_all == h
+                yt_h = y_true_all[mask_h]
+                yp_h = y_pred_all[mask_h]
+                if yt_h.size == 0:
+                    continue
+    
+                per_mae[h_int] = float(mean_absolute_error(yt_h, yp_h))
+                mse_h = float(mean_squared_error(yt_h, yp_h))
+                per_mse[h_int] = mse_h
+                per_rmse[h_int] = float(np.sqrt(mse_h))
+                per_r2[h_int] = (
+                    float(r2_score(yt_h, yp_h)) if yt_h.size >= 2 else float("nan")
+                )
+    
+            metrics_all["per_horizon_mae"] = per_mae
+            metrics_all["per_horizon_mse"] = per_mse
+            metrics_all["per_horizon_rmse"] = per_rmse
+            metrics_all["per_horizon_r2"] = per_r2
+    
+        # Extra metrics: reuse exact same calling logic as per-group
+        apply_extra_metrics(
+            dest=metrics_all,
+            y_true=y_true_all,
+            y_pred=y_pred_all,
+            metric_fns=metric_fns,
+            extra_metric_kwargs=extra_metric_kwargs,
+            horizon_steps=horizon_all,
+            verbose=verbose, 
+            logger=logger, 
+        )
+
+        # Put it under a configurable key (default "__overall__")
+        results_by_time[str(overall_key)] = metrics_all
 
     # ------------------------------------------------------------------
     # 6. Flatten for single vs multi time
@@ -800,6 +928,80 @@ def evaluate_forecast(
     # No saving requested: just return in-memory result
     return final_result
 
+def apply_extra_metrics(
+    *,
+    dest: Dict[str, Any],
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    metric_fns: Mapping[str, Callable[..., Any]],
+    extra_metric_kwargs: Mapping[str, Mapping[str, Any]],
+    horizon_steps: Optional[np.ndarray] = None,
+    verbose: int = 1,
+    logger: Optional[logging.Logger] = None,
+) -> None:
+    """
+    Apply extra metrics into `dest` using robust calling heuristics.
+
+    Supports:
+    - fn(y_true=..., y_pred=..., **kwargs)
+    - fn(y_true, y_pred, **kwargs)
+    - fn(y_pred=..., **kwargs) or fn(y_pred, **kwargs) (prediction-only)
+
+    If a metric supports `horizon_steps`, it will be passed when provided.
+    """
+    for m_name, fn in metric_fns.items():
+        kwargs = dict(extra_metric_kwargs.get(m_name, {}) or {})
+
+        # Pass horizon_steps if supported and available
+        if horizon_steps is not None:
+            try:
+                sig = inspect.signature(fn)
+                if "horizon_steps" in sig.parameters:
+                    kwargs["horizon_steps"] = horizon_steps
+            except Exception:
+                # If signature inspection fails, ignore.
+                pass
+
+        try:
+            sig = inspect.signature(fn)
+            param_names = list(sig.parameters.keys())
+
+            # Case 1: standard supervised metric: metric(y_true, y_pred, ...)
+            if ("y_true" in param_names) and ("y_pred" in param_names):
+                try:
+                    m_val = fn(y_true=y_true, y_pred=y_pred, **kwargs)
+                except TypeError:
+                    m_val = fn(y_true, y_pred, **kwargs)
+
+            # Case 2: prediction-only metric: metric(y_pred, ...)
+            elif param_names and param_names[0] in (
+                "y_pred", "y_forecast", "y_hat"
+            ):
+                # prefer keyword when possible
+                try:
+                    m_val = fn(y_pred=y_pred, **kwargs)
+                except TypeError:
+                    m_val = fn(y_pred, **kwargs)
+
+            else:
+                # Fallback heuristic: try (y_true, y_pred) then (y_pred,)
+                try:
+                    m_val = fn(y_true, y_pred, **kwargs)
+                except TypeError:
+                    m_val = fn(y_pred, **kwargs)
+
+            if isinstance(m_val, np.ndarray) and m_val.size == 1:
+                m_val = float(m_val.reshape(()))
+
+            dest[m_name] = m_val
+
+        except Exception as e:
+            vlog(
+                f"[Warn] extra metric '{m_name}' failed: {e}",
+                verbose=verbose,
+                level=2,
+                logger=logger,
+            )
 
 def _find_scaler_block(scaler_info, keys=("targets", "target", "y")):
     """Best-effort helper to locate a scaler block inside scaler_info."""
@@ -977,7 +1179,11 @@ def format_and_forecast(
     # Time dtype control
     time_as_datetime: bool = False,
     time_format: str | None = None,
-    #
+    # calibrations 
+    calibration: str | bool = False,
+    calibration_kwargs: Optional[Mapping[str, Any]] = None,
+    calibration_save_stats: Optional[Union[str, os.PathLike]] = None,
+    
     # Evaluation options (metrics, optional)
     eval_metrics: bool = False,
     metrics_column_map: Mapping[str, Any] | None = None,
@@ -1539,53 +1745,6 @@ def format_and_forecast(
                 logger=logger,
             )
 
-    # # ------------------------------------------------------------------
-    # # Inverse-transform subsidence (pred + actual) using scaler_info
-    # # ------------------------------------------------------------------
-    # if isinstance(scaler_info, dict) and scale_name  in scaler_info:
-    #     # New Stage-1 schema: one entry per target (e.g. "subsidence")
-    #     target_block = scaler_info[scale_name]
-    # else:
-    #     # Backwards compatibility with old "targets"/"target"/"y" schema
-    #     target_block = _find_scaler_block(scaler_info)
-
-    # # Eval
-    # if quantiles is not None:
-    #     eval_cols = []
-    #     for j in range(subs_eval_q.shape[1]):
-    #         vals = subs_eval_q[:, j].reshape(-1)
-    #         vals_inv = _inverse_with_block(vals, target_block, scale_name)
-    #         eval_cols.append(vals_inv)
-    #     subs_eval_q = np.stack(eval_cols, axis=1)  # (B, Q)
-    # else:
-    #     vals = subs_eval_q.reshape(-1)
-    #     subs_eval_q = _inverse_with_block(vals, target_block, scale_name)
-
-    # # Inverse-transform ground truth (last step + all horizons)
-    # if subs_true_eval is not None:
-    #     subs_true_eval = _inverse_with_block(
-    #         subs_true_eval.reshape(-1), target_block, scale_name
-    #     )
-
-    # if subs_true_all_flat is not None:
-    #     subs_true_all_flat = _inverse_with_block(
-    #         subs_true_all_flat.reshape(-1), target_block, scale_name
-    #     )
-
-    # # Future
-    # if quantiles is not None:
-    #     future_cols = []
-    #     for j in range(subs_future_q.shape[2]):
-    #         vals = subs_future_q[:, :, j].reshape(-1)
-    #         vals_inv = _inverse_with_block(vals, target_block, scale_name)
-    #         future_cols.append(vals_inv)
-    #     subs_future_flat = np.stack(future_cols, axis=1)  # (B*H, Q)
-    # else:
-    #     vals = subs_future_q.reshape(-1)
-    #     subs_future_flat = _inverse_with_block(
-    #         vals, target_block, scale_name
-    #     ).reshape(-1)
-    
     # ------------------------------------------------------------------
     # Inverse-scale subsidence (pred + actual) using Stage-1 resolver
     # (schema-agnostic; avoids relying on block["scaler"]/["cols"]).
@@ -1949,43 +2108,8 @@ def format_and_forecast(
     if actual_col in df_future.columns:
         df_future = df_future.drop(columns=[actual_col])
 
-    # Decide which evaluation DataFrame to export
-    df_eval_to_write = df_eval  # default fallback
 
-    if eval_export is not None and df_eval_all is not None:
-        # Case 1: string control ("all", "last", "2022", ...)
-        if isinstance(eval_export, str):
-            key = eval_export.lower()
-
-            if key in ("all", "full", "horizons"):
-                # Use the full multi-horizon DF (2020,2021,2022,...)
-                df_eval_to_write = df_eval_all
-
-            elif key in ("last", "single", "default"):
-                # Old behaviour: single eval_forecast_step only
-                df_eval_to_write = df_eval
-
-            else:
-                # Treat as a single time value for t_col, e.g. "2022"
-                vals = [eval_export]
-                if time_as_datetime:
-                    vals = pd.to_datetime(vals, format=time_format, errors="coerce")
-                df_eval_to_write = df_eval_all[df_eval_all[t_col].isin(vals)]
-
-        else:
-            # Non-string: scalar or sequence of time values (2021, [2021, 2022], ...)
-            if isinstance(eval_export, Sequence):
-                vals = list(eval_export)
-            else:
-                vals = [eval_export]
-
-            if time_as_datetime:
-                vals = pd.to_datetime(vals, format=time_format, errors="coerce")
-
-            df_eval_to_write = df_eval_all[df_eval_all[t_col].isin(vals)]
-    
     if output_unit is not None:
-
         df_future = convert_target_units_df(
             df_future,
             base=out_name,
@@ -1996,10 +2120,10 @@ def format_and_forecast(
             unit_col=output_unit_col,
             copy_df=False,
         )
-
+    
         if df_eval_all is not None:
-            df_eval_to_write = convert_target_units_df(
-                df_eval_to_write,
+            df_eval_all = convert_target_units_df(
+                df_eval_all,
                 base=out_name,
                 from_unit=output_unit_from,
                 to_unit=output_unit,
@@ -2008,6 +2132,115 @@ def format_and_forecast(
                 unit_col=output_unit_col,
                 copy_df=False,
             )
+    
+            df_eval = df_eval_all[
+                df_eval_all["forecast_step"]
+                == eval_forecast_step
+            ].copy()
+        else:
+            df_eval = convert_target_units_df(
+                df_eval,
+                base=out_name,
+                from_unit=output_unit_from,
+                to_unit=output_unit,
+                mode=output_unit_mode,
+                suffix=output_unit_suffix,
+                unit_col=output_unit_col,
+                copy_df=False,
+            )
+
+    
+    cal_do = calibration
+    if isinstance(cal_do, str):
+        cal_do = cal_do.strip().lower()
+    
+    cal_stats: Dict[str, Any] = {}
+    
+    if (
+        cal_do not in (False, "false", "0", "no", "off")
+        and quantiles is not None
+        and df_eval_all is not None
+    ):
+
+        ckw = dict(calibration_kwargs or {})
+    
+        ckw.setdefault("target_name", out_name)
+        ckw.setdefault("step_col", "forecast_step")
+        ckw.setdefault("interval", metrics_quantile_interval)
+        ckw.setdefault("use", cal_do)
+        ckw.setdefault("verbose", verbose)
+        ckw.setdefault("logger", logger)
+    
+        if calibration_save_stats is not None:
+            ckw.setdefault(
+                "save_stats",
+                calibration_save_stats,
+            )
+    
+        df_eval_cal, df_future_cal, cal_stats = (
+            calibrate_quantile_forecasts(
+                df_eval=df_eval_all,
+                df_future=df_future,
+                **ckw,
+            )
+        )
+    
+        if df_eval_cal is not None:
+            df_eval_all = df_eval_cal
+            df_eval = df_eval_all[
+                df_eval_all["forecast_step"]
+                == eval_forecast_step
+            ].copy()
+    
+        if df_future_cal is not None:
+            df_future = df_future_cal
+    
+    # Decide which evaluation DataFrame to export
+    df_eval_to_write = df_eval  # fallback
+    
+    if eval_export is not None and df_eval_all is not None:
+        # Case 1: string control ("all", "last", "2022", ...)
+        if isinstance(eval_export, str):
+            key = eval_export.lower()
+    
+            if key in ("all", "full", "horizons"):
+                # Use the full multi-horizon DF (2020,2021,2022,...)
+                df_eval_to_write = df_eval_all
+    
+            elif key in ("last", "single", "default"):
+                # Old behaviour: single eval_forecast_step only
+                df_eval_to_write = df_eval
+    
+            else:
+                vals = [eval_export]
+                if time_as_datetime:
+                    vals = pd.to_datetime(
+                        vals,
+                        format=time_format,
+                        errors="coerce",
+                    )
+                df_eval_to_write = df_eval_all[
+                    df_eval_all[t_col].isin(vals)
+                ]
+    
+        else:
+            # Non-string: scalar or sequence of time values (2021, [2021, 2022], ...)
+            if isinstance(eval_export, Sequence):
+                vals = list(eval_export)
+            else:
+                vals = [eval_export]
+    
+            if time_as_datetime:
+                vals = pd.to_datetime(
+                    vals,
+                    format=time_format,
+                    errors="coerce",
+                )
+    
+            df_eval_to_write = df_eval_all[
+                df_eval_all[t_col].isin(vals)
+            ]
+
 
     if csv_eval_path:
         ensure_directory_exists(os.path.dirname(csv_eval_path))
@@ -2030,17 +2263,18 @@ def format_and_forecast(
             level=1,
             logger = logger
         )
+
     # ------------------------------------------------------------------
     # Optional metrics evaluation (using df_eval)
     # ------------------------------------------------------------------
+    # df_for_metrics = df_eval_all if df_eval_all is not None else df_eval
+    df_for_metrics = df_eval_to_write 
+    if df_for_metrics is None or df_for_metrics.empty:
+        df_for_metrics = df_eval_all if df_eval_all is not None else df_eval
+
     if eval_metrics:
         # Prefer full-horizon eval DF (per-year metrics),
         # fall back to single-step df_eval if needed.
-        
-        # df_for_metrics = df_eval_all if df_eval_all is not None else df_eval
-        df_for_metrics = df_eval_to_write
-
-
         vlog(
             "[format_and_forecast] Running evaluate_forecast on "
             f"{'df_eval_all' if df_eval_all is not None else 'df_eval'}.",
@@ -2054,7 +2288,7 @@ def format_and_forecast(
         # a filename in the current working directory.  If you
         # want it near csv_eval_path, pass an explicit path.
         
-        evaluate_forecast(
+        metrics =evaluate_forecast(
             df_for_metrics,
             target_name=out_name,
             column_map=metrics_column_map,
@@ -2068,6 +2302,15 @@ def format_and_forecast(
             verbose=verbose,
             logger=logger,
         )
+        overall = metrics.get("__overall__")
+        if overall is not None:
+            vlog(
+                "Overall (all horizons): "
+                f"MAE={overall.get('overall_mae'):.4f}, "
+                f"RMSE={overall.get('overall_rmse'):.4f}, "
+                f"R2={overall.get('overall_r2'):.4f}",
+                verbose=verbose,
+            )
 
     vlog(
         "[format_and_forecast] Done.",
@@ -2145,147 +2388,6 @@ def _add_baseline(
             df[a_col] = df[a_col].astype(float) + base_series.to_numpy()
     return df
 
-@check_empty(['y_val', 'forecast_val'])
-def calibrate_forecasts(
-    y_val: pd.Series,
-    forecasts_val: pd.DataFrame,
-    *forecasts_to_calibrate: Union[
-        pd.DataFrame,
-        Mapping[str, pd.DataFrame]
-    ],
-    quantiles: Tuple[int, ...] = (
-        10, 20, 30, 40, 50, 60, 70, 80, 90
-    ),
-    prefix: str = 'subsidence',
-    verbose: Optional[int] = None,
-    _logger=None
-):
-    vlog(
-        "Starting forecast calibration...",
-        verbose,
-        level=3,
-        logger=_logger
-    )
-    calibrators = {}
-    # Train a calibration model for each quantile
-    for q in quantiles:
-        col = f"{prefix}_q{q}"
-        if col not in forecasts_val.columns:
-            vlog(
-                f"Skip quantile {q}: '{col}' missing",  # noqa
-                verbose,
-                level=2,
-                logger=_logger
-            )
-            continue
-        y_bin = (
-            y_val < forecasts_val[col]
-        ).astype(int)
-        iso = IsotonicRegression(
-            y_min=0,
-            y_max=1,
-            out_of_bounds="clip"
-        )
-        calibrators[col] = iso.fit(
-            forecasts_val[col],
-            y_bin
-        )
-    # Normalize input forecasts into dict format
-    inputs = normalize_model_inputs(
-        *forecasts_to_calibrate
-    )
-    results = {}
-    vlog(
-        f"Applying calibration to {len(inputs)} model(s)...",
-        verbose,
-        level=3,
-        logger=_logger
-    )
-    # Apply calibrators to each DataFrame
-    for name, df in inputs.items():
-        df_cal = df.copy()
-        for q in quantiles:
-            col = f"{prefix}_q{q}"
-            if col in calibrators:
-                out_col = f"{col}_cal_prob"
-                df_cal[out_col] = (
-                    calibrators[col].predict(
-                        df[col]
-                    )
-                )
-        results[name] = df_cal
-    return results, calibrators
-
-calibrate_forecasts.__doc__ = r"""
-Train and apply isotonic calibration models on forecast data.
-
-Parameters
-----------
-y_val : pandas.Series
-    Observed target values for calibration.
-forecasts_val : pandas.DataFrame
-    Validation forecasts with columns named
-    `<prefix>_q{quantile}` for each quantile.
-*forecasts_to_calibrate : DataFrame or dict
-    One or more DataFrames (or a mapping) of new forecasts
-    to calibrate using trained models.
-quantiles : tuple of int, optional
-    List of quantile levels (e.g., 10, 50, 90) to calibrate.
-prefix : str, default 'subsidence'
-    Column name prefix for quantile forecasts.
-verbose : int, optional
-    Verbosity level passed to vlog for logging.
-_logger : Logger or callable, optional
-    Sink for log messages (print or logging.Logger).
-
-Returns
--------
-results : dict
-    Mapping of model names to calibrated DataFrames,
-    each containing new `<prefix>_q{q}_cal_prob`
-    probability columns.
-calibrators : dict
-    Fitted IsotonicRegression models per quantile.
-
-Notes
------
-This function fits an isotonic regression for each
-quantile on validation data and then predicts
-calibrated probabilities for new forecasts. Use
-`normalize_model_inputs` to handle varied input formats.
-
-Examples
---------
->>> import pandas as pd
->>> import numpy as np
->>> from fusionlab.utils.forecast_utils import calibrate_forecasts
->>> # Create dummy validation series
->>> idx = pd.date_range('2021-01-01', periods=50)
->>> y_val = pd.Series(
-...     np.random.randn(50), index=idx
-... )
->>> # Simulate validation forecasts
->>> val_df = pd.DataFrame({
-...     'subsidence_q10': y_val - 0.2,
-...     'subsidence_q90': y_val + 0.2
-... }, index=idx)
->>> # Simulate two new forecast sets
->>> newA = val_df + 0.1
->>> newB = val_df - 0.1
->>> # Calibrate forecasts
->>> results, models = calibrate_forecasts(
-...     y_val,
-...     val_df,
-...     newA,
-...     newB,
-...     quantiles=(10, 90),
-...     verbose=2
-... )
->>> # Access calibrated probabilities
->>> results['ModelA']['subsidence_q10_cal_prob']
->>> # Inspect fitted calibrator for q90
->>> models['subsidence_q90'].threshold_
-"""
 
 @check_empty(['models_data'])
 def plot_reliability_diagram(
@@ -2626,264 +2728,6 @@ def _plot_reliability_diagram(
     plt.tight_layout()
     plt.show()
     
-    
-@SaveFile
-@check_empty(["df"])
-@isdf
-def calibrate_probability_forecast(
-    df: pd.DataFrame,
-    prob_col: str,
-    actual_col: str,
-    method: str = 'isotonic',
-    out_col: Optional[str] = None,
-    clip: bool = True,
-    savefile: Optional[str]=None, 
-) -> pd.DataFrame:
-    """
-    Calibrate a probability forecast using either isotonic regression
-    or logistic (Platt scaling).
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        DataFrame containing raw probability forecasts and actuals.
-    prob_col : str
-        Column name of raw probability forecasts (values in [0,1]).
-    actual_col : str
-        Column name of binary outcomes (0 or 1).
-    method : {'isotonic','logistic'}, default 'isotonic'
-        Calibration method:
-        - 'isotonic': non-parametric isotonic regression.
-        - 'logistic': parametric Platt scaling with logistic regression.
-    out_col : str, optional
-        Name for calibrated probability column. If None, defaults to
-        f"{prob_col}_calib".
-    clip : bool, default True
-        If True, clip output to [0,1].
-
-    Returns
-    -------
-    pd.DataFrame
-        A copy of df with an added calibrated probability column.
-    """
-    df = df.copy()
-    if out_col is None:
-        out_col = f"{prob_col}_calib"
-    y_pred = df[prob_col].values
-    y_true = df[actual_col].values
-
-    if method == 'isotonic':
-        iso = IsotonicRegression(out_of_bounds='clip')
-        iso.fit(y_pred, y_true)
-        y_cal = iso.transform(y_pred)
-    elif method == 'logistic':
-        lr = LogisticRegression(solver='lbfgs')
-        lr.fit(y_pred.reshape(-1, 1), y_true)
-        y_cal = lr.predict_proba(y_pred.reshape(-1, 1))[:, 1]
-    else:
-        raise ValueError(f"Unknown method '{method}'")
-
-    if clip:
-        y_cal = np.clip(y_cal, 0, 1)
-
-    df[out_col] = y_cal
-    return df
-
-@SaveFile 
-@check_empty(["df"])
-@isdf
-def calibrate_quantile_forecasts_(
-    df: pd.DataFrame,
-    quantiles: Sequence[float],
-    q_prefix: str,
-    actual_col: str,
-    method: Literal["isotonic", "logistic"] = "isotonic",
-    out_prefix: str = "calib",
-    grid_mode: Literal["unit", "range"] = "unit",
-    grid_size: int = 1001,
-    group_by: Optional[str] = None, 
-    savefile:Optional[str] =None, # will handle by decorator so once the function 
-    # return dataframe, decorator take it and explort to csv format instead . 
-) -> pd.DataFrame:
-    """
-    Calibrate quantile forecasts by fitting a monotonic classifier
-    at each quantile level, then inverting the CDF at the nominal q.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        DataFrame containing raw quantile forecasts and actuals.
-    quantiles : sequence of float
-        Nominal quantile levels, e.g. [0.1,0.5,0.9].
-    q_prefix : str
-        Prefix for quantile columns (e.g. 'subsidence' for
-        columns subsidence_q10, subsidence_q50, …).
-    actual_col : str
-        Column name of the true continuous outcome.
-    method : {'isotonic','logistic'}, default 'isotonic'
-        Calibration method to fit P(actual <= threshold).
-    out_prefix : str, default 'calib'
-        Prefix for the calibrated columns (e.g. 'calib_subsidence_q10').
-    grid_mode : {'unit','range'}, default 'unit'
-        Which domain to build the inversion grid over:
-          - 'unit' → np.linspace(0,1,grid_size)
-          - 'range' → np.linspace(min(raw), max(raw), grid_size)
-    grid_size : int, default 1001
-        Number of points in the inversion grid.
-    group_by : str, optional
-        If provided, calibrate separately per `df[group_by]`
-        (e.g. 'forecast_step').
-
-    Returns
-    -------
-    pd.DataFrame
-        A copy of `df` with new columns
-        `{out_prefix}_{q_prefix}_qXX` appended.
-    """
-
-    def _calibrate_block(block: pd.DataFrame) -> pd.DataFrame:
-        out = block.copy()
-        for q in quantiles:
-            raw_col = f"{q_prefix}_q{int(q*100)}"
-            cal_col = f"{out_prefix}_{raw_col}"
-
-            # Build grid
-            if grid_mode == "unit":
-                grid = np.linspace(0.0, 1.0, grid_size)
-            else:  # 'range'
-                vals = out[raw_col].to_numpy()
-                grid = np.linspace(vals.min(), vals.max(), grid_size)
-
-            # Binary target: actual ≤ raw_pred
-            y_thr = (out[actual_col] <= out[raw_col]).astype(int).values
-            x_thr = out[raw_col].values
-
-            # Fit calibrator
-            if method == "isotonic":
-                iso = IsotonicRegression(out_of_bounds="clip")
-                iso.fit(x_thr, y_thr)
-                cdf_vals = iso.predict(grid)
-            else:  # 'logistic'
-                lr = LogisticRegression(solver="lbfgs")
-                lr.fit(x_thr.reshape(-1, 1), y_thr)
-                cdf_vals = lr.predict_proba(grid.reshape(-1, 1))[:, 1]
-
-            # Invert at q
-            idx = np.searchsorted(cdf_vals, q, side="left")
-            idx = np.clip(idx, 0, grid_size - 1)
-            out[cal_col] = grid[idx]
-
-        return out
-
-    # Apply either globally or per-group
-    if group_by and group_by in df.columns:
-        pieces = []
-        for _, grp in df.groupby(group_by, sort=False):
-            pieces.append(_calibrate_block(grp))
-        df_out = pd.concat(pieces).sort_index()
-    else:
-        df_out = _calibrate_block(df)
-
-    return df_out
-
-@check_empty(["df"])
-@isdf
-def calibrate_quantile_forecasts(
-    df: pd.DataFrame,
-    quantiles: Sequence[float],
-    q_prefix: str,
-    actual_col: str,
-    method: Literal["isotonic", "logistic"] = "isotonic",
-    out_prefix: str = "calib",
-    grid_mode: Literal["unit", "range", "unit_group", "range_group"] = "unit",
-    grid_size: int = 1001,
-    group_by: Optional[str] = None,
-    savefile: Optional[str] = None,
-) -> pd.DataFrame:
-    """
-    Calibrate quantile forecasts by fitting a monotonic classifier
-    at each quantile level, then inverting the CDF at the nominal q.
-
-    grid_mode controls both domain and grouping:
-      - "unit": global grid [0,1]
-      - "range": global grid over [min(raw), max(raw)]
-      - "unit_group": per-group grids in [0,1], groups via group_by or 'forecast_step'
-      - "range_group": per-group grids over each group's raw range
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Raw quantile forecasts (q_prefix_qXX) and true values.
-    quantiles : sequence of float
-        E.g. [0.1,0.5,0.9].
-    q_prefix : str
-        Prefix (e.g. "subsidence") of quantile columns.
-    actual_col : str
-        Column name of true continuous outcome.
-    method : {'isotonic','logistic'}
-    out_prefix : str
-        Prefix for calibrated columns.
-    grid_mode : {'unit','range','unit_group','range_group'}
-    grid_size : int
-    group_by : str, optional
-        Column to group by if using group modes.
-    savefile : str, optional
-        If provided, decorator will save output.
-
-    Returns
-    -------
-    pd.DataFrame
-    """
-    # infer grouping for _group modes
-    if grid_mode.endswith("_group"):
-        grp = group_by or "forecast_step"
-    else:
-        grp = None
-
-    def _calibrate_block(block: pd.DataFrame) -> pd.DataFrame:
-        out = block.copy()
-        for q in quantiles:
-            raw_col = f"{q_prefix}_q{int(q*100)}"
-            cal_col = f"{out_prefix}_{raw_col}"
-
-            # build grid domain
-            if grid_mode.startswith("unit"):
-                grid = np.linspace(0.0, 1.0, grid_size)
-            else:  # 'range' modes
-                vals = out[raw_col].to_numpy()
-                grid = np.linspace(vals.min(), vals.max(), grid_size)
-
-            # binary target
-            y_thr = (out[actual_col] <= out[raw_col]).astype(int).values
-            x_thr = out[raw_col].values
-
-            # fit calibrator
-            if method == "isotonic":
-                iso = IsotonicRegression(out_of_bounds="clip")
-                iso.fit(x_thr, y_thr)
-                cdf = iso.predict(grid)
-            else:
-                lr = LogisticRegression(solver="lbfgs")
-                lr.fit(x_thr.reshape(-1,1), y_thr)
-                cdf = lr.predict_proba(grid.reshape(-1,1))[:,1]
-
-            # invert at q
-            idx = np.searchsorted(cdf, q, side="left")
-            idx = np.clip(idx, 0, grid_size-1)
-            out[cal_col] = grid[idx]
-
-        return out
-
-    # dispatch global vs grouped
-    if grp and grp in df.columns:
-        pieces = []
-        for _, g in df.groupby(grp, sort=False):
-            pieces.append(_calibrate_block(g))
-        df_out = pd.concat(pieces).sort_index()
-    else:
-        df_out = _calibrate_block(df)
-
-    return df_out
 
 @check_empty(["df"])
 @isdf

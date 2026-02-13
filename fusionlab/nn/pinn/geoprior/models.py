@@ -15,7 +15,10 @@ import numpy as np
 from ...._fusionlog import OncePerMessageFilter, fusionlog
 from ....api.docs import DocstringComponents, _halnet_core_params
 from ....compat.sklearn import Interval, StrOptions, validate_params
-from ....compat.keras import compute_loss 
+from ....compat.keras import ( 
+    compute_loss, 
+    CompatInputLayer as InputLayer 
+)
 from ....params import (
     DisabledC,
     FixedC,
@@ -93,7 +96,6 @@ LSTM = K.LSTM
 Dense = K.Dense
 LayerNormalization = K.LayerNormalization
 Sequential = K.Sequential
-InputLayer = K.InputLayer
 Model = K.Model
 Tensor = K.Tensor
 Variable = K.Variable
@@ -788,7 +790,7 @@ class GeoPriorSubsNet(BaseAttentive):
             when used in a time-distributed manner.
             """
             return Sequential([
-                InputLayer(shape=(None, 3)),
+                InputLayer(input_shape=(None, 3)),
                 Dense(hidden[0], activation=act, name=f"{name}_dense1"),
                 Dense(hidden[1], activation=act, name=f"{name}_dense2"),
                 Dense(
@@ -798,7 +800,9 @@ class GeoPriorSubsNet(BaseAttentive):
                     bias_initializer="zeros",
                     name=f"{name}_out",
                 ),
-            ], name=name)
+            ], 
+            name=name
+        )
         
             
         # Coordinate-based correction for groundwater head

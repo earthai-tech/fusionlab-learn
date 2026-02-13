@@ -87,6 +87,47 @@ PATTERNS = {
 }
 
 # -------------------------------------------------------------------
+# Plot metric metadata (titles / labels / format)
+# Used by multi-panel figures to avoid duplicated strings.
+# -------------------------------------------------------------------
+PLOT_METRIC_META = {
+    "r2": {
+        "title": r"$R^2$ (↑)",
+        "ylabel": r"$R^2$",
+        "fmt": "{:.2f}",
+    },
+    "mae": {
+        "title": "MAE (↓, {unit})",
+        "ylabel": "MAE ({unit})",
+        "fmt": "{:.2f}",
+        "unit": "mm",
+    },
+    "rmse": {
+        "title": "RMSE (↓, {unit})",
+        "ylabel": "RMSE ({unit})",
+        "fmt": "{:.2f}",
+        "unit": "mm",
+    },
+    "mse": {
+        "title": "MSE (↓, {unit})",
+        "ylabel": "MSE ({unit})",
+        "fmt": "{:.2f}",
+        "unit": "mm²",
+    },
+    "coverage80": {
+        "title": "Coverage (@80) (↑)",
+        "ylabel": "Coverage",
+        "fmt": "{:.3f}",
+    },
+    "sharpness80": {
+        "title": "Sharpness (@80) (↓, {unit})",
+        "ylabel": "Sharpness ({unit})",
+        "fmt": "{:.3f}",
+        "unit": "mm",
+    },
+}
+
+# -------------------------------------------------------------------
 # Matplotlib defaults (paper-friendly)
 # -------------------------------------------------------------------
 PAPER_DPI = 600

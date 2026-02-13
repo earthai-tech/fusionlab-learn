@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 # License: BSD-3-Clause
 # Author: LKouadio <etanoyau@gmail.com>
+"""
+$ python nat.com/sm3_mainfig_plot_v32.py
 
+"""
 from __future__ import annotations
 
 import os

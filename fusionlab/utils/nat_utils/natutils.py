@@ -5,6 +5,7 @@ import os
 import glob
 from typing import Any 
 import datetime as dt 
+from collections.abc import Mapping, Sequence
 
 import numpy as np
 import pandas as pd 
@@ -860,9 +861,26 @@ def load_training_summary_near_model(
 
     return None
 
-def extract_preds(model, out):
+
+def extract_preds(
+    model: Any,
+    out: Any,
+    *,
+    strict: bool = True,
+    output_names: Sequence[str] | None = None,
+) -> tuple[Any, Any]:
     r"""
-    Extract subsidence and groundwater predictions from a model output.
+    Extract (subs_pred, gwl_pred) from GeoPrior outputs.
+
+    Supports:
+      1) v3.2+ call(): {"subs_pred","gwl_pred"}
+      2) forward_with_aux(): (y_pred, aux)
+      3) legacy: {"data_final"} + model.split_data_predictions
+      4) predict(): list/tuple mapped via output names
+
+    If `strict=True`, list/tuple outputs *must* be mappable via
+    output names; otherwise we raise to avoid silent swaps.
+    
 
     This helper normalizes the output interface across two
     GeoPrior generation families:
@@ -958,23 +976,81 @@ def extract_preds(model, out):
     .. [1] Chollet, F. et al. Keras: Deep Learning for Humans.
            (Software documentation).
     """
-    if not isinstance(out, dict):
-        raise TypeError(
-            "Expected `out` to be a dict-like mapping. "
-            f"Got type={type(out)!r}."
+    # ---------------------------------------------------------
+    # 0) forward_with_aux() style: (y_pred, aux)
+    # ---------------------------------------------------------
+    if isinstance(out, tuple) and len(out) == 2:
+        y_pred, aux = out
+        if isinstance(y_pred, Mapping):
+            out = y_pred
+        elif isinstance(aux, Mapping):
+            # fallback: sometimes callers pass aux by mistake
+            out = aux
+
+    # ---------------------------------------------------------
+    # 1) Mapping outputs
+    # ---------------------------------------------------------
+    if isinstance(out, Mapping):
+        has_new = ("subs_pred" in out) and ("gwl_pred" in out)
+        if has_new:
+            return out["subs_pred"], out["gwl_pred"]
+
+        # Legacy: data_final -> split
+        if "data_final" in out and hasattr(
+            model, "split_data_predictions"
+        ):
+            return model.split_data_predictions(out["data_final"])
+
+        # Single-key wrapper: unwrap one level and retry
+        if len(out) == 1:
+            only_val = next(iter(out.values()))
+            return extract_preds(
+                model,
+                only_val,
+                strict=strict,
+                output_names=output_names,
+            )
+
+        raise KeyError(
+            "Unsupported model output keys. Expected "
+            "{'subs_pred','gwl_pred'} or {'data_final'} "
+            "or a single-key wrapper. "
+            f"Got keys={list(out.keys())!r}."
         )
 
-    has_new = ("subs_pred" in out) and ("gwl_pred" in out)
-    if has_new:
-        return out["subs_pred"], out["gwl_pred"]
+    # ---------------------------------------------------------
+    # 2) predict() outputs as list/tuple
+    # ---------------------------------------------------------
+    if isinstance(out, (list, tuple)):
+        names = None
+        if output_names is not None:
+            names = list(output_names)
+        else:
+            names = getattr(model, "output_names", None)
 
-    if "data_final" in out:
-        return model.split_data_predictions(out["data_final"])
+        if names and len(names) == len(out):
+            mapped = dict(zip(names, out))
+            return extract_preds(
+                model,
+                mapped,
+                strict=strict,
+                output_names=names,
+            )
 
-    raise KeyError(
-        "Unsupported model output keys. Expected "
-        "{'subs_pred','gwl_pred'} or {'data_final'}. "
-        f"Got keys={list(out.keys())!r}."
+        if not strict and len(out) >= 2:
+            # last-resort, opt-in only
+            return out[0], out[1]
+
+        raise TypeError(
+            "Model output is a list/tuple but cannot be mapped "
+            "to names. Provide `output_names=...` or set "
+            "`strict=False` to assume order."
+        )
+
+    raise TypeError(
+        "Expected `out` as Mapping, (y_pred, aux), "
+        "or list/tuple. "
+        f"Got type={type(out)!r}."
     )
 
 
@@ -1114,7 +1190,9 @@ def subs_point_from_out(model, out, quantiles=None, med_idx=None):
             "Invalid `med_idx` resolved for quantiles."
         )
 
-    return subs_pred[..., int(med_idx), :]
+    # return subs_pred[..., int(med_idx), :]
+    # Quantile outputs assumed (B, H, Q, 1)
+    return subs_pred[:, :, int(med_idx), :]
 
 def _extract_allowed_hps(
     obj: object,
@@ -2483,3 +2561,6 @@ _build_geoprior_from_hps = build_geoprior_from_hps
 _infer_best_weights_path = infer_best_weights_path
 
 _build_geoprior_from_cfg = build_geoprior_from_cfg
+
+# Back-compat alias (docstrings still mention it)
+extract_stage_outputs = extract_preds

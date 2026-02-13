@@ -45,6 +45,9 @@ python sm3_bounds_ridge_summary_plot.py \
   --csv sm3_synth_runs.csv \
   --out figs/sm3_clip_vs_ridge.png \
   --ridge_thr 2
+
+$ python nat.com/sm3_bounds_ridge_summary_plot.py --csv results/sm3_synth_1d/sm3_synth_runs.csv --out figs/sm3_clip_vs_none.png
+
 """
 from __future__ import annotations
 

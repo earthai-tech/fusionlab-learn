@@ -28,13 +28,260 @@ a scaler path, or manual min/max / mean/std parameters.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional, Tuple
+from collections.abc import Mapping, Sequence
+from typing import Any, Optional, Tuple
 
 import numpy as np
 import joblib
 
+from .nat_utils import extract_preds 
+from .shapes import canonicalize_BHQO_quantiles_np 
 
 ArrayLike = Any
+
+
+def _as_np(x: Any) -> np.ndarray:
+    """Best-effort: Tensor -> np.ndarray."""
+    if x is None:
+        return np.asarray(x)
+    try:
+        return x.numpy()
+    except Exception:
+        return np.asarray(x)
+
+
+def _pick_point_pred(
+    y: Any,
+    *,
+    n_q: int = 3,
+    quantiles: Optional[Sequence[float]] = None,
+    q: Optional[float | int] = None,
+    prefer_median: bool = True,
+) -> np.ndarray:
+    """
+    Return point prediction with shape (B, H, O).
+
+    Accepts:
+      - (B, H, 1)
+      - (B, H, Q, 1)  (after canonicalization)
+      - (B, H)        (will be expanded to (B, H, 1))
+    """
+    
+    arr = _as_np(y)
+
+    if arr.ndim == 4:
+        arr = canonicalize_BHQO_quantiles_np(
+            arr,
+            n_q=n_q,
+        )
+        q_dim = int(arr.shape[2])
+
+        if q is None and prefer_median:
+            if quantiles is not None:
+                q = 0.5
+            else:
+                q = q_dim // 2
+
+        if isinstance(q, (int, np.integer)):
+            idx = int(q)
+        else:
+            if quantiles is not None and q is not None:
+                qs = np.asarray(quantiles, dtype=float)
+                idx = int(np.argmin(np.abs(qs - float(q))))
+            elif q is not None:
+                frac = float(q)
+                idx = int(round(frac * (q_dim - 1)))
+            else:
+                idx = q_dim // 2
+
+        idx = max(0, min(idx, q_dim - 1))
+        return arr[:, :, idx, :]
+
+    if arr.ndim == 3:
+        return arr
+
+    if arr.ndim == 2:
+        return arr[:, :, None]
+
+    return np.asarray(arr)
+
+
+def evaluate_point_forecast(
+    model: Any,
+    out: Any,
+    y_true_subs: Any,
+    *,
+    y_true_gwl: Any | None = None,
+    n_q: int = 3,
+    quantiles: Optional[Sequence[float]] = None,
+    q: Optional[float | int] = None,
+    use_physical: bool = False,
+    return_physical: bool | None = None,
+    scaler_info: Mapping[str, Any] | None = None,
+    subs_target_name: str = "subsidence",
+    gwl_target_name: str = "gwl",
+    scaler_entry: Mapping[str, Any] | None = None,
+    scaler: Any | None = None,
+    feature_index: int | None = None,
+    n_features: int | None = None,
+    params: Mapping[str, float] | None = None,
+    strict: bool = True,
+    output_names: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    r"""
+    End-to-end helper for point-forecast evaluation.
+
+    Pipeline:
+      1) extract_preds(model, out)
+      2) canonicalize BHQO (if quantiles)
+      3) pick median (or chosen quantile/index)
+      4) inverse-scale (optional)
+      5) compute global + per-horizon metrics
+
+    Parameters
+    ----------
+    model, out :
+        Passed to extract_preds(...).
+    y_true_subs :
+        True subsidence, shape (B, H, 1) or (B, H).
+    y_true_gwl :
+        Optional true gwl/head, same shape conventions.
+    n_q, quantiles, q :
+        Quantile selection for (B, H, Q, 1) outputs.
+        - if q is None -> median (prefer_median=True)
+        - if q is int  -> direct index
+        - if q is float and quantiles is provided ->
+          nearest quantile
+        - if q is float and quantiles is None ->
+          treat as fraction in [0, 1]
+    use_physical :
+        If True, compute metrics in physical units.
+    return_physical :
+        If None, defaults to use_physical.
+        If True, return *_phys arrays when possible.
+    scaler_* :
+        Passed to inverse_scale_target(...).
+
+    Returns
+    -------
+    dict
+        Keys:
+          - subs_pred_model, gwl_pred_model
+          - subs_pred_phys,  gwl_pred_phys  (optional)
+          - subs_metrics, subs_mae_h, subs_r2_h
+          - gwl_metrics,  gwl_mae_h,  gwl_r2_h (optional)
+    """
+    if return_physical is None:
+        return_physical = use_physical
+
+    subs_pred, gwl_pred = extract_preds(
+        model,
+        out,
+        strict=strict,
+        output_names=output_names,
+    )
+
+    subs_pt = _pick_point_pred(
+        subs_pred,
+        n_q=n_q,
+        quantiles=quantiles,
+        q=q,
+        prefer_median=True,
+    )
+    gwl_pt = _pick_point_pred(
+        gwl_pred,
+        n_q=n_q,
+        quantiles=quantiles,
+        q=q,
+        prefer_median=True,
+    )
+
+    res: dict[str, Any] = {
+        "subs_pred_model": subs_pt,
+        "gwl_pred_model": gwl_pt,
+    }
+
+    subs_metrics = point_metrics(
+        y_true_subs,
+        subs_pt,
+        use_physical=use_physical,
+        scaler_info=scaler_info,
+        target_name=subs_target_name,
+        scaler_entry=scaler_entry,
+        scaler=scaler,
+        feature_index=feature_index,
+        n_features=n_features,
+        params=params,
+    )
+    subs_mae_h, subs_r2_h = per_horizon_metrics(
+        y_true_subs,
+        subs_pt,
+        use_physical=use_physical,
+        scaler_info=scaler_info,
+        target_name=subs_target_name,
+        scaler_entry=scaler_entry,
+        scaler=scaler,
+        feature_index=feature_index,
+        n_features=n_features,
+        params=params,
+    )
+
+    res["subs_metrics"] = subs_metrics
+    res["subs_mae_h"] = subs_mae_h
+    res["subs_r2_h"] = subs_r2_h
+
+    if y_true_gwl is not None:
+        gwl_metrics = point_metrics(
+            y_true_gwl,
+            gwl_pt,
+            use_physical=use_physical,
+            scaler_info=scaler_info,
+            target_name=gwl_target_name,
+            scaler_entry=scaler_entry,
+            scaler=scaler,
+            feature_index=feature_index,
+            n_features=n_features,
+            params=params,
+        )
+        gwl_mae_h, gwl_r2_h = per_horizon_metrics(
+            y_true_gwl,
+            gwl_pt,
+            use_physical=use_physical,
+            scaler_info=scaler_info,
+            target_name=gwl_target_name,
+            scaler_entry=scaler_entry,
+            scaler=scaler,
+            feature_index=feature_index,
+            n_features=n_features,
+            params=params,
+        )
+        res["gwl_metrics"] = gwl_metrics
+        res["gwl_mae_h"] = gwl_mae_h
+        res["gwl_r2_h"] = gwl_r2_h
+
+    if return_physical:
+        res["subs_pred_phys"] = inverse_scale_target(
+            subs_pt,
+            scaler_info=scaler_info,
+            target_name=subs_target_name,
+            scaler_entry=scaler_entry,
+            scaler=scaler,
+            feature_index=feature_index,
+            n_features=n_features,
+            params=params,
+        )
+        res["gwl_pred_phys"] = inverse_scale_target(
+            gwl_pt,
+            scaler_info=scaler_info,
+            target_name=gwl_target_name,
+            scaler_entry=scaler_entry,
+            scaler=scaler,
+            feature_index=feature_index,
+            n_features=n_features,
+            params=params,
+        )
+
+    return res
 
 
 def auto_noise_std_from_increments(

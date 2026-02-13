@@ -39,6 +39,8 @@ python sm3_synth_identifiability_v32.py \
   --n-realizations 10 \
   --ident-regime anchored
   
+$ python nat.com/sm3_synthetic_identifiability.py --n-realizations 10 --outdir results/sm3_synth_1d --identify both --nx 21 --Lx-m 5000 --K-spread-dex 0.6 --n-years 25 --time-steps 5 --forecast-horizon 3 --val-tail 5 --epochs 80 --ident-regime none
+
 """
 
 from __future__ import annotations

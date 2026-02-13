@@ -71,7 +71,14 @@ def _keras_version_str(keras_mod) -> str:
 
 
 def keras_major() -> int:
-    """Return major Keras version as an int."""
+    """Return major Keras version as an int.
+    
+    Best-effort major version detection.
+
+    - Keras 3: keras.__version__ starts with "3"
+    - Keras 2: keras.__version__ starts with "2"
+    """
+    
     keras = _import_keras()
     v = _keras_version_str(keras)
     try:
@@ -84,6 +91,137 @@ def is_keras3() -> bool:
     """Return True if Keras major version is >= 3."""
     return keras_major() >= 3
 
+
+def _keras_major() -> int:
+    """
+    Best-effort major version detection.
+
+    - Keras 3: keras.__version__ starts with "3"
+    - Keras 2: keras.__version__ starts with "2"
+    """
+    try:
+        import keras  # type: ignore
+
+        v = getattr(keras, "__version__", "0")
+    except Exception:
+        return 0
+
+    try:
+        return int(str(v).split(".", 1)[0])
+    except Exception:
+        return 0
+
+def _get_input_layer_cls():
+    """
+    Import InputLayer from the active Keras stack.
+
+    Prefer `keras.layers` (Keras 3 / standalone keras), then
+    fallback to `tensorflow.keras.layers` (older TF stacks).
+    """
+    try:
+        from keras.layers import InputLayer as _InputLayer  # type: ignore
+        return _InputLayer
+    except Exception:
+        from tensorflow.keras.layers import (  # type: ignore
+            InputLayer as _InputLayer,
+        )
+
+        return _InputLayer
+
+def CompatInputLayer(
+    *args: Any,
+    input_shape: Optional[Sequence[int | None]] = None,
+    shape: Optional[Sequence[int | None]] = None,
+    batch_input_shape: Optional[Sequence[int | None]] = None,
+    batch_shape: Optional[Sequence[int | None]] = None,
+    **kwargs: Any,
+):
+    """
+    Compatibility wrapper for InputLayer across Keras 2 and Keras 3.
+
+    Why this exists:
+    - Keras 3 deprecates `input_shape=` on InputLayer in favor of
+      `shape=`.
+    - We keep legacy call sites stable (input_shape=...) while
+      routing to the new argument name under Keras 3.
+
+    Supported inputs:
+    - input_shape=(..., ...)  -> Keras3: shape=...
+    - shape=(..., ...)        -> Keras2: input_shape=...
+    - batch_input_shape=(B, ...) or batch_shape=(B, ...)
+      -> Keras3: batch_size=B, shape=(...)
+    """
+    # Allow a single positional "shape" like InputLayer((None, 3))
+    if args:
+        if (input_shape is None) and (shape is None):
+            input_shape = args[0]
+            args = args[1:]
+
+    if args:
+        raise TypeError(
+            "CompatInputLayer accepts at most one positional "
+            "argument (the shape)."
+        )
+
+    if (input_shape is not None) and (shape is not None):
+        raise TypeError(
+            "Provide only one of `input_shape` or `shape`."
+        )
+
+    if (batch_input_shape is not None) and (batch_shape is not None):
+        raise TypeError(
+            "Provide only one of `batch_input_shape` or "
+            "`batch_shape`."
+        )
+
+    layer_cls = _get_input_layer_cls()
+    is_k3 = is_keras3()
+
+    # Normalize "shape-like" args
+    shp = shape if shape is not None else input_shape
+    bshp = (
+        batch_shape
+        if batch_shape is not None
+        else batch_input_shape
+    )
+
+    if is_k3:
+        # Keras 3: prefer `shape=` and `batch_size=`.
+        #
+        # If user provided a batch shape (B, d1, d2, ...), split it
+        # into batch_size=B and shape=(d1, d2, ...). This avoids
+        # relying on `batch_shape=` being accepted everywhere.
+        if bshp is not None:
+            bshp_t = tuple(bshp)
+            if len(bshp_t) < 1:
+                raise ValueError(
+                    "batch_shape must have at least 1 dim."
+                )
+
+            if "batch_size" not in kwargs:
+                kwargs["batch_size"] = bshp_t[0]
+
+            # Only override shp if user did not pass one explicitly.
+            if shp is None:
+                shp = bshp_t[1:]
+            else:
+                # If both are given, they should be consistent.
+                if tuple(shp) != tuple(bshp_t[1:]):
+                    raise ValueError(
+                        "shape and batch_shape are inconsistent."
+                    )
+
+        return layer_cls(shape=shp, **kwargs)
+
+    # Keras 2: prefer `input_shape=` and `batch_input_shape=`.
+    call_kwargs: dict[str, Any] = dict(kwargs)
+
+    if shp is not None:
+        call_kwargs["input_shape"] = shp
+    if bshp is not None:
+        call_kwargs["batch_input_shape"] = bshp
+
+    return layer_cls(**call_kwargs)
 
 # ---------------------------------------------------------------------
 # Small IO helpers
