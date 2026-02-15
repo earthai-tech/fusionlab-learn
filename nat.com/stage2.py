@@ -107,6 +107,7 @@ from fusionlab.nn.pinn.op import extract_physical_parameters
 from fusionlab.nn._shapes import (
     _logs_to_py,
     debug_quantile_crossing_np,
+    canonicalize_BHQO_quantiles_np, 
     debug_tensor_interval,
     debug_val_interval,
 )
@@ -2533,52 +2534,6 @@ if df_eval is not None and not df_eval.empty:
         ),
         verbose=1,
     )
-#%
-print("[CALDBG] cal_stats factors:", cal_stats.get("factors"))
-
-def apply_df_interval_factors_tf(
-    s_q_bhqo: tf.Tensor,
-    *,
-    q_values,
-    factors: dict | None,
-    overall_key: str = "__overall__",
-) -> tf.Tensor:
-    """
-    Apply DF-calibration factors (per forecast_step) to a
-    quantile tensor in canonical (B,H,Q,O).
-
-    We scale deviations from the median:
-        q' = q50 + f_h * (q - q50)
-
-    This matches the usual interval-widening logic and keeps
-    q50 unchanged.
-    """
-    if not factors:
-        return s_q_bhqo
-
-    q = np.asarray(q_values, dtype=float)
-    q50_i = int(np.argmin(np.abs(q - 0.5)))
-
-    # center: (B,H,1,O)
-    center = s_q_bhqo[:, :, q50_i : q50_i + 1, :]
-    delta = s_q_bhqo - center
-
-    # horizon length (H)
-    H = int(s_q_bhqo.shape[1])
-
-    # factors keyed by forecast_step (1..H)
-    f_list = []
-    f_over = float(factors.get(overall_key, 1.0))
-    for h in range(H):
-        f_list.append(float(factors.get(str(h + 1), f_over)))
-
-    f = tf.reshape(tf.constant(f_list, tf.float32), [1, H, 1, 1])
-    out = center + delta * f
-
-    # optional: re-enforce monotonicity if you want
-    # out = canonicalize_BHQO(out, ..., enforce_monotone=True)
-
-    return out
 
 #%
 # =============================================================================
@@ -2704,15 +2659,27 @@ for xb, yb in with_progress(ds_eval, desc="Interval-Censoring Diagnostics"):
     out = model_inf(xb, training=False)
 
     s_pred_b, _ = extract_preds(model_inf, out)   # <- (B,H,1) or (B,H,Q,1)
-    s_pred_b = canonicalize_BHQO(
+    # s_pred_b = canonicalize_BHQO(
+    #     s_pred_b,
+    #     y_true=yb["subs_pred"],
+    #     q_values=QUANTILES,
+    #     n_q=(len(QUANTILES) if QUANTILES else None),
+    #     enforce_monotone=True,
+    #     verbose=0,
+    #     log_fn=(lambda *_: None),
+    # )
+    # ----------------------------NEW---------------
+    s_pred_b = canonicalize_BHQO_quantiles_np(
         s_pred_b,
-        y_true=yb["subs_pred"],
-        q_values=QUANTILES,
-        n_q=(len(QUANTILES) if QUANTILES else None),
-        enforce_monotone=True,
+        n_q=len(QUANTILES),
         verbose=0,
-        log_fn=(lambda *_: None),
+        log_fn=print,
     )
+    
+    # If you still want monotone quantiles (optional):
+    s_pred_b = np.sort(s_pred_b, axis=2)
+    
+    # ------------------------------
     y_true_b = yb["subs_pred"]                    # (B,H,1)
     y_true_list.append(y_true_b)
 
@@ -2730,73 +2697,20 @@ for xb, yb in with_progress(ds_eval, desc="Interval-Censoring Diagnostics"):
         )
         mask_list.append(mask_b)
 
-#%
+# ------------------------------------
+s_q_np = np.asarray(tf.concat(s_q_list, axis=0))
+y_true_np = np.asarray(tf.concat(y_true_list, axis=0))
 
+s_q_np = canonicalize_BHQO_quantiles_np(
+    s_q_np, n_q=len(QUANTILES), verbose=1, log_fn=print
+)
+# ----------------------------------------------
 
-# uses the same resolver as format_and_forecast
-from fusionlab.utils.nat_utils import load_nat_config
-from fusionlab.utils.scale_metrics import _resolve_stage1_entry
-from fusionlab.utils.forecast_utils import _inverse_with_stage1
-
-cfg = load_nat_config()
-# you already have these in stage2; reuse them there
-# scaler_info_dict = ...
-# SUBS_SCALER_KEY = ...
-
-z = np.array([0.0, 1.0], dtype=float)
-
-inv = _inverse_with_stage1(
-    z,
-    scaler_info=scaler_info_dict,
-    target_name=SUBS_SCALER_KEY,
-    scaler_name="scaler",
-).reshape(-1)
-
-print("delta(inv(1)-inv(0)) =", float(inv[1] - inv[0]))
-
-
-#%
 # # Stack what we collected
 y_true = tf.concat(y_true_list, axis=0) if y_true_list else None  # (N,H,1)
 s_q = tf.concat(s_q_list, axis=0) if s_q_list else None           # (N,H,Q,1)
 mask = tf.concat(mask_list, axis=0) if mask_list else None        # (N,H,1) booleans
-
-
-# ------------------------------------------------------------------
-# Model -> SI affine for subsidence (the missing ~27.08 factor).
-# This is the SAME mapping used by GeoPrior scaling_kwargs:
-#
-#   subs_SI = subs_model * subs_scale_si + subs_bias_si
-#
-# Do NOT rely on inverse_scale_target() here: it only applies a
-# fitted sklearn scaler (or explicit params=...), and will be a no-op
-# for this affine unless you wire params through.
-# ------------------------------------------------------------------
-_SUBS_SCALE_SI = float(subs_scale_si)
-_SUBS_BIAS_SI = float(subs_bias_si)
-
-def _np(x):
-    if isinstance(x, (tf.Tensor, tf.Variable)):
-        return x.numpy()
-    return np.asarray(x)
-
-def subs_to_si_np(x):
-    a = _np(x)
-    return a * _SUBS_SCALE_SI + _SUBS_BIAS_SI
-
-def subs_to_si_tf(x):
-    return tf.convert_to_tensor(
-        subs_to_si_np(x),
-        dtype=tf.float32,
-    )
-
-def subs_from_si_tf(x):
-    # SI -> model (useful to make "scaled/model-space" metrics valid)
-    a = _np(x)
-    b = (a - _SUBS_BIAS_SI) / (_SUBS_SCALE_SI + 1e-12)
-    return tf.convert_to_tensor(b, dtype=tf.float32)
-
-#
+#%
 #=========================test of axis shape 
 # s_q is (N,H,Q,1), y_true is (N,H,1)
 q10 = s_q[..., 0, :]      # (N,H,1)
@@ -2825,119 +2739,82 @@ s_q_cal = None
 
 if QUANTILES and (y_true is not None) and (s_q is not None):
     # ---------- SCALED metrics (as before) ----------
-    # cov80_uncal   = float(coverage80_fn(y_true, s_q).numpy())
-    # sharp80_uncal = float(sharpness80_fn(y_true, s_q).numpy())
-    
-    # ------------------------------------------------------------
-    # "Scaled/model-space" metrics:
-    # Make them meaningful by bringing y_true to model space,
-    # assuming y_true is SI and s_q is model output space.
-    # (Coverage is invariant under affine, sharpness scales.)
-    # ------------------------------------------------------------
-    y_true_model_tf = subs_from_si_tf(y_true)
-    cov80_uncal = float(
-        coverage80_fn(y_true_model_tf, s_q).numpy()
-    )
-    sharp80_uncal = float(
-        sharpness80_fn(y_true_model_tf, s_q).numpy()
-    )
-
+    cov80_uncal   = float(coverage80_fn(y_true, s_q).numpy())
+    sharp80_uncal = float(sharpness80_fn(y_true, s_q).numpy())
     # Calibrated (apply same calibrator to the whole tensor)
-    # s_q_cal = apply_calibrator_to_subs(cal80, s_q)  # (N, H, Q, 1) # or keeps (N, H, 3, 1)
-    
-    # Preferred: use the SAME factors that calibrated df_eval/df_future
-    _factors = (cal_stats or {}).get("factors", None)
-    _overall = (cal_stats or {}).get("overall_key", "__overall__")
-    
-    s_q_cal = apply_df_interval_factors_tf(
-        s_q,
-        q_values=QUANTILES,
-        factors=_factors,
-        overall_key=_overall,
-    )
-
-    # cov80_cal   = float(coverage80_fn(y_true, s_q_cal).numpy())
-    # sharp80_cal = float(sharpness80_fn(y_true, s_q_cal).numpy())
-
-    cov80_cal = float(
-        coverage80_fn(y_true_model_tf, s_q_cal).numpy()
-    )
-    sharp80_cal = float(
-        sharpness80_fn(y_true_model_tf, s_q_cal).numpy()
-    )
+    s_q_cal = apply_calibrator_to_subs(cal80, s_q)  # (N, H, Q, 1) # or keeps (N, H, 3, 1)
+    cov80_cal   = float(coverage80_fn(y_true, s_q_cal).numpy())
+    sharp80_cal = float(sharpness80_fn(y_true, s_q_cal).numpy())
 
     # # ---------- PHYSICAL metrics (inverse-scaled) ----------
-    # # IMPORTANT:
-    # #   Stage-1 scaler_info is keyed by SUBS_SCALER_KEY (scaler entry name),
-    # #   not by SUBSIDENCE_COL (df/output column name). Using SUBSIDENCE_COL
-    # #   can silently skip or mis-apply inverse scaling.
-    # _subs_scale_key = SUBS_SCALER_KEY
-    
     # # 1) inverse-transform y_true and quantiles to physical units
     # y_true_phys_np = inverse_scale_target(
-    #     y_true.numpy() if hasattr(y_true, "numpy") else y_true,
+    #     y_true,
     #     scaler_info=scaler_info_dict,
-    #     target_name=_subs_scale_key,
+    #     target_name=SUBSIDENCE_COL,
     # )
     # s_q_phys_np = inverse_scale_target(
-    #     s_q.numpy() if hasattr(s_q, "numpy") else s_q,
+    #     s_q,
     #     scaler_info=scaler_info_dict,
-    #     target_name=_subs_scale_key,
+    #     target_name=SUBSIDENCE_COL,
     # )
-    
+
     # y_true_phys_tf = tf.convert_to_tensor(y_true_phys_np, dtype=tf.float32)
     # s_q_phys_tf    = tf.convert_to_tensor(s_q_phys_np,    dtype=tf.float32)
-
-    # ------------------------------------------------------------
-    # PHYSICAL metrics (SI):
-    # y_true is SI (Stage-1 SI columns), but s_q is still in model
-    # output space. Apply the missing model->SI affine to the WHOLE
-    # quantile tensor before computing interval metrics.
-    # ------------------------------------------------------------
-    y_true_phys_tf = tf.cast(y_true, tf.float32)
-    s_q_phys_tf = subs_to_si_tf(s_q)
 
     # cov80_uncal_phys   = float(coverage80_fn(y_true_phys_tf, s_q_phys_tf).numpy())
     # sharp80_uncal_phys = float(sharpness80_fn(y_true_phys_tf, s_q_phys_tf).numpy())
 
-    cov80_uncal_phys = float(
-        coverage80_fn(y_true_phys_tf, s_q_phys_tf).numpy()
-    )
-    sharp80_uncal_phys = float(
-        sharpness80_fn(y_true_phys_tf, s_q_phys_tf).numpy()
-    )
+    # if s_q_cal is not None:
+    #     s_q_cal_phys_np = inverse_scale_target(
+    #         s_q_cal,
+    #         scaler_info=scaler_info_dict,
+    #         target_name=SUBSIDENCE_COL,
+    #     )
+    #     s_q_cal_phys_tf = tf.convert_to_tensor(s_q_cal_phys_np, dtype=tf.float32)
 
-    if s_q_cal is not None:
-        # s_q_cal_phys_np = inverse_scale_target(
-        #     s_q_cal.numpy() if hasattr(s_q_cal, "numpy") else s_q_cal,
-        #     scaler_info=scaler_info_dict,
-        #     target_name=_subs_scale_key,
-        # )
-        # s_q_cal_phys_tf = tf.convert_to_tensor(s_q_cal_phys_np, dtype=tf.float32)
-        s_q_cal_phys_tf = subs_to_si_tf(s_q_cal)
+    #     cov80_cal_phys   = float(coverage80_fn(y_true_phys_tf, s_q_cal_phys_tf).numpy())
+    #     sharp80_cal_phys = float(sharpness80_fn(y_true_phys_tf, s_q_cal_phys_tf).numpy())
+
+    # ---------- PHYSICAL metrics (inverse-scaled) ----------
+    # IMPORTANT:
+    #   Stage-1 scaler_info is keyed by SUBS_SCALER_KEY (scaler entry name),
+    #   not by SUBSIDENCE_COL (df/output column name). Using SUBSIDENCE_COL
+    #   can silently skip or mis-apply inverse scaling.
+    _subs_scale_key = SUBS_SCALER_KEY
     
-        # cov80_cal_phys   = float(coverage80_fn(y_true_phys_tf, s_q_cal_phys_tf).numpy())
-        # sharp80_cal_phys = float(sharpness80_fn(y_true_phys_tf, s_q_cal_phys_tf).numpy())
-
-        cov80_cal_phys = float(
-            coverage80_fn(
-                y_true_phys_tf,
-                s_q_cal_phys_tf,
-            ).numpy()
+    # 1) inverse-transform y_true and quantiles to physical units
+    y_true_phys_np = inverse_scale_target(
+        y_true.numpy() if hasattr(y_true, "numpy") else y_true,
+        scaler_info=scaler_info_dict,
+        target_name=_subs_scale_key,
+    )
+    s_q_phys_np = inverse_scale_target(
+        s_q.numpy() if hasattr(s_q, "numpy") else s_q,
+        scaler_info=scaler_info_dict,
+        target_name=_subs_scale_key,
+    )
+    
+    y_true_phys_tf = tf.convert_to_tensor(y_true_phys_np, dtype=tf.float32)
+    s_q_phys_tf    = tf.convert_to_tensor(s_q_phys_np,    dtype=tf.float32)
+    
+    cov80_uncal_phys   = float(coverage80_fn(y_true_phys_tf, s_q_phys_tf).numpy())
+    sharp80_uncal_phys = float(sharpness80_fn(y_true_phys_tf, s_q_phys_tf).numpy())
+    
+    if s_q_cal is not None:
+        s_q_cal_phys_np = inverse_scale_target(
+            s_q_cal.numpy() if hasattr(s_q_cal, "numpy") else s_q_cal,
+            scaler_info=scaler_info_dict,
+            target_name=_subs_scale_key,
         )
-        sharp80_cal_phys = float(
-            sharpness80_fn(
-                y_true_phys_tf,
-                s_q_cal_phys_tf,
-            ).numpy()
-        )
-
+        s_q_cal_phys_tf = tf.convert_to_tensor(s_q_cal_phys_np, dtype=tf.float32)
+    
+        cov80_cal_phys   = float(coverage80_fn(y_true_phys_tf, s_q_cal_phys_tf).numpy())
+        sharp80_cal_phys = float(sharpness80_fn(y_true_phys_tf, s_q_cal_phys_tf).numpy())
+#%%
 # ---- Debug: scaling should NOT change coverage (only sharpness) ----
 if DEBUG:
-    # print("[SCALEDBG] subs scaler key:", _subs_scale_key)
-    print("[SCALEDBG] subs_scale_si:", _SUBS_SCALE_SI)
-    print("[SCALEDBG] subs_bias_si :", _SUBS_BIAS_SI)
-
+    print("[SCALEDBG] subs scaler key:", _subs_scale_key)
     print("[SCALEDBG] cov scaled vs phys:",
           cov80_uncal, cov80_uncal_phys,
           "| cal:", cov80_cal, cov80_cal_phys)
@@ -2946,13 +2823,11 @@ if DEBUG:
           "| cal:", sharp80_cal, sharp80_cal_phys)
 
     # Detect silent 'no-op' inverse scaling
-    # yt_np = y_true.numpy() if hasattr(y_true, "numpy") else np.asarray(y_true)
-    # if np.allclose(y_true_phys_np, yt_np, atol=1e-12, rtol=0):
-    #     print("[WARN] inverse_scale_target() did not change y_true "
-    #           "(likely wrong target_name / scaler entry not resolved).")
-    if (sharp80_uncal is not None) and (sharp80_uncal > 0):
-        r = sharp80_uncal_phys / sharp80_uncal
-        print("[SCALEDBG] sharpness ratio:", float(r))
+    yt_np = y_true.numpy() if hasattr(y_true, "numpy") else np.asarray(y_true)
+    if np.allclose(y_true_phys_np, yt_np, atol=1e-12, rtol=0):
+        print("[WARN] inverse_scale_target() did not change y_true "
+              "(likely wrong target_name / scaler entry not resolved).")
+
 
 # 2) Tensor debug (safe)
 
@@ -2972,6 +2847,23 @@ if DEBUG:
         verbose=1,
     )
 
+# # Interpret axis=2 as quantiles (what stage2 assumes)
+# w_axis2 = np.mean(s_q[:, :, 2, 0] - s_q[:, :, 0, 0])
+# c_axis2 = np.mean(
+#     (y_true[:, :, 0] >= s_q[:, :, 0, 0]) &
+#     (y_true[:, :, 0] <= s_q[:, :, 2, 0])
+# )
+
+# # Interpret axis=1 as quantiles (the “other” possibility)
+# w_axis1 = np.mean(s_q[:, 2, :, 0] - s_q[:, 0, :, 0])
+# c_axis1 = np.mean(
+#     (y_true[:, :, 0] >= s_q[:, 0, :, 0]) &
+#     (y_true[:, :, 0] <= s_q[:, 2, :, 0])
+# )
+
+# print("width axis2:", w_axis2, "coverage axis2:", c_axis2)
+# print("width axis1:", w_axis1, "coverage axis1:", c_axis1)
+#%%
 # --- 2.3.b Optional censor-stratified MAE on the same loop products ---
 # Works for both quantile mode (use median) and point-forecast mode (fallback).
 
@@ -3017,31 +2909,43 @@ if (y_true is not None) and (mask is not None):
         s_med = tf.concat(s_pred_list, axis=0)  # (N,H,1) scaled/model space
 
     # # Convert both y_true and s_med to physical units using Stage-1 scaler_info
-    # # IMPORTANT: use SUBS_SCALER_KEY, not SUBSIDENCE_COL
-    # _subs_scale_key = SUBS_SCALER_KEY
-    
     # y_true_phys_np = inverse_scale_target(
-    #     y_true.numpy() if hasattr(y_true, "numpy") else y_true,
+    #     y_true,
     #     scaler_info=scaler_info_dict,
-    #     target_name=_subs_scale_key,
+    #     target_name=SUBSIDENCE_COL,
     # )
     # s_med_phys_np = inverse_scale_target(
-    #     s_med.numpy() if hasattr(s_med, "numpy") else s_med,
+    #     s_med,
     #     scaler_info=scaler_info_dict,
-    #     target_name=_subs_scale_key,
+    #     target_name=SUBSIDENCE_COL,
     # )
-    
+
     # y_true_phys = tf.convert_to_tensor(y_true_phys_np, dtype=tf.float32)
     # s_med_phys  = tf.convert_to_tensor(s_med_phys_np,  dtype=tf.float32)
     
-    # if DEBUG:
-    #     yt_np = y_true.numpy() if hasattr(y_true, "numpy") else np.asarray(y_true)
-    #     if np.allclose(y_true_phys_np, yt_np, atol=1e-12, rtol=0):
-    #         print("[WARN] censor-MAE inverse_scale_target() no-op on y_true "
-    #               "(check SUBS_SCALER_KEY/scaler_info).")
-    # y_true is SI; s_med is model output -> apply model->SI affine
-    y_true_phys = tf.cast(y_true, tf.float32)
-    s_med_phys = subs_to_si_tf(s_med)
+    # Convert both y_true and s_med to physical units using Stage-1 scaler_info
+    # IMPORTANT: use SUBS_SCALER_KEY, not SUBSIDENCE_COL
+    _subs_scale_key = SUBS_SCALER_KEY
+    
+    y_true_phys_np = inverse_scale_target(
+        y_true.numpy() if hasattr(y_true, "numpy") else y_true,
+        scaler_info=scaler_info_dict,
+        target_name=_subs_scale_key,
+    )
+    s_med_phys_np = inverse_scale_target(
+        s_med.numpy() if hasattr(s_med, "numpy") else s_med,
+        scaler_info=scaler_info_dict,
+        target_name=_subs_scale_key,
+    )
+    
+    y_true_phys = tf.convert_to_tensor(y_true_phys_np, dtype=tf.float32)
+    s_med_phys  = tf.convert_to_tensor(s_med_phys_np,  dtype=tf.float32)
+    
+    if DEBUG:
+        yt_np = y_true.numpy() if hasattr(y_true, "numpy") else np.asarray(y_true)
+        if np.allclose(y_true_phys_np, yt_np, atol=1e-12, rtol=0):
+            print("[WARN] censor-MAE inverse_scale_target() no-op on y_true "
+                  "(check SUBS_SCALER_KEY/scaler_info).")
 
     mask_f = tf.cast(mask, tf.float32)  # (N,H,1)
     num_cens = tf.reduce_sum(mask_f) + 1e-8
@@ -3067,12 +2971,11 @@ if DEBUG:
     # Minimal sanity checks: If that var() is no longer tiny,  
     # R² will stop being absurdly negative
 
-    # yt_phys = inverse_scale_target(
-    #     y_true.numpy() if hasattr(y_true, "numpy") else y_true,
-    #     scaler_info=scaler_info_dict,
-    #     target_name=SUBS_SCALER_KEY,
-    # )
-    yt_phys = _np(y_true)  # already SI
+    yt_phys = inverse_scale_target(
+        y_true.numpy() if hasattr(y_true, "numpy") else y_true,
+        scaler_info=scaler_info_dict,
+        target_name=SUBS_SCALER_KEY,
+    )
     print(
         "[DEBUG] y_true_phys stats:",
         float(np.min(yt_phys)),
@@ -3111,13 +3014,10 @@ payload = {
 }
 
 if QUANTILES:
-    df_factors = (cal_stats or {}).get("factors", None)
     payload["interval_calibration"] = {
         "target": 0.80,
-        # "factors_per_horizon": getattr(cal80, "factors_", None).tolist()
-        # if hasattr(cal80, "factors_") else None,
-        "factors_per_horizon": df_factors,  # dict {"1":..,"2":..}
-        
+        "factors_per_horizon": getattr(cal80, "factors_", None).tolist()
+        if hasattr(cal80, "factors_") else None,
 
         # scaled-space metrics (backward compatible)
         "coverage80_uncalibrated": cov80_uncal,
