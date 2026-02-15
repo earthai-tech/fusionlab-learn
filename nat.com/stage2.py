@@ -2533,7 +2533,7 @@ if df_eval is not None and not df_eval.empty:
         ),
         verbose=1,
     )
-#%%
+#%
 print("[CALDBG] cal_stats factors:", cal_stats.get("factors"))
 
 def apply_df_interval_factors_tf(
@@ -2580,7 +2580,7 @@ def apply_df_interval_factors_tf(
 
     return out
 
-#%%%
+#%
 # =============================================================================
 # Evaluate metrics & physics on the forecasting split (+ optional censoring)
 # =============================================================================
@@ -2730,7 +2730,32 @@ for xb, yb in with_progress(ds_eval, desc="Interval-Censoring Diagnostics"):
         )
         mask_list.append(mask_b)
 
-#%%
+#%
+
+
+# uses the same resolver as format_and_forecast
+from fusionlab.utils.nat_utils import load_nat_config
+from fusionlab.utils.scale_metrics import _resolve_stage1_entry
+from fusionlab.utils.forecast_utils import _inverse_with_stage1
+
+cfg = load_nat_config()
+# you already have these in stage2; reuse them there
+# scaler_info_dict = ...
+# SUBS_SCALER_KEY = ...
+
+z = np.array([0.0, 1.0], dtype=float)
+
+inv = _inverse_with_stage1(
+    z,
+    scaler_info=scaler_info_dict,
+    target_name=SUBS_SCALER_KEY,
+    scaler_name="scaler",
+).reshape(-1)
+
+print("delta(inv(1)-inv(0)) =", float(inv[1] - inv[0]))
+
+
+#%
 # # Stack what we collected
 y_true = tf.concat(y_true_list, axis=0) if y_true_list else None  # (N,H,1)
 s_q = tf.concat(s_q_list, axis=0) if s_q_list else None           # (N,H,Q,1)

@@ -53,6 +53,8 @@ __all__ = [
     "MSEQ50",
     "Coverage80",
     "Sharpness80",
+    "coverage80_fn", 
+    "sharpness80_fn", 
 ]
 
 
