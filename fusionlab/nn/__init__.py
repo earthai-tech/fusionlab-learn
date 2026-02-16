@@ -72,6 +72,7 @@ def dependency_message(module_name):
 
 __all__=[]
 
+
 if KERAS_BACKEND:
     from .hybrid import ( 
         HALNet, 
@@ -94,6 +95,28 @@ if KERAS_BACKEND:
         SequenceAnomalyScoreLayer, 
         PredictionErrorAnomalyScore, 
     )
+    from ._shapes import (
+        _logs_to_py,
+        debug_quantile_crossing_np,
+        debug_tensor_interval,
+        debug_val_interval,
+    )
+    from .losses import make_weighted_pinball
+    from .keras_metrics import (
+        Coverage80,
+        MAEQ50,
+        MSEQ50,
+        Sharpness80,
+        _to_py,
+        coverage80_fn,
+        sharpness80_fn,
+    )
+    from .calibration import (
+        apply_calibrator_to_subs,
+        fit_interval_calibrator_on_val,
+    )
+    from .callbacks import LambdaOffsetScheduler
+    from .utils import plot_history_in
     
     __all__=[ 
         'HALNet',
@@ -112,6 +135,24 @@ if KERAS_BACKEND:
         "LSTMAutoencoderAnomaly",
         "SequenceAnomalyScoreLayer", 
         "PredictionErrorAnomalyScore", 
+        
+        "_logs_to_py",
+        "debug_quantile_crossing_np",
+        "debug_tensor_interval",
+        "debug_val_interval",
+        
+        "make_weighted_pinball", 
+        "Coverage80",
+        "MAEQ50",
+        "MSEQ50",
+        "Sharpness80",
+        "_to_py",
+        "coverage80_fn",
+        "sharpness80_fn",
+        "apply_calibrator_to_subs",
+        "fit_interval_calibrator_on_val",
+        "LambdaOffsetScheduler", 
+        "plot_history_in"
         
     ]
 

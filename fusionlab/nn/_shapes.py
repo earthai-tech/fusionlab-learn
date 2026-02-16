@@ -250,8 +250,6 @@ def _interval80_as_BHO(y_pred: Tensor, q_axis: int = 2):
     p = _q50_as_BHO(yp, q_axis=q_axis)
     return tf_cast(p, tf_float32), tf_cast(p, tf_float32)
 
-
-
 def infer_quantile_axis(t, n_q=3):
     """
     Infer which axis holds quantiles of length n_q (typically 3: q10,q50,q90).
@@ -840,6 +838,44 @@ def _logs_to_py(logs, *, keep_none=True):
             v = v.item()
 
         out[k] = v
+    return out
+
+def canonicalize_to_BHQO_using_contract(
+    s_pred,
+    *,
+    q_values=(0.1, 0.5, 0.9),
+    enforce_monotone=True,
+):
+
+    n_q = len(q_values)
+
+    if s_pred.shape.rank == 3:
+        s_pred = tf_expand_dims(s_pred, axis=-1)
+
+    if s_pred.shape.rank != 4:
+        return s_pred
+
+    # Accept BHQO
+    if s_pred.shape[2] == n_q:
+        out = s_pred
+
+    # Accept BQHO -> transpose to BHQO
+    elif s_pred.shape[1] == n_q:
+        out = tf_transpose(s_pred, [0, 2, 1, 3])
+
+    # Accept BHOQ -> transpose to BHQO
+    elif s_pred.shape[3] == n_q:
+        out = tf_transpose(s_pred, [0, 1, 3, 2])
+
+    else:
+        raise ValueError(
+            "Cannot locate quantile axis. "
+            f"shape={s_pred.shape}, n_q={n_q}"
+        )
+
+    if enforce_monotone:
+        out = tf_sort(out, axis=2)
+
     return out
 
 def canonicalize_to_BHQO_using_ytrue(

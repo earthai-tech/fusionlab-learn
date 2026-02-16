@@ -93,7 +93,6 @@ from fusionlab.nn.calibration import (
     fit_interval_calibrator_on_val,
 )
 
-from fusionlab.nn._shapes import canonicalize_BHQO_quantiles_np
 
 from fusionlab.params import LearnableKappa, LearnableMV, FixedGammaW, FixedHRef
 from fusionlab.nn.pinn.geoprior.models import GeoPriorSubsNet
@@ -109,6 +108,7 @@ from fusionlab.utils.nat_utils import (
     pick_npz_for_dataset,
     resolve_si_affine,
 )
+from fusionlab.utils.shapes import canonicalize_BHQO
 
 # ---------------------------------------------------------------------
 # CLI
@@ -738,16 +738,47 @@ def main() -> None:
         pred_dict = {"data_final": pred_out}
 
     # Always extract via the eval-capable GeoPrior model (split support)
+    # subs_pred, gwl_pred = extract_preds(model, pred_dict)
+
+    # # Canonicalize quantile layouts (Stage-2 contract)
+    # if subs_pred is not None and getattr(subs_pred, "ndim", 0) == 4:
+    #     subs_pred = canonicalize_BHQO_quantiles_np(subs_pred, q_axis="auto")
+    # if gwl_pred is not None and getattr(gwl_pred, "ndim", 0) == 4:
+    #     gwl_pred = canonicalize_BHQO_quantiles_np(gwl_pred, q_axis="auto")
+
+    # # Apply interval calibrator (subsidence quantiles only)
+    # if cal is not None and subs_pred is not None and getattr(subs_pred, "ndim", 0) == 4:
+    #     subs_pred = apply_calibrator_to_subs(cal, subs_pred)
+
+
     subs_pred, gwl_pred = extract_preds(model, pred_dict)
-
-    # Canonicalize quantile layouts (Stage-2 contract)
-    if subs_pred is not None and getattr(subs_pred, "ndim", 0) == 4:
-        subs_pred = canonicalize_BHQO_quantiles_np(subs_pred, q_axis="auto")
-    if gwl_pred is not None and getattr(gwl_pred, "ndim", 0) == 4:
-        gwl_pred = canonicalize_BHQO_quantiles_np(gwl_pred, q_axis="auto")
-
-    # Apply interval calibrator (subsidence quantiles only)
-    if cal is not None and subs_pred is not None and getattr(subs_pred, "ndim", 0) == 4:
+    
+    q_values = list(QUANTILES) if QUANTILES else None
+    n_q = len(q_values) if q_values else None
+    
+    def _canon(xq, y_true=None):
+        if xq is None or getattr(xq, "ndim", 0) != 4:
+            return xq
+        out = canonicalize_BHQO(
+            xq,
+            y_true=y_true,
+            q_values=q_values,
+            n_q=n_q,
+            layout="BHQO",
+            enforce_monotone=False,
+            verbose=0,
+            log_fn=print,
+        )
+        # be robust if it returns (arr, layout_used)
+        if isinstance(out, tuple):
+            return out[0]
+        return out
+    
+    subs_pred = _canon(subs_pred, y_true=y_map.get("subs_pred") if y_map else None)
+    gwl_pred  = _canon(gwl_pred,  y_true=y_map.get("gwl_pred")  if y_map else None)
+    
+    # now calibration is safe (subs_pred is BHQO)
+    if cal is not None and getattr(subs_pred, "ndim", 0) == 4:
         subs_pred = apply_calibrator_to_subs(cal, subs_pred)
 
     # Prepare outputs for formatter
