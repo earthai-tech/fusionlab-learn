@@ -130,7 +130,7 @@ from fusionlab.nn.callbacks import LambdaOffsetScheduler
 from fusionlab.nn.utils import plot_history_in
 
 from fusionlab.params import FixedGammaW, FixedHRef, LearnableKappa, LearnableMV
-
+#%%
 
 # Global runtime settings (warnings / TF logs)
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -2425,7 +2425,7 @@ future_grid = np.arange(
     FORECAST_START_YEAR + FORECAST_HORIZON_YEARS,
     dtype=float,
 )
-
+#%%
 df_eval, df_future = format_and_forecast(
     y_pred=predictions_for_formatter,
     y_true=y_true_for_format,
@@ -2567,7 +2567,7 @@ if DEBUG:
         q_values=QUANTILES,
         n_q=(len(QUANTILES) if QUANTILES else None),
         enforce_monotone=False,
-        verbose=0,
+        verbose=1,
         log_fn=(lambda *_: None),
     )
     
@@ -2643,7 +2643,7 @@ try:
 except Exception as e : 
     print(f"Failed to saved physic payload: {e}")
      
-
+#%%
 # -------------------------------------------------------------------------
 # SM3: log-offset diagnostics (δ_K, δ_Ss, δ_Hd, δ_tau)
 # -------------------------------------------------------------------------
@@ -2659,25 +2659,26 @@ for xb, yb in with_progress(ds_eval, desc="Interval-Censoring Diagnostics"):
     out = model_inf(xb, training=False)
 
     s_pred_b, _ = extract_preds(model_inf, out)   # <- (B,H,1) or (B,H,Q,1)
-    # s_pred_b = canonicalize_BHQO(
-    #     s_pred_b,
-    #     y_true=yb["subs_pred"],
-    #     q_values=QUANTILES,
-    #     n_q=(len(QUANTILES) if QUANTILES else None),
-    #     enforce_monotone=True,
-    #     verbose=0,
-    #     log_fn=(lambda *_: None),
-    # )
-    # ----------------------------NEW---------------
-    s_pred_b = canonicalize_BHQO_quantiles_np(
+    s_pred_b = canonicalize_BHQO(
         s_pred_b,
-        n_q=len(QUANTILES),
+        y_true=yb["subs_pred"],
+        q_values=QUANTILES,
+        n_q=(len(QUANTILES) if QUANTILES else None),
+        enforce_monotone=True,
         verbose=0,
-        log_fn=print,
+        log_fn=(lambda *_: None),
     )
     
-    # If you still want monotone quantiles (optional):
-    s_pred_b = np.sort(s_pred_b, axis=2)
+    # ----------------------------NEW---------------
+    # s_pred_b = canonicalize_BHQO_quantiles_np(
+    #     s_pred_b,
+    #     n_q=len(QUANTILES),
+    #     verbose=0,
+    #     log_fn=print,
+    # )
+    
+    # # If you still want monotone quantiles (optional):
+    # s_pred_b = np.sort(s_pred_b, axis=2)
     
     # ------------------------------
     y_true_b = yb["subs_pred"]                    # (B,H,1)
@@ -2696,16 +2697,7 @@ for xb, yb in with_progress(ds_eval, desc="Interval-Censoring Diagnostics"):
             align="broadcast",
         )
         mask_list.append(mask_b)
-
-# ------------------------------------
-s_q_np = np.asarray(tf.concat(s_q_list, axis=0))
-y_true_np = np.asarray(tf.concat(y_true_list, axis=0))
-
-s_q_np = canonicalize_BHQO_quantiles_np(
-    s_q_np, n_q=len(QUANTILES), verbose=1, log_fn=print
-)
-# ----------------------------------------------
-
+#%%
 # # Stack what we collected
 y_true = tf.concat(y_true_list, axis=0) if y_true_list else None  # (N,H,1)
 s_q = tf.concat(s_q_list, axis=0) if s_q_list else None           # (N,H,Q,1)
@@ -2732,6 +2724,7 @@ cov_per_h = tf.reduce_mean(hit, axis=[0, 2])  # (H,)
 
 print("cov_per_h:", cov_per_h.numpy())
 
+#%%
 # --- 2.3.a Interval coverage/sharpness (scaled + physical) ---------------
 cov80_uncal_phys = cov80_cal_phys = None
 sharp80_uncal_phys = sharp80_cal_phys = None
@@ -2811,7 +2804,7 @@ if QUANTILES and (y_true is not None) and (s_q is not None):
     
         cov80_cal_phys   = float(coverage80_fn(y_true_phys_tf, s_q_cal_phys_tf).numpy())
         sharp80_cal_phys = float(sharpness80_fn(y_true_phys_tf, s_q_cal_phys_tf).numpy())
-#%%
+#%
 # ---- Debug: scaling should NOT change coverage (only sharpness) ----
 if DEBUG:
     print("[SCALEDBG] subs scaler key:", _subs_scale_key)

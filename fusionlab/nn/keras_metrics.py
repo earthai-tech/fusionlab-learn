@@ -79,6 +79,24 @@ def _ensure_pred_tensor(y_pred):
         )
     return tf_convert_to_tensor(y_pred)
 
+# def _infer_quantile_axis(t, n_q=3):
+#     shape = getattr(t, "shape", None)
+#     rank = getattr(getattr(shape, "rank", None), "__int__", lambda: None)()
+#     if rank is None:
+#         return None
+
+#     if rank == 4:
+#         cands = [ax for ax in (1, 2, 3) if shape[ax] == n_q]
+#         if len(cands) == 1:
+#             return cands[0]
+#         return None  # ambiguous
+
+#     if rank == 3:
+#         return 2 if shape[2] == n_q else None
+
+#     return None
+
+
 def _infer_quantile_axis(t, n_q: int = 3):
     """Infer Q axis (static, conservative)."""
     shape = getattr(t, "shape", None)
@@ -90,6 +108,7 @@ def _infer_quantile_axis(t, n_q: int = 3):
     # Canonical layouts used in FusionLab:
     #   (B,H,Q,O) -> axis=2
     #   (B,H,O,Q) -> axis=3
+
     if rank == 4:
         if shape[2] == n_q:
             return 2

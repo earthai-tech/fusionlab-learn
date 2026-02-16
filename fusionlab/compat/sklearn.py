@@ -50,6 +50,9 @@ from sklearn.utils._param_validation import StrOptions, HasMethods, Hidden
 from sklearn.utils._param_validation import InvalidParameterError 
 from sklearn.utils import resample
 from sklearn.utils.validation import check_is_fitted as sklearn_check_is_fitted
+from sklearn.utils.validation import (
+    check_array as sklearn_check_array,
+)
 from sklearn.metrics import get_scorer
 
 
@@ -72,6 +75,7 @@ __all__ = [
     "get_feature_names_out", 
     "get_transformers_from_column_transformer",
     "check_is_fitted",
+    "check_array",
     "adjusted_mutual_info_score", 
     "get_sgd_loss_param", 
     "validate_params", 
@@ -84,6 +88,17 @@ __all__ = [
     "SKLEARN_LT_0_23", 
     "SKLEARN_LT_0_24"
 ]
+
+_CHECK_ARRAY_PARAMS = (
+    inspect.signature(sklearn_check_array).parameters
+)
+_CHECK_ARRAY_HAS_FORCE = (
+    "force_all_finite" in _CHECK_ARRAY_PARAMS
+)
+_CHECK_ARRAY_HAS_ENSURE = (
+    "ensure_all_finite" in _CHECK_ARRAY_PARAMS
+)
+
 
 try : 
     from sklearn.utils._param_validation import _Constraint, _type_name 
@@ -119,6 +134,49 @@ except ImportError:
         # build fallback mapping dynamically
         _sk_scorers = {name: _sk_get_scorer(name) for name in get_scorer_names()}
 
+
+def check_array(*args, **kwargs):
+    """
+    Compatibility wrapper for sklearn.utils.validation.check_array.
+
+    sklearn renamed:
+      force_all_finite -> ensure_all_finite
+
+    This wrapper accepts either keyword, and forwards only
+    the one supported by the installed sklearn version.
+    """
+    has_force = "force_all_finite" in kwargs
+    has_ensure = "ensure_all_finite" in kwargs
+
+    if has_force and has_ensure:
+        v_force = kwargs.get("force_all_finite")
+        v_ensure = kwargs.get("ensure_all_finite")
+        if v_force != v_ensure:
+            raise ValueError(
+                "check_array: both finite keywords given "
+                "with different values."
+            )
+
+    if _CHECK_ARRAY_HAS_ENSURE:
+        if has_force and not has_ensure:
+            kwargs["ensure_all_finite"] = (
+                kwargs.pop("force_all_finite")
+            )
+        elif has_force and has_ensure:
+            kwargs.pop("force_all_finite", None)
+    elif _CHECK_ARRAY_HAS_FORCE:
+        if has_ensure and not has_force:
+            kwargs["force_all_finite"] = (
+                kwargs.pop("ensure_all_finite")
+            )
+        elif has_force and has_ensure:
+            kwargs.pop("ensure_all_finite", None)
+    else:
+        # Defensive: very old / unusual sklearn build.
+        kwargs.pop("force_all_finite", None)
+        kwargs.pop("ensure_all_finite", None)
+
+    return sklearn_check_array(*args, **kwargs)
 
 def _get_scorer(name):
     """
