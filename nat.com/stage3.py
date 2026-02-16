@@ -78,7 +78,7 @@ from fusionlab.utils.nat_utils import (
     compile_for_eval,
 )
 
-
+from fusionlab.utils.shapes import canonicalize_BHQO
 from fusionlab.utils.forecast_utils import format_and_forecast
 from fusionlab.utils.scale_metrics import (
     inverse_scale_target,
@@ -965,18 +965,52 @@ else:
 
     print(f"[Eval] Predicting on {dataset_name_for_forecast} with tuned model...")
     pred_dict = model_for_eval.predict(X_fore_norm, verbose=0)
-
-    # v3.2: call()/predict() returns supervised outputs only
-    # subs_pred: (B,H,Q,OUT_S) when quantiles else (B,H,OUT_S)
-    # gwl_pred : (B,H,Q,OUT_G) when quantiles else (B,H,OUT_G)
+    
+    # robust: tolerate dict vs list outputs (recommended)
+    # subs_pred_raw, h_pred_raw = extract_preds(model_for_eval, pred_dict)
     s_pred_raw = pred_dict["subs_pred"]
     h_pred_raw = pred_dict["gwl_pred"]
     
-    if QUANTILES:
+    # ---- BHQO canonicalize (uses y_true available here) ----
+    y_true_scaled = None
+    if "subs_pred" in y_fore_fmt:
+        y_true_scaled = np.asarray(
+            y_fore_fmt["subs_pred"][..., :1],
+            np.float32,
+        )
+    
+    if (
+        (y_true_scaled is not None)
+        and (s_pred_raw is not None)
+        and (int(np.asarray(s_pred_raw).ndim) == 4)
+    ):
+        sp = tf.convert_to_tensor(s_pred_raw)
+        yt = tf.convert_to_tensor(y_true_scaled)
+    
+        sp = canonicalize_BHQO(
+            sp,
+            y_true=yt,
+            q_values=QUANTILES,
+            n_q=len(QUANTILES),
+            enforce_monotone=True,
+            layout="BHQO",
+            verbose=0,
+            log_fn=None,
+        )
+        s_pred_raw = sp.numpy()
+    elif (s_pred_raw is not None) and int(np.asarray(s_pred_raw).ndim) == 4:
+        s_pred_raw = np.sort(np.asarray(s_pred_raw), axis=2)
+    
+    # ---- now calibration (expects correct Q axis) ----
+    if cal80 is not None and QUANTILES:
         s_pred_cal = apply_calibrator_to_subs(cal80, s_pred_raw)
-        predictions_for_formatter = {"subs_pred": s_pred_cal, "gwl_pred": h_pred_raw}
     else:
-        predictions_for_formatter = {"subs_pred": s_pred_raw, "gwl_pred": h_pred_raw}
+        s_pred_cal = s_pred_raw
+    
+    predictions_for_formatter = {
+        "subs_pred": s_pred_cal,
+        "gwl_pred":  h_pred_raw,
+    }
 
 
     # y_true mapping for formatter (back to canonical names)
@@ -1119,9 +1153,27 @@ else:
         s_q_list = []
         for xb, yb in with_progress(ds_eval, desc="Tuned interval diagnostics"):
             out_b = model_for_eval(xb, training=False)
+            
+            yt_b = yb["subs_pred"][..., :1]
+            sq_b = out_b["subs_pred"]
+            
+            sq_b = canonicalize_BHQO(
+                sq_b,
+                y_true=yt_b,
+                q_values=QUANTILES,
+                n_q=len(QUANTILES),
+                enforce_monotone=True,
+                layout="BHQO",
+                verbose=0,
+                log_fn=None,
+            )
+            
+            # For coverage/sharpness, you typically want *calibrated* intervals:
+            if cal80 is not None:
+                sq_b = apply_calibrator_to_subs(cal80, sq_b)
+            
             y_true_list.append(yb["subs_pred"])
-            s_q_list.append(out_b["subs_pred"])
-
+            s_q_list.append(sq_b)
 
         if y_true_list and s_q_list:
             y_true = tf.concat(y_true_list, axis=0)
@@ -1167,6 +1219,23 @@ else:
         s_pred_list = []
         for xb, yb in with_progress(ds_eval, desc="Tuned point diagnostics"):
             out_b = model_for_eval(xb, training=False)
+            sq_b = out_b["subs_pred"]
+            yt_b = yb["subs_pred"][..., :1]
+            
+            sq_b = canonicalize_BHQO(
+                sq_b,
+                y_true=yt_b,
+                q_values=QUANTILES,
+                n_q=len(QUANTILES),
+                enforce_monotone=True,
+                layout="BHQO",
+            )
+            
+            # median index
+            qs = np.asarray(QUANTILES, dtype=float)
+            mid = int(np.argmin(np.abs(qs - 0.5)))
+            s_med_b = sq_b[..., mid, :]   # (B,H,1)
+
             y_true_list2.append(yb["subs_pred"])
             s_pred_list.append(out_b["subs_pred"])
 

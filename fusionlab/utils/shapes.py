@@ -554,6 +554,435 @@ def _prefer_bhqo(
             return name, arr
     return opts[0]
 
+def canonicalize_to_BHQO_using_contract(
+    s_pred,
+    *,
+    q_values=(0.1, 0.5, 0.9),
+    enforce_monotone=True,
+    verbose=0,
+    log_fn=print,
+):
+    """
+    Canonicalize quantile tensor to (B,H,Q,O).
+
+    Accepts common layouts:
+      - (B,H,Q,O) : unchanged
+      - (B,Q,H,O) : transpose -> (B,H,Q,O)
+      - (B,H,O,Q) : transpose -> (B,H,Q,O)
+      - rank-3 (B,H,Q) / (B,Q,H) / (B,H,O):
+          expanded with O=1, then canonicalized
+
+    If enforce_monotone=True, quantiles are sorted
+    along axis=2 (Q axis).
+
+    Notes
+    -----
+    - TF backend returns a tf.Tensor.
+    - NumPy backend returns a np.ndarray.
+    """
+
+    def _log(level: int, msg: str) -> None:
+        if verbose >= level:
+            log_fn(msg)
+
+    tf = _maybe_tf()
+    n_q = len(q_values) if q_values else 0
+
+    # ==================================================
+    # NumPy backend
+    # ==================================================
+    if tf is None:
+        s = np.asarray(s_pred)
+        _log(1, f"canon_BHQO[np]: in={s.shape}")
+
+        if n_q <= 0:
+            _log(1, "canon_BHQO[np]: n_q<=0, keep.")
+            return s
+
+        # Rank-3 -> add O axis (O=1).
+        if s.ndim == 3:
+            s = np.expand_dims(s, axis=-1)
+            _log(
+                2,
+                "canon_BHQO[np]: "
+                f"expanded rank-3 -> {s.shape}",
+            )
+
+        if s.ndim != 4:
+            _log(
+                1,
+                "canon_BHQO[np]: "
+                f"rank={s.ndim}, unchanged.",
+            )
+            return s
+
+        b, d1, d2, d3 = s.shape
+        _log(
+            2,
+            "canon_BHQO[np]: "
+            f"d1={d1} d2={d2} d3={d3} n_q={n_q}",
+        )
+
+        # Accept BHQO
+        if d2 == n_q:
+            out = s
+            _log(1, "canon_BHQO[np]: BHQO keep.")
+
+        # Accept BQHO -> transpose to BHQO
+        elif d1 == n_q:
+            out = np.transpose(s, (0, 2, 1, 3))
+            _log(1, "canon_BHQO[np]: BQHO swap.")
+
+        # Accept BHOQ -> transpose to BHQO
+        elif d3 == n_q:
+            out = np.transpose(s, (0, 1, 3, 2))
+            _log(1, "canon_BHQO[np]: BHOQ move.")
+
+        else:
+            raise ValueError(
+                "Cannot locate quantile axis. "
+                f"shape={s.shape}, n_q={n_q}"
+            )
+
+        if enforce_monotone:
+            out = np.sort(out, axis=2)
+            _log(2, "canon_BHQO[np]: sorted axis=2.")
+
+        _log(1, f"canon_BHQO[np]: out={out.shape}")
+        return out
+
+
+    # TensorFlow backend (safe conversion + verbose)
+
+    if n_q <= 0:
+        _log(1, "canon_BHQO[tf]: n_q<=0, keep.")
+        return s_pred
+
+    if not tf.is_tensor(s_pred):
+        s_pred = tf.convert_to_tensor(s_pred)
+
+    rank = int(s_pred.shape.rank or 0)
+    _log(
+        1,
+        "canon_BHQO[tf]: "
+        f"in rank={rank} "
+        f"shape={tuple(s_pred.shape.as_list())}",
+    )
+
+    # Rank-3 -> add O axis (O=1).
+    if s_pred.shape.rank == 3:
+        s_pred = tf.expand_dims(s_pred, axis=-1)
+        _log(
+            2,
+            "canon_BHQO[tf]: "
+            f"expanded rank-3 -> "
+            f"{tuple(s_pred.shape.as_list())}",
+        )
+
+    if s_pred.shape.rank != 4:
+        return s_pred
+
+    # Accept BHQO
+    if int(s_pred.shape[2]) == n_q:
+        out = s_pred
+        _log(1, "canon_BHQO[tf]: BHQO keep.")
+
+    # Accept BQHO -> transpose to BHQO
+    elif int(s_pred.shape[1]) == n_q:
+        out = tf.transpose(s_pred, [0, 2, 1, 3])
+        _log(1, "canon_BHQO[tf]: BQHO swap.")
+
+    # Accept BHOQ -> transpose to BHQO
+    elif int(s_pred.shape[3]) == n_q:
+        out = tf.transpose(s_pred, [0, 1, 3, 2])
+        _log(1, "canon_BHQO[tf]: BHOQ move.")
+
+    else:
+        raise ValueError(
+            "Cannot locate quantile axis. "
+            f"shape={s_pred.shape}, n_q={n_q}"
+        )
+
+    if enforce_monotone:
+        out = tf.sort(out, axis=2)
+        _log(2, "canon_BHQO[tf]: sorted axis=2.")
+
+    return out
+
+def ensure_subs_bhq(
+    s_pred_b,
+    *,
+    y_true_b,
+    q_values,
+    enforce_monotone=True,
+    verbose=0,
+    log_fn=print,
+):
+    """
+    Ensure subsidence quantile predictions are in (B,H,Q,O).
+
+    Expected quantile mode shape is rank-4, typically one of:
+      - (B,H,Q,O)  : canonical
+      - (B,Q,H,O)  : swap axes 1<->2
+    Ambiguous case (often H == Q == n_q):
+      - choose orientation by q50 MAE vs y_true_b
+      - if MAE cannot be computed (shape mismatch), fallback to
+        a quantile-crossing score (smaller is better)
+
+    Notes
+    -----
+    - If enforce_monotone=True, we sort along Q axis (axis=2).
+    - NumPy backend returns np.ndarray.
+    """
+
+    def _log(level: int, msg: str) -> None:
+        if verbose >= level:
+            log_fn(msg)
+
+    def _mae_safe_np(a: np.ndarray, b: np.ndarray) -> float:
+        if a.shape != b.shape:
+            return float("inf")
+        mask = np.isfinite(a) & np.isfinite(b)
+        if int(mask.sum()) == 0:
+            return float("inf")
+        return float(np.mean(np.abs(a[mask] - b[mask])))
+
+    def _cross_score_np(arr: np.ndarray) -> float:
+        # arr is expected (B,H,Q,O)
+        if arr.ndim != 4 or arr.shape[2] < 2:
+            return float("inf")
+        # Adjacent crossings + end-to-end crossing.
+        a = arr[:, :, :-1, :]
+        b = arr[:, :, 1:, :]
+        c_adj = float(np.mean(a > b))
+        c_end = float(
+            np.mean(arr[:, :, 0, :] > arr[:, :, -1, :])
+        )
+        return c_adj + c_end
+
+    def _ensure_ytrue_bho_np(
+        y_true,
+        *,
+        n_q: int,
+        med: int,
+    ) -> np.ndarray | None:
+        if y_true is None:
+            return None
+        try:
+            yt = np.asarray(y_true)
+        except Exception:
+            return None
+
+        # (B,H) -> (B,H,1)
+        if yt.ndim == 2:
+            return yt[..., None]
+
+        # (B,H,O) OK
+        if yt.ndim == 3:
+            return yt
+
+        # If y_true was tiled to quantile shape, drop to med.
+        if yt.ndim == 4:
+            if yt.shape[2] == n_q:
+                return yt[:, :, med, :]
+            if yt.shape[1] == n_q:
+                yt2 = np.transpose(yt, (0, 2, 1, 3))
+                return yt2[:, :, med, :]
+            if yt.shape[3] == n_q:
+                yt2 = np.transpose(yt, (0, 1, 3, 2))
+                return yt2[:, :, med, :]
+
+            # Last-resort squeeze trailing singleton.
+            if yt.shape[-1] == 1:
+                return yt[..., 0]
+
+        return None
+
+    tf = _maybe_tf()
+
+    # NumPy backend
+    if tf is None:
+        s = np.asarray(s_pred_b)
+        _log(1, f"ensure_subs_bhq[np]: in={s.shape}")
+
+        # Expect rank-4 in quantile mode.
+        if s.ndim != 4:
+            _log(
+                1,
+                "ensure_subs_bhq[np]: "
+                f"rank={s.ndim}, unchanged.",
+            )
+            return s
+
+        n_q = len(q_values) if q_values else 0
+        if n_q <= 0:
+            _log(
+                1,
+                "ensure_subs_bhq[np]: "
+                "n_q<=0, unchanged.",
+            )
+            return s
+
+        d1 = int(s.shape[1])
+        d2 = int(s.shape[2])
+        _log(
+            2,
+            "ensure_subs_bhq[np]: "
+            f"d1={d1} d2={d2} n_q={n_q}",
+        )
+
+        if (d2 == n_q) and (d1 != n_q):
+            out = s
+            _log(1, "ensure_subs_bhq[np]: chose keep.")
+        elif (d1 == n_q) and (d2 != n_q):
+            out = np.transpose(s, (0, 2, 1, 3))
+            _log(1, "ensure_subs_bhq[np]: chose swap.")
+        else:
+            # Ambiguous: decide by q50 MAE vs y_true.
+            q = np.asarray(q_values, dtype=float)
+            med = int(np.argmin(np.abs(q - 0.5)))
+
+            _log(
+                2,
+                "ensure_subs_bhq[np]: "
+                f"ambiguous, med={med} q={_fmt(q[med])}",
+            )
+
+            keep = s
+            swap = np.transpose(s, (0, 2, 1, 3))
+
+            yt = _ensure_ytrue_bho_np(
+                y_true_b,
+                n_q=n_q,
+                med=med,
+            )
+
+            if yt is None:
+                mae_keep = float("inf")
+                mae_swap = float("inf")
+            else:
+                mae_keep = _mae_safe_np(
+                    keep[:, :, med, :],
+                    yt,
+                )
+                mae_swap = _mae_safe_np(
+                    swap[:, :, med, :],
+                    yt,
+                )
+
+            _log(
+                2,
+                "ensure_subs_bhq[np]: "
+                f"mae_keep={_fmt(mae_keep)} "
+                f"mae_swap={_fmt(mae_swap)}",
+            )
+
+            if np.isfinite(mae_keep) or np.isfinite(mae_swap):
+                if mae_swap < mae_keep:
+                    out = swap
+                    _log(1, "ensure_subs_bhq[np]: swap (mae).")
+                else:
+                    out = keep
+                    _log(1, "ensure_subs_bhq[np]: keep (mae).")
+            else:
+                # Fallback: use quantile crossing score.
+                cs_keep = _cross_score_np(keep)
+                cs_swap = _cross_score_np(swap)
+                _log(
+                    2,
+                    "ensure_subs_bhq[np]: "
+                    f"cross_keep={cs_keep:.6f} "
+                    f"cross_swap={cs_swap:.6f}",
+                )
+                if cs_swap < cs_keep:
+                    out = swap
+                    _log(
+                        1,
+                        "ensure_subs_bhq[np]: swap (cross).",
+                    )
+                else:
+                    out = keep
+                    _log(
+                        1,
+                        "ensure_subs_bhq[np]: keep (cross).",
+                    )
+
+        if enforce_monotone:
+            out = np.sort(out, axis=2)
+            _log(
+                2,
+                "ensure_subs_bhq[np]: "
+                "sorted along axis=2.",
+            )
+
+        _log(1, f"ensure_subs_bhq[np]: out={out.shape}")
+        return out
+
+    # TensorFlow backend (original logic + safe conversion)
+    if not tf.is_tensor(s_pred_b):
+        s_pred_b = tf.convert_to_tensor(s_pred_b)
+
+    _log(
+        1,
+        "ensure_subs_bhq[tf]: "
+        f"in rank={int(s_pred_b.shape.rank or 0)} "
+        f"shape={tuple(s_pred_b.shape.as_list())}",
+    )
+
+    # Expect rank-4 in quantile mode.
+    if s_pred_b.shape.rank != 4:
+        return s_pred_b
+
+    n_q = len(q_values) if q_values else 0
+    if n_q <= 0:
+        return s_pred_b
+
+    # Easy cases when dims differ.
+    d1 = int(s_pred_b.shape[1])
+    d2 = int(s_pred_b.shape[2])
+
+    if (d2 == n_q) and (d1 != n_q):
+        out = s_pred_b
+        _log(1, "ensure_subs_bhq[tf]: chose keep.")
+    elif (d1 == n_q) and (d2 != n_q):
+        out = tf.transpose(s_pred_b, [0, 2, 1, 3])
+        _log(1, "ensure_subs_bhq[tf]: chose swap.")
+    else:
+        # Ambiguous (often H==Q): choose by median MAE vs y_true.
+        q = np.asarray(q_values, dtype=float)
+        med = int(np.argmin(np.abs(q - 0.5)))
+
+        keep = s_pred_b
+        swap = tf.transpose(s_pred_b, [0, 2, 1, 3])
+
+        if not tf.is_tensor(y_true_b):
+            y_true_b = tf.convert_to_tensor(y_true_b)
+
+        mae_keep = tf.reduce_mean(
+            tf.abs(keep[:, :, med, :] - y_true_b)
+        )
+        mae_swap = tf.reduce_mean(
+            tf.abs(swap[:, :, med, :] - y_true_b)
+        )
+
+        if verbose >= 2:
+            _log(
+                2,
+                "ensure_subs_bhq[tf]: "
+                f"mae_keep={_fmt(float(mae_keep.numpy()))} "
+                f"mae_swap={_fmt(float(mae_swap.numpy()))}",
+            )
+
+        out = tf.cond(
+            mae_swap < mae_keep,
+            lambda: swap,
+            lambda: keep,
+        )
+
+    if enforce_monotone:
+        out = tf.sort(out, axis=2)
+
+    return out
 
 # ---------------------------------------------------------------------
 # Small helpers

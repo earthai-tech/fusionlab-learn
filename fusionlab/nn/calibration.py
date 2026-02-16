@@ -3,8 +3,9 @@ import numpy as np
 
 from .._optdeps import with_progress 
 from ..utils.validator import check_is_fitted 
-from ._shapes import (
-    canonicalize_to_BHQO_using_ytrue,
+from ..utils.shapes import (
+    canonicalize_BHQO,
+    # canonicalize_to_BHQO_using_ytrue,
 )
 from . import KERAS_DEPS
 
@@ -420,15 +421,20 @@ def fit_interval_calibrator_on_val(
         out = model(x, training=False)
 
         s_pred = _extract_subs_pred(model, out)
-
         # Disambiguate BHQO vs BQHO when H == Q (e.g. 3 and 3).
         if q_values is not None:
-            s_pred = canonicalize_to_BHQO_using_ytrue(
-                s_pred,
-                y["subs_pred"],
-                q_values=q_values,
-            )
- 
+            s_pred = canonicalize_BHQO(
+                    s_pred,
+                    y_true=y["subs_pred"],
+                    q_values=q_values,
+                    n_q=len(q_values),
+                    layout="BHQO",             
+                    enforce_monotone=False,
+                    verbose= 0,
+                    log_fn=print,
+                )
+
+
         rank = getattr(getattr(s_pred, "shape", None), "rank", None)
         if rank is not None and rank != 4:
             raise ValueError(
@@ -452,86 +458,82 @@ def fit_interval_calibrator_on_val(
     cal.fit(y_true, q_lo, q_med, q_hi)
     return cal
 
-def _fit_interval_calibrator_on_val(
-        model, ds_val, target=0.80, 
-        log_fn =None, **tqdm_kws
-    ):
-    """
-    Fit a horizon-wise symmetric interval calibrator on a validation
-    dataset.
+# def fit_interval_calibrator_on_val(
+#     model,
+#     ds_val,
+#     target=0.80,
+#     log_fn=None,
+#     q_values=None,
+#     **tqdm_kws,
+# ):
+#     cal = IntervalCalibrator(target=target)
 
-    The function runs the provided Keras model on the validation
-    dataset, extracts subsidence quantiles (q10, q50, q90) using the
-    model's ``split_data_predictions`` helper, and learns scale
-    factors that make the central interval reach ``target`` coverage.
+#     log = log_fn or (lambda *_: None)
 
-    Parameters
-    ----------
-    model : tf.keras.Model
-        Trained model that, when called as ``model(x, training=False)``,
-        returns a dict with key ``"data_final"``. The model must also
-        implement ``split_data_predictions(tensor) -> (s_q, h_q)``,
-        where ``s_q`` has shape ``(B, H, Q, 1)`` with ``Q = 3``.
-    ds_val : tf.data.Dataset
-        Validation dataset yielding ``(x, y)`` pairs. The target dict
-        ``y`` must contain key ``"subs_pred"`` of shape ``(B, H, 1)``.
-    target : float, default=0.80
-        Desired coverage for the central interval.
-    log_fn : callable or None, optional
-        If provided, tqdm's progress bar output is redirected into
-        this logger instead of the terminal. The logger must accept
-        a single string argument.
-    Returns
-    -------
-    cal : IntervalCalibrator
-        Calibrator fitted on the validation split.
+#     # Prefer explicit q_values, else try model.quantiles.
+#     if q_values is None:
+#         qv = getattr(model, "quantiles", None)
+#         if isinstance(qv, (list, tuple)) and len(qv) > 0:
+#             q_values = list(qv)
 
-    Notes
-    -----
-    * Only the **subsidence** head is calibrated. GWL or other heads
-      are not modified by this routine.
-    * The function concatenates all validation batches along the
-      batch axis before fitting.
+#     n_q = len(q_values) if q_values is not None else None
 
-    Examples
-    --------
-    >>> cal = fit_interval_calibrator_on_val(model, ds_val, target=0.8)
-    >>> # Later, apply to test subsidence quantiles:
-    >>> # s_q_test = model.split_data_predictions(...)[0]
-    >>> # s_q_test_cal = apply_calibrator_to_subs(cal, s_q_test)
-    """
+#     y_true_list = []
+#     lo_list, med_list, hi_list = [], [], []
 
-    cal = IntervalCalibrator(target=target)
+#     iterator = with_progress(
+#         ds_val,
+#         desc="Calibrating intervals on val",
+#         ascii=True,
+#         leave=False,
+#         log_fn=log,
+#         **tqdm_kws,
+#     )
 
-    y_true_list, lo_list, med_list, hi_list = [], [], [], []
+#     for x, y in iterator:
+#         out = model(x, training=False)
+#         s_pred = _extract_subs_pred(model, out)
 
-    # Wrap with progress bar if available  otherwise use plain iterator
-    iterator = with_progress(
-        ds_val,
-        desc="Calibrating intervals on val",
-        ascii=True,
-        leave=False,
-        log_fn= log_fn, 
-        **tqdm_kws
-    )
+#         # Require quantiles for interval calibration.
+#         rank = getattr(getattr(s_pred, "shape", None), "rank", None)
+#         if rank is not None and rank != 4:
+#             raise ValueError(
+#                 "Interval calibration requires quantiles. "
+#                 "Expected (B,H,Q,1). "
+#                 f"Got rank={rank!r}."
+#             )
 
-    for x, y in iterator:  # y needs 'subs_pred' with shape (B,H,1)
-        out = model(x, training=False)
-        s_pred_q, _ = model.split_data_predictions(out["data_final"])  # (B,H,Q,1), (B,H,Q,1)
-        lo, med, hi = _stack_subs_quantiles(s_pred_q)
+#         # Canonicalize to BHQO using y_true to break ties.
+#         if q_values is not None:
+#             canon = canonicalize_BHQO(
+#                 s_pred,
+#                 y_true=y["subs_pred"],
+#                 q_values=q_values,
+#                 n_q=n_q,
+#                 layout="BHQO",
+#                 enforce_monotone=False,
+#                 verbose=0,
+#                 log_fn=log_fn or print,
+#             )
+#             if isinstance(canon, tuple):
+#                 s_pred = canon[0]
+#             else:
+#                 s_pred = canon
 
-        y_true_list.append(y["subs_pred"])
-        lo_list.append(lo)
-        med_list.append(med)
-        hi_list.append(hi)
+#         lo, med, hi = _stack_subs_quantiles(s_pred)
 
-    y_true = tf_concat(y_true_list, axis=0).numpy()
-    q_lo   = tf_concat(lo_list,   axis=0).numpy()
-    q_med  = tf_concat(med_list,  axis=0).numpy()
-    q_hi   = tf_concat(hi_list,   axis=0).numpy()
+#         y_true_list.append(y["subs_pred"])
+#         lo_list.append(lo)
+#         med_list.append(med)
+#         hi_list.append(hi)
 
-    cal.fit(y_true, q_lo, q_med, q_hi)  # learns factors_ per horizon
-    return cal
+#     y_true = tf_concat(y_true_list, axis=0).numpy()
+#     q_lo = tf_concat(lo_list, axis=0).numpy()
+#     q_med = tf_concat(med_list, axis=0).numpy()
+#     q_hi = tf_concat(hi_list, axis=0).numpy()
+
+#     cal.fit(y_true, q_lo, q_med, q_hi)
+#     return cal
 
 def apply_calibrator_to_subs(cal, s_pred_q):
     """

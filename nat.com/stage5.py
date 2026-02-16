@@ -50,8 +50,9 @@ from fusionlab.utils.nat_utils import (
     load_tuned_hps_near_model, 
     load_trained_hps_near_model, 
     load_hps_auto_near_model, 
-    load_scaler_info
 )
+
+from fusionlab.utils.shapes import canonicalize_BHQO
 from fusionlab.nn.keras_metrics import (
     coverage80_fn,
     sharpness80_fn,
@@ -72,7 +73,7 @@ from fusionlab.compat.keras_fit import (
     suppress_compiled_metrics_warning,
 )
 
-from fusionlab._optdeps import with_progress
+from fusionlab.deps import with_progress
 from fusionlab.utils.generic_utils import vlog
 from fusionlab.utils.xfer_utils import load_stage1_bundle
 from fusionlab.utils.xfer_utils import resolve_artifact_path
@@ -1987,21 +1988,99 @@ def run_one_direction(
     # ------------------------------
     # Predict
     # ------------------------------
+
     pred_dict = model_pred.predict(
         X_tgt,
         verbose=int(verbose),
     )
+    
     subs_pred, gwl_pred = extract_preds(
         model,
         pred_dict,
     )
-
-    if cal is not None and int(subs_pred.ndim) == 4:
+    
+    # =================================================
+    # Canonicalize quantile layout to BHQO (robust).
+    #
+    # IMPORTANT (transfer case):
+    #   model outputs are in SOURCE scaling space;
+    #   y_true from target bundle is in TARGET scaling.
+    #   For MAE tie-break (H==Q), compare against
+    #   y_true projected into SOURCE scaling.
+    # =================================================
+    
+    # (1) prepare scalers + keys (must exist BEFORE canonicalize)
+    y_si_s = _bundle_y_scaler_info(src_b)
+    y_si_t = _bundle_y_scaler_info(tgt_b)
+    
+    subs_pref_s = str(src_b.target_cols.get("subs", "subs"))
+    subs_pref_t = str(tgt_b.target_cols.get("subs", "subs"))
+    
+    subs_key_s = _pick_si_key(y_si_s, subs_pref_s) if y_si_s else subs_pref_s
+    subs_key_t = _pick_si_key(y_si_t, subs_pref_t) if y_si_t else subs_pref_t
+    
+    # (2) run canonicalize
+    subs_pred_raw = subs_pred
+    
+    y_true_src = None
+    if y_map and ("subs_pred" in y_map):
+        y_true_tgt = np.asarray(
+            y_map["subs_pred"][..., :1],
+            np.float32,
+        )
+    
+        if y_si_s and y_si_t:
+            y_phys = _safe_inverse_y(
+                y_true_tgt,
+                y_si_t,
+                subs_key_t,
+                log=log,
+            )
+            y_true_src = _safe_scale_y(
+                y_phys,
+                y_si_s,
+                subs_key_s,
+                log=log,
+            )
+        else:
+            y_true_src = y_true_tgt
+    
+    if (y_true_src is not None) and (subs_pred_raw is not None):
+        sp = tf.convert_to_tensor(subs_pred_raw)
+        yt = tf.convert_to_tensor(y_true_src)
+    
+        sp = canonicalize_BHQO(
+            sp,
+            y_true=yt,
+            q_values=Q,
+            n_q=(len(Q) if Q else None),
+            enforce_monotone=True,
+            layout="BHQO",
+            verbose=(1 if int(verbose) >= 4 else 0),
+            log_fn=(log if int(verbose) >= 4 else None),
+        )
+        subs_pred_raw = sp.numpy()
+    
+    elif (
+        subs_pred_raw is not None
+        and int(np.asarray(subs_pred_raw).ndim) == 4
+    ):
+        # No y_true available -> cannot disambiguate.
+        # Still enforce monotone quantiles.
+        subs_pred_raw = np.sort(
+            np.asarray(subs_pred_raw),
+            axis=2,
+        )
+    
+    subs_pred = subs_pred_raw  # <-- IMPORTANT: feed canonicalized back
+    
+    # (3) now calibration is safe (expects Q axis)
+    if cal is not None and int(np.asarray(subs_pred).ndim) == 4:
         subs_pred = apply_calibrator_to_subs(
             cal,
             subs_pred,
         )
-
+    
     preds = {
         "subs_pred": subs_pred,
         "gwl_pred": gwl_pred,

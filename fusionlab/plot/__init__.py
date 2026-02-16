@@ -18,6 +18,7 @@ from .forecast import (
      plot_forecasts, 
      visualize_forecasts ,
      forecast_view, 
+     plot_eval_future
    )
 
 from .r2 import ( 
@@ -50,6 +51,7 @@ __all__=[
      'visualize_forecasts', 
      'plot_forecast_by_step', 
      'forecast_view', 
+     'plot_eval_future',
      
      'plot_r2', 
      'plot_r2_in',
