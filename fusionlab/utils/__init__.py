@@ -14,12 +14,14 @@ from .data_utils import (
     nan_ops,
     widen_temporal_columns
     )
-from .forecast_utils import pivot_forecast_dataframe
+from .forecast_utils import ( 
+    format_and_forecast, 
+    evaluate_forecast,    
+    pivot_forecast_dataframe
+)
 from .io_utils import ( 
     fetch_joblib_data, 
     save_job, 
-    format_and_forecast, 
-    evaluate_forecast
   )
 from .audit_utils import ( 
     audit_stage2_handshake,
