@@ -80,6 +80,8 @@ from .holdout_utils import (
     filter_df_by_groups,
 )
 
+from .sequence_utils import build_future_sequences_npz
+
 __all__ = [
     'spatial_sampling', 
     'create_spatial_clusters', 
