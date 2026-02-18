@@ -56,6 +56,7 @@ def canonicalize_BHQO(
         Number of quantiles. Defaults to len(q_values).
     layout:
         Force interpretation: "BHQO", "BQHO", "BHOQ".
+        Use "auto" (or None) to infer.
     enforce_monotone:
         Sort along Q axis after canonicalization.
     return_layout:
@@ -68,7 +69,15 @@ def canonicalize_BHQO(
     arr or (arr, layout)
         Canonical (B, H, Q, O) and optionally the layout.
     """
+    
+    # Accept explicit "auto" to mean "infer".
+    if layout is not None:
+        lay = str(layout).strip().lower()
+        if lay in {"auto", "infer"}:
+            layout = None
+
     tf = _maybe_tf()
+
     if tf is not None and tf.is_tensor(y_pred):
         out = _canonicalize_tf(
             y_pred,

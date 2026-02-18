@@ -125,7 +125,7 @@ tf.get_logger().setLevel("ERROR")
 if hasattr(tf, "autograph") and hasattr(tf.autograph, "set_verbosity"):
     tf.autograph.set_verbosity(0)
 
-
+#%
 # =============================================================================
 # Config / Paths
 # =============================================================================
@@ -2157,7 +2157,7 @@ if DEBUG and (model_inf is not subs_model_inst):
         top_weights=30,
         log_fn=print,
     )
-
+#%%
 # =============================================================================
 # Calibrate on validation set (BEFORE formatting)
 # =============================================================================
@@ -2225,49 +2225,98 @@ if QUANTILES:
     y_subs_true = y_fore_fmt.get("subs_pred")
     y_gwl_true = y_fore_fmt.get("gwl_pred")
 
-    s_pred = canonicalize_BHQO(
-        s_pred,
-        y_true=y_subs_true,
-        q_values=QUANTILES,
-        n_q=len(QUANTILES),
-        enforce_monotone=False,
-        layout="BHQO",
-        verbose=1 if DEBUG else 0,
-        log_fn=_log,
-    )
+    # s_pred = canonicalize_BHQO( # model already
+    #     s_pred,
+    #     y_true=y_subs_true,
+    #     q_values=QUANTILES,
+    #     n_q=len(QUANTILES),
+    #     enforce_monotone=False,
+    #     layout="BHQO",
+    #     verbose=1 if DEBUG else 0,
+    #     log_fn=_log,
+    # )
 
-    h_pred = canonicalize_BHQO(
-        h_pred,
-        y_true=y_gwl_true,
-        q_values=QUANTILES,
-        n_q=len(QUANTILES),
-        enforce_monotone=False,
-        layout="BHQO",
-        verbose=1 if DEBUG else 0,
-        log_fn=_log,
-    )
+    # h_pred = canonicalize_BHQO(
+    #     h_pred,
+    #     y_true=y_gwl_true,
+    #     q_values=QUANTILES,
+    #     n_q=len(QUANTILES),
+    #     enforce_monotone=False,
+    #     layout="BHQO",
+    #     verbose=1 if DEBUG else 0,
+    #     log_fn=_log,
+    # )
+    
+    # s_pred, s_layout = canonicalize_BHQO(
+    #     s_pred,
+    #     y_true=y_subs_true,
+    #     q_values=QUANTILES,
+    #     n_q=len(QUANTILES),
+    #     layout=None,
+    #     enforce_monotone=False,
+    #     return_layout=True,
+    #     verbose=1 if DEBUG else 0,
+    #     log_fn=_log,
+    # )
+    
+    # h_pred, h_layout = canonicalize_BHQO(
+    #     h_pred,
+    #     y_true=y_gwl_true,
+    #     q_values=QUANTILES,
+    #     n_q=len(QUANTILES),
+    #     layout=None,
+    #     enforce_monotone=False,
+    #     return_layout=True,
+    #     verbose=1 if DEBUG else 0,
+    #     log_fn=_log,
+    # )
+    s_pred_cal = apply_calibrator_to_subs(
+            cal80,
+            s_pred,
+            q_values=QUANTILES,
+        )
+
+    # if DEBUG:
+    #     _log(
+    #         f"[canon] subs_layout={s_layout} "
+    #         f"gwl_layout={h_layout}"
+    #     )
 
     # Calibrate subsidence quantiles only.
-    s_pred_cal = apply_calibrator_to_subs(cal80, s_pred)
+    # s_pred_cal = apply_calibrator_to_subs(
+    #     cal80,
+    #     s_pred,
+    # )
+    
+    # s_pred_cal = canonicalize_BHQO(
+    #     s_pred_cal,
+    #     y_true=y_subs_true,
+    #     q_values=QUANTILES,
+    #     n_q=len(QUANTILES),
+    #     layout=None,
+    #     enforce_monotone=True,
+    #     verbose=0,
+    #     log_fn=_silent,
+    # )
+    
 
-    # After calibration, enforce monotone intervals.
-    s_pred_cal = canonicalize_BHQO(
-        s_pred_cal,
-        y_true=y_subs_true,
-        q_values=QUANTILES,
-        n_q=len(QUANTILES),
-        enforce_monotone=True,
-        layout="BHQO",
-        verbose=0,
-        log_fn=_silent,
-    )
+    # s_pred_cal = canonicalize_BHQO(
+    #     s_pred_cal,
+    #     y_true=y_subs_true,
+    #     q_values=QUANTILES,
+    #     n_q=len(QUANTILES),
+    #     enforce_monotone=True,
+    #     layout="BHQO",
+    #     verbose=0,
+    #     log_fn=_silent,
+    # )
 
-    q50_i = int(np.argmin(
-        np.abs(np.asarray(QUANTILES) - 0.5)
-    ))
+    # q50_i = int(np.argmin(
+    #     np.abs(np.asarray(QUANTILES) - 0.5)
+    # ))
 
-    s_q50 = s_pred_cal[:, :, q50_i, 0]
-    h_q50 = h_pred[:, :, q50_i, 0]
+    # s_q50 = s_pred_cal[:, :, q50_i, 0]
+    # h_q50 = h_pred[:, :, q50_i, 0]
 
     predictions_for_formatter = {
         "subs_pred": s_pred_cal,
@@ -2279,13 +2328,13 @@ else:
         "gwl_pred": h_pred,
     }
 
-if DEBUG and QUANTILES:
-    debug_quantile_crossing_np(
-        predictions_for_formatter["subs_pred"],
-        n_q=len(QUANTILES),
-        name="subs_pred",
-        verbose=1,
-    )
+# if DEBUG and QUANTILES:
+#     debug_quantile_crossing_np(
+#         predictions_for_formatter["subs_pred"],
+#         n_q=len(QUANTILES),
+#         name="subs_pred",
+#         verbose=1,
+#     )
 
 ev_point = evaluate_point_forecast(
     model_inf,
@@ -2468,7 +2517,7 @@ if df_eval is not None and not df_eval.empty:
         ),
         verbose=1,
     )
-
+#%%
 # =============================================================================
 # Evaluate metrics & physics on the forecasting split
 # (+ optional censoring + interval calibration diagnostics)
@@ -2517,17 +2566,6 @@ if DEBUG:
     print("subs_pred shape:", sp.shape)
     print("subs_pred dyn  :", tf.shape(sp).numpy())
 
-    sp_fix = canonicalize_BHQO(
-        sp,
-        y_true=yb["subs_pred"],
-        q_values=QUANTILES,
-        n_q=(len(QUANTILES) if QUANTILES else None),
-        layout="BHQO",
-        enforce_monotone=False,
-        verbose=1,
-        log_fn=(lambda *_: None),
-    )
-    print("canonicalized shape:", sp_fix.shape)
 
 # -------------------------------------------------------------------------
 # Dataset validation debug (safe):
@@ -2632,67 +2670,75 @@ try:
 
 except Exception as e:
     print(f"[Warn] Physics payload export failed: {e}")
-
+# %
 # =============================================================================
 # SM3: Interval diagnostics (+ optional censor metrics)
 # =============================================================================
+#
+# Fix C:
+#   Keep interval metrics consistent with the CSV diagnostics by
+#   reusing the SAME tensors used by format_and_forecast():
+#     - y_true  := y_fore_fmt["subs_pred"]
+#     - s_q     := s_pred         (uncalibrated)
+#     - s_q_cal := predictions_for_formatter["subs_pred"] (calibrated)
+#
+#   This avoids a second inference pass via:
+#     out = model_inf(xb)
+#     s_pred_b, _ = extract_preds(...)
+#   which can silently flip quantile/horizon axes when H == Q.
+# =============================================================================
 
-# -------------------------------------------------------------------------
-# 2.3 Collect y_true and BHQO quantiles across ds_eval.
-#
-# Why collect first?
-#   - Interval metrics operate on the full tensor.
-#   - Calibration is applied consistently to (N,H,Q,1).
-#
-# Contract:
-#   - canonicalize_BHQO(..., layout="BHQO") ALWAYS.
-#   - enforce_monotone=True here:
-#       interval bounds must be ordered to define a
-#       valid [q10, q90] interval.
-# -------------------------------------------------------------------------
 cov80_uncal = None
 cov80_cal = None
 sharp80_uncal = None
 sharp80_cal = None
 
+cov80_uncal_phys = None
+cov80_cal_phys = None
+sharp80_uncal_phys = None
+sharp80_cal_phys = None
+
 censor_metrics = None
 
-y_true_list = []
-s_q_list = []
-mask_list = []
+y_true_phys_np = None
+s_q_cal = None
 
-for xb, yb in with_progress(
-    ds_eval,
-    desc="Interval-Censoring Diagnostics",
-):
-    out = model_inf(xb, training=False)
+_subs_scale_key = SUBS_SCALER_KEY
 
-    # extract_preds() may return point or quantile
-    # tensors depending on the model/head path.
-    s_pred_b, _ = extract_preds(model_inf, out)
+# -------------------------------------------------------------------------
+# 2.3.a Build tensors from the SAME sources used by CSV formatting.
+# -------------------------------------------------------------------------
+y_true = tf.convert_to_tensor(
+    y_fore_fmt["subs_pred"],
+    dtype=tf.float32,
+)
 
-    # Force BHQO interpretation and monotone bounds.
-    s_pred_b = canonicalize_BHQO(
-        s_pred_b,
-        y_true=yb["subs_pred"],
-        q_values=QUANTILES,
-        n_q=(len(QUANTILES) if QUANTILES else None),
-        layout="BHQO",
-        enforce_monotone=True,
-        verbose=0,
-        log_fn=(lambda *_: None),
+if QUANTILES:
+    # spred and scal are already canolized, so no need 
+    # to recanonized again 
+    s_q = tf.convert_to_tensor(
+        s_pred,
+        dtype=tf.float32,
+    )
+    s_q_cal = tf.convert_to_tensor(
+        predictions_for_formatter["subs_pred"],
+        dtype=tf.float32,
     )
 
-    y_true_b = yb["subs_pred"]  # (B,H,1)
-    y_true_list.append(y_true_b)
+else:
+    s_q = None
 
-    if QUANTILES:
-        # s_pred_b is BHQO: (B,H,Q,1)
-        s_q_list.append(s_pred_b)
-
-    # Optional censor mask aligned to (B,H,1).
-    if CENSOR_FLAG_IDX is not None:
-        H = tf.shape(y_true_b)[1]
+# -------------------------------------------------------------------------
+# Optional: build censor mask ONLY (no model calls).
+# -------------------------------------------------------------------------
+mask = None
+if CENSOR_FLAG_IDX is not None:
+    mask_list = []
+    for xb, yb in with_progress(
+        ds_eval,
+        desc="Censor mask (no preds)",
+    ):
+        H = tf.shape(yb["subs_pred"])[1]
         mask_b = build_censor_mask(
             xb,
             H,
@@ -2704,30 +2750,18 @@ for xb, yb in with_progress(
         )
         mask_list.append(mask_b)
 
-# Stack collected batches -> full tensors.
-y_true = (
-    tf.concat(y_true_list, axis=0)
-    if y_true_list else None
-)  # (N,H,1)
-
-s_q = (
-    tf.concat(s_q_list, axis=0)
-    if s_q_list else None
-)  # (N,H,Q,1)
-
-mask = (
-    tf.concat(mask_list, axis=0)
-    if mask_list else None
-)  # (N,H,1) bool
+    mask = (
+        tf.concat(mask_list, axis=0)
+        if mask_list else None
+    )  # (N,H,1) bool
 
 # -------------------------------------------------------------------------
 # Sanity check (optional but very useful):
 #   Compare manual coverage/sharpness vs helper fns.
-#   This catches axis mistakes immediately.
 # -------------------------------------------------------------------------
-if DEBUG and (y_true is not None) and (s_q is not None):
-    q10 = s_q[..., 0, :]   # (N,H,1)
-    q90 = s_q[..., -1, :]  # (N,H,1)
+if DEBUG and (QUANTILES and (s_q is not None)):
+    q10 = s_q[..., 0, :]    # (N,H,1)
+    q90 = s_q[..., -1, :]   # (N,H,1)
 
     cov_manual = tf.reduce_mean(
         tf.cast(
@@ -2757,34 +2791,15 @@ if DEBUG and (y_true is not None) and (s_q is not None):
     print("cov_per_h :", cov_per_h.numpy())
 
 # -------------------------------------------------------------------------
-# 2.3.a Coverage / sharpness in:
-#   - scaled (model space)
-#   - physical (inverse-scaled)
-#
-# Important rule:
-#   inverse scaling MUST use scaler entry keys
-#   (SUBS_SCALER_KEY), not dataframe col names.
+# 2.3.b Coverage / sharpness in scaled space (model space).
 # -------------------------------------------------------------------------
-cov80_uncal_phys = None
-cov80_cal_phys = None
-sharp80_uncal_phys = None
-sharp80_cal_phys = None
-
-s_q_cal = None
-
-_subs_scale_key = SUBS_SCALER_KEY
-    
-if QUANTILES and (y_true is not None) and (s_q is not None):
-    # ---- scaled-space metrics ----
+if QUANTILES and (s_q is not None):
     cov80_uncal = float(
         coverage80_fn(y_true, s_q).numpy()
     )
     sharp80_uncal = float(
         sharpness80_fn(y_true, s_q).numpy()
     )
-
-    # Apply interval calibrator to full BHQO tensor.
-    s_q_cal = apply_calibrator_to_subs(cal80, s_q)
 
     cov80_cal = float(
         coverage80_fn(y_true, s_q_cal).numpy()
@@ -2793,16 +2808,35 @@ if QUANTILES and (y_true is not None) and (s_q is not None):
         sharpness80_fn(y_true, s_q_cal).numpy()
     )
 
-    # ---- physical-space metrics ----
+# -------------------------------------------------------------------------
+# 2.3.c Coverage / sharpness in physical space (inverse-scaled).
+# -------------------------------------------------------------------------
+if QUANTILES and (s_q is not None):
+    y_true_np = (
+        y_true.numpy() if hasattr(y_true, "numpy")
+        else np.asarray(y_true)
+    )
+    s_q_np = (
+        s_q.numpy() if hasattr(s_q, "numpy")
+        else np.asarray(s_q)
+    )
+    s_q_cal_np = (
+        s_q_cal.numpy() if hasattr(s_q_cal, "numpy")
+        else np.asarray(s_q_cal)
+    )
 
     y_true_phys_np = inverse_scale_target(
-        y_true.numpy() if hasattr(y_true, "numpy")
-        else y_true,
+        y_true_np,
         scaler_info=scaler_info_dict,
         target_name=_subs_scale_key,
     )
     s_q_phys_np = inverse_scale_target(
-        s_q.numpy() if hasattr(s_q, "numpy") else s_q,
+        s_q_np,
+        scaler_info=scaler_info_dict,
+        target_name=_subs_scale_key,
+    )
+    s_q_cal_phys_np = inverse_scale_target(
+        s_q_cal_np,
         scaler_info=scaler_info_dict,
         target_name=_subs_scale_key,
     )
@@ -2815,6 +2849,10 @@ if QUANTILES and (y_true is not None) and (s_q is not None):
         s_q_phys_np,
         dtype=tf.float32,
     )
+    s_q_cal_phys_tf = tf.convert_to_tensor(
+        s_q_cal_phys_np,
+        dtype=tf.float32,
+    )
 
     cov80_uncal_phys = float(
         coverage80_fn(y_true_phys_tf, s_q_phys_tf).numpy()
@@ -2822,31 +2860,12 @@ if QUANTILES and (y_true is not None) and (s_q is not None):
     sharp80_uncal_phys = float(
         sharpness80_fn(y_true_phys_tf, s_q_phys_tf).numpy()
     )
-
-    if s_q_cal is not None:
-        s_q_cal_phys_np = inverse_scale_target(
-            s_q_cal.numpy()
-            if hasattr(s_q_cal, "numpy") else s_q_cal,
-            scaler_info=scaler_info_dict,
-            target_name=_subs_scale_key,
-        )
-        s_q_cal_phys_tf = tf.convert_to_tensor(
-            s_q_cal_phys_np,
-            dtype=tf.float32,
-        )
-
-        cov80_cal_phys = float(
-            coverage80_fn(
-                y_true_phys_tf,
-                s_q_cal_phys_tf,
-            ).numpy()
-        )
-        sharp80_cal_phys = float(
-            sharpness80_fn(
-                y_true_phys_tf,
-                s_q_cal_phys_tf,
-            ).numpy()
-        )
+    cov80_cal_phys = float(
+        coverage80_fn(y_true_phys_tf, s_q_cal_phys_tf).numpy()
+    )
+    sharp80_cal_phys = float(
+        sharpness80_fn(y_true_phys_tf, s_q_cal_phys_tf).numpy()
+    )
 
 # -------------------------------------------------------------------------
 # Debug: scaling should not change coverage, only sharpness.
@@ -2870,15 +2889,21 @@ if DEBUG and (cov80_uncal is not None):
         sharp80_cal_phys,
     )
 
-    yt_np = (
-        y_true.numpy() if hasattr(y_true, "numpy")
-        else np.asarray(y_true)
-    )
-    if np.allclose(y_true_phys_np, yt_np, atol=1e-12, rtol=0):
-        print(
-            "[WARN] inverse_scale_target() no-op "
-            "on y_true (check scaler key)."
+    if y_true_phys_np is not None:
+        yt_np = (
+            y_true.numpy() if hasattr(y_true, "numpy")
+            else np.asarray(y_true)
         )
+        if np.allclose(
+            y_true_phys_np,
+            yt_np,
+            atol=1e-12,
+            rtol=0,
+        ):
+            print(
+                "[WARN] inverse_scale_target() no-op "
+                "(check scaler key / scaler entry)."
+            )
 
     _ = debug_tensor_interval(
         y_true,
@@ -2896,10 +2921,10 @@ if DEBUG and (cov80_uncal is not None):
     )
 
 # -------------------------------------------------------------------------
-# 2.3.b Optional censor-stratified MAE (physical units).
+# 2.3.d Optional censor-stratified MAE (physical units).
 #
-# - Uses q50 in quantile mode.
-# - Computes MAE separately for censored vs uncensored.
+# Uses median from CALIBRATED quantiles to stay consistent with
+# the CSV diagnostics pipeline.
 # -------------------------------------------------------------------------
 _med_idx = None
 if QUANTILES:
@@ -2911,46 +2936,18 @@ if QUANTILES:
         )
     )
 
-if (y_true is not None) and (mask is not None):
-    if QUANTILES and (s_q is not None):
-        s_med = s_q[..., _med_idx, :]  # (N,H,1)
+if (mask is not None) and (y_true is not None):
+    if QUANTILES and (s_q_cal is not None):
+        s_med = s_q_cal[..., _med_idx, :]  # (N,H,1)
+    elif QUANTILES and (s_q is not None):
+        s_med = s_q[..., _med_idx, :]      # (N,H,1)
     else:
-        # Fallback for point mode: re-run preds and
-        # build an (N,H,1) tensor.
-        s_pred_list = []
-        for xb2, yb2 in with_progress(
-            ds_eval,
-            desc="Point preds for censor-MAE",
-        ):
-            out2 = model_inf(xb2, training=False)
-            s_pred = subs_point_from_out(
-                model_inf, out2, 
-                quantiles=QUANTILES, 
-                med_idx=_med_idx 
-                )
-            # s_pred = out2["subs_pred"]
-
-            s_pred = canonicalize_BHQO(
-                s_pred,
-                y_true=yb2["subs_pred"],
-                q_values=QUANTILES,
-                n_q=(
-                    len(QUANTILES) if QUANTILES else None
-                ),
-                layout="BHQO",
-                enforce_monotone=True,
-                verbose=0,
-                log_fn=(lambda *_: None),
-            )
-            s2 = s_pred[:, :, int(_med_idx), :]
-            s_pred_list.append(s2)
-
-        if not s_pred_list:
-            raise RuntimeError(
-                "No batches collected for censor-MAE."
-            )
-
-        s_med = tf.concat(s_pred_list, axis=0)
+        # Point-mode fallback: use the same tensor that was
+        # passed to format_and_forecast (no re-predict).
+        s_med = tf.convert_to_tensor(
+            predictions_for_formatter["subs_pred"],
+            dtype=tf.float32,
+        )
 
     y_true_phys_np = inverse_scale_target(
         y_true.numpy() if hasattr(y_true, "numpy")
@@ -2974,22 +2971,6 @@ if (y_true is not None) and (mask is not None):
         dtype=tf.float32,
     )
 
-    if DEBUG:
-        yt_np = (
-            y_true.numpy() if hasattr(y_true, "numpy")
-            else np.asarray(y_true)
-        )
-        if np.allclose(
-            y_true_phys_np,
-            yt_np,
-            atol=1e-12,
-            rtol=0,
-        ):
-            print(
-                "[WARN] censor-MAE inverse scaling "
-                "no-op (check scaler key)."
-            )
-
     mask_f = tf.cast(mask, tf.float32)
     num_cens = tf.reduce_sum(mask_f) + 1e-8
     num_unc = tf.reduce_sum(1.0 - mask_f) + 1e-8
@@ -2997,9 +2978,7 @@ if (y_true is not None) and (mask is not None):
     abs_err = tf.abs(y_true_phys - s_med_phys)
 
     mae_cens = tf.reduce_sum(abs_err * mask_f) / num_cens
-    mae_unc = tf.reduce_sum(
-        abs_err * (1.0 - mask_f)
-    ) / num_unc
+    mae_unc = tf.reduce_sum(abs_err * (1.0 - mask_f)) / num_unc
 
     censor_metrics = {
         "flag_name": CENSOR_FLAG_NAME,
@@ -3032,8 +3011,7 @@ if DEBUG and (y_true is not None):
         float(np.mean(yt_phys)),
         float(np.var(yt_phys)),
     )
-
-
+# %
 # =============================================================================
 # Build + save evaluation payload JSON
 #
@@ -3182,7 +3160,8 @@ except Exception as e:
         "[Warn] unit conversion skipped "
         f"(mode={_units_mode}, scope={_units_scope}): {e}"
     )
-
+    
+#%
 # -------------------------------------------------------------------------
 # Save JSON (pretty printed for inspection).
 # -------------------------------------------------------------------------

@@ -163,6 +163,7 @@ def load_ablation_jsonl(path: str) -> pd.DataFrame:
                 continue
             rows.append(json.loads(line))
     return pd.DataFrame(rows)
+
 def name_of(obj: object) -> str:
     """
     Return a human-readable name for an object.
