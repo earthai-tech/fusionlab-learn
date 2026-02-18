@@ -35,18 +35,17 @@ from tensorflow.keras.callbacks import (
     TerminateOnNaN,
 )
 
-from fusionlab.api.util import get_table_size
+from fusionlab._optdeps import with_progress
 from fusionlab.backends.devices import configure_tf_from_cfg
-from fusionlab.compat import (
+from fusionlab.compat.keras import (
     load_inference_model,
     load_model_from_tfv2,
     save_manifest,
-    save_model, 
-    normalize_predict_output
+    save_model,
 )
-from fusionlab.deps import with_progress
-from fusionlab.registry import _find_stage1_manifest
-from fusionlab.utils import (
+from fusionlab.compat.keras_fit import normalize_predict_output
+from fusionlab.registry.utils import _find_stage1_manifest
+from fusionlab.utils.nat_utils import (
     build_censor_mask,
     ensure_input_shapes,
     extract_preds,
@@ -62,60 +61,76 @@ from fusionlab.utils import (
     subs_point_from_out, 
     serialize_subs_params, 
     save_ablation_record, 
-    audit_stage2_handshake, 
-    should_audit,
+)
+
+from fusionlab.api.util import get_table_size
+from fusionlab.utils.audit_utils import audit_stage2_handshake, should_audit
+from fusionlab.utils.generic_utils import (
     default_results_dir,
     ensure_directory_exists,
     getenv_stripped,
     print_config_table,
     save_all_figures,
-    calibrate_quantile_forecasts,
+)
+from fusionlab.utils.calibrate import calibrate_quantile_forecasts
+from fusionlab.utils.forecast_utils import ( 
     format_and_forecast, 
-    evaluate_forecast,
+    evaluate_forecast
+)
+from fusionlab.utils.scale_metrics import (
     evaluate_point_forecast,
-    inverse_scale_target, 
-    canonicalize_BHQO,
-    deg_to_m_from_lat,
+    inverse_scale_target,
+    # per_horizon_metrics,
+    # point_metrics,
+)
+from fusionlab.utils.shapes import canonicalize_BHQO
+
+from fusionlab.utils.spatial_utils import deg_to_m_from_lat
+from fusionlab.utils.subsidence_utils import ( 
     convert_eval_payload_units, 
     postprocess_eval_json
-)
+    )
+from fusionlab.plot.forecast import plot_eval_future
 
-from fusionlab.plot import plot_eval_future
-from fusionlab.nn import (
-    _logs_to_py, _to_py,
+from fusionlab.nn.pinn.geoprior.models import GeoPriorSubsNet, PoroElasticSubsNet
+from fusionlab.nn.pinn.geoprior.utils import finalize_scaling_kwargs
+from fusionlab.nn.pinn.geoprior.debugs import debug_model_reload
+from fusionlab.nn.pinn.geoprior.plot import (
+    autoplot_geoprior_history,
+    plot_physics_values_in,
+)
+from fusionlab.nn.pinn.geoprior.payloads import load_physics_payload
+from fusionlab.nn.pinn.geoprior.scaling import (
+    override_scaling_kwargs,
+)
+from fusionlab.nn.pinn.op import extract_physical_parameters
+from fusionlab.nn._shapes import (
+    _logs_to_py,
     debug_quantile_crossing_np,
+    canonicalize_BHQO_quantiles_np, 
     debug_tensor_interval,
     debug_val_interval,
-    make_weighted_pinball,
+)
+
+from fusionlab.nn.losses import make_weighted_pinball
+from fusionlab.nn.keras_metrics import (
     Coverage80,
     MAEQ50,
     MSEQ50,
     Sharpness80,
+    _to_py,
     coverage80_fn,
     sharpness80_fn,
+)
+from fusionlab.nn.calibration import (
     apply_calibrator_to_subs,
     fit_interval_calibrator_on_val,
-    LambdaOffsetScheduler, 
-    plot_history_in
 )
-from fusionlab.nn.pinn import (
-    GeoPriorSubsNet, 
-    PoroElasticSubsNet,
-    finalize_scaling_kwargs,
-    debug_model_reload,
-    autoplot_geoprior_history,
-    plot_physics_values_in,
-    load_physics_payload,
-    override_scaling_kwargs,
-    extract_physical_parameters,
-) 
+from fusionlab.nn.callbacks import LambdaOffsetScheduler
+from fusionlab.nn.utils import plot_history_in
 
-from fusionlab.params import ( 
-    FixedGammaW, 
-    FixedHRef, 
-    LearnableKappa, 
-    LearnableMV
-)
+from fusionlab.params import FixedGammaW, FixedHRef, LearnableKappa, LearnableMV
+#%%
 
 # Global runtime settings (warnings / TF logs)
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -125,7 +140,7 @@ tf.get_logger().setLevel("ERROR")
 if hasattr(tf, "autograph") and hasattr(tf.autograph, "set_verbosity"):
     tf.autograph.set_verbosity(0)
 
-#%
+
 # =============================================================================
 # Config / Paths
 # =============================================================================
@@ -535,6 +550,25 @@ elif MODEL_NAME == "PoroElasticSubsNet":
 # -------------------------------------------------------------------------
 # Column naming (manifest schema v3.2 compatible)
 # -------------------------------------------------------------------------
+
+# Targets & columns (for formatter)
+# cols_cfg = cfg.get("cols", {})
+# SUBSIDENCE_COL = cols_cfg.get("subsidence", "subsidence")
+# GWL_COL        = cols_cfg.get("gwl", "GWL")
+
+# cols_cfg = cfg.get("cols", {}) or {}
+
+# SUBS_MODEL_COL = cols_cfg.get("subs_model", cols_cfg.get("subsidence", "subsidence"))
+# GWL_MODEL_COL  = cols_cfg.get("gwl_model",  cols_cfg.get("gwl", "GWL"))
+# H_MODEL_COL    = cols_cfg.get("h_field_model", cols_cfg.get("h_field", "soil_thickness"))
+
+
+# #%
+# # Keep requested names only for logging/UI if you want
+# # SUBS_REQUESTED_COL = cols_cfg.get("subsidence", "subsidence")
+# # GWL_REQUESTED_COL  = cols_cfg.get("gwl", "GWL")
+# SUBSIDENCE_COL = cols_cfg.get("subsidence", "subsidence")
+# GWL_COL        = cols_cfg.get("gwl", "GWL")
 
 cols_cfg = cfg.get("cols", {}) or {}
 
@@ -963,6 +997,9 @@ print("[Info] coords_normalized:", coords_normalized,
 print("[Info] coords_in_degrees:", coords_in_degrees,
       "deg_to_m_lon:", deg_to_m_lon, "deg_to_m_lat:", deg_to_m_lat)
 print("[Info] H_scale_si:", H_scale_si, "H_bias_si:", H_bias_si)
+
+
+# ---END ADDED 
 
 # Load scaler_info mapping (dict or path)
 scaler_info_dict = load_scaler_info(encoders)
@@ -2157,7 +2194,8 @@ if DEBUG and (model_inf is not subs_model_inst):
         top_weights=30,
         log_fn=print,
     )
-#%%
+
+
 # =============================================================================
 # Calibrate on validation set (BEFORE formatting)
 # =============================================================================
@@ -2190,6 +2228,37 @@ X_fore = ensure_input_shapes(
     forecast_horizon=FORECAST_HORIZON_YEARS,
 )
 y_fore_fmt = map_targets_for_training(y_fore)
+
+
+def _pick_q50_np(arr, quantiles, y_true=None):
+    a = np.asarray(arr)
+
+    a = canonicalize_BHQO(
+        a,
+        y_true=y_true,
+        q_values=quantiles,
+        n_q=len(quantiles),
+        enforce_monotone=False,
+        verbose=0,
+        # log_fn=(lambda *_: None),
+    )
+
+    q = np.asarray(quantiles, dtype=float)
+    q50_i = int(np.argmin(np.abs(q - 0.5)))
+    a = np.asarray(a)
+    return a[:, :, q50_i, 0]
+
+def _map_pred_list_by_mae(pred_list, y_subs, quantiles):
+    y = np.asarray(y_subs)[:, :, 0]
+    p0 = _pick_q50_np(pred_list[0], quantiles, y_true=y_subs)
+    p1 = _pick_q50_np(pred_list[1], quantiles, y_true=y_subs)
+
+    mae0 = float(np.mean(np.abs(p0 - y)))
+    mae1 = float(np.mean(np.abs(p1 - y)))
+
+    if mae0 <= mae1:
+        return {"subs_pred": pred_list[0], "gwl_pred": pred_list[1]}
+    return {"subs_pred": pred_list[1], "gwl_pred": pred_list[0]}
 
 
 print(f"\nPredicting on {dataset_name_for_forecast}...")
@@ -2225,98 +2294,46 @@ if QUANTILES:
     y_subs_true = y_fore_fmt.get("subs_pred")
     y_gwl_true = y_fore_fmt.get("gwl_pred")
 
-    # s_pred = canonicalize_BHQO( # model already
-    #     s_pred,
-    #     y_true=y_subs_true,
-    #     q_values=QUANTILES,
-    #     n_q=len(QUANTILES),
-    #     enforce_monotone=False,
-    #     layout="BHQO",
-    #     verbose=1 if DEBUG else 0,
-    #     log_fn=_log,
-    # )
+    s_pred = canonicalize_BHQO(
+        s_pred,
+        y_true=y_subs_true,
+        q_values=QUANTILES,
+        n_q=len(QUANTILES),
+        enforce_monotone=False,
+        verbose=1 if DEBUG else 0,
+        log_fn=_log,
+    )
 
-    # h_pred = canonicalize_BHQO(
-    #     h_pred,
-    #     y_true=y_gwl_true,
-    #     q_values=QUANTILES,
-    #     n_q=len(QUANTILES),
-    #     enforce_monotone=False,
-    #     layout="BHQO",
-    #     verbose=1 if DEBUG else 0,
-    #     log_fn=_log,
-    # )
-    
-    # s_pred, s_layout = canonicalize_BHQO(
-    #     s_pred,
-    #     y_true=y_subs_true,
-    #     q_values=QUANTILES,
-    #     n_q=len(QUANTILES),
-    #     layout=None,
-    #     enforce_monotone=False,
-    #     return_layout=True,
-    #     verbose=1 if DEBUG else 0,
-    #     log_fn=_log,
-    # )
-    
-    # h_pred, h_layout = canonicalize_BHQO(
-    #     h_pred,
-    #     y_true=y_gwl_true,
-    #     q_values=QUANTILES,
-    #     n_q=len(QUANTILES),
-    #     layout=None,
-    #     enforce_monotone=False,
-    #     return_layout=True,
-    #     verbose=1 if DEBUG else 0,
-    #     log_fn=_log,
-    # )
-    s_pred_cal = apply_calibrator_to_subs(
-            cal80,
-            s_pred,
-            q_values=QUANTILES,
-        )
-
-    # if DEBUG:
-    #     _log(
-    #         f"[canon] subs_layout={s_layout} "
-    #         f"gwl_layout={h_layout}"
-    #     )
+    h_pred = canonicalize_BHQO(
+        h_pred,
+        y_true=y_gwl_true,
+        q_values=QUANTILES,
+        n_q=len(QUANTILES),
+        enforce_monotone=False,
+        verbose=1 if DEBUG else 0,
+        log_fn=_log,
+    )
 
     # Calibrate subsidence quantiles only.
-    # s_pred_cal = apply_calibrator_to_subs(
-    #     cal80,
-    #     s_pred,
-    # )
-    
-    # s_pred_cal = canonicalize_BHQO(
-    #     s_pred_cal,
-    #     y_true=y_subs_true,
-    #     q_values=QUANTILES,
-    #     n_q=len(QUANTILES),
-    #     layout=None,
-    #     enforce_monotone=True,
-    #     verbose=0,
-    #     log_fn=_silent,
-    # )
-    
+    s_pred_cal = apply_calibrator_to_subs(cal80, s_pred)
 
-    # s_pred_cal = canonicalize_BHQO(
-    #     s_pred_cal,
-    #     y_true=y_subs_true,
-    #     q_values=QUANTILES,
-    #     n_q=len(QUANTILES),
-    #     enforce_monotone=True,
-    #     layout="BHQO",
-    #     verbose=0,
-    #     log_fn=_silent,
-    # )
+    # After calibration, enforce monotone intervals.
+    s_pred_cal = canonicalize_BHQO(
+        s_pred_cal,
+        y_true=y_subs_true,
+        q_values=QUANTILES,
+        n_q=len(QUANTILES),
+        enforce_monotone=True,
+        verbose=0,
+        log_fn=_silent,
+    )
 
-    # q50_i = int(np.argmin(
-    #     np.abs(np.asarray(QUANTILES) - 0.5)
-    # ))
+    q50_i = int(np.argmin(
+        np.abs(np.asarray(QUANTILES) - 0.5)
+    ))
 
-    # s_q50 = s_pred_cal[:, :, q50_i, 0]
-    # h_q50 = h_pred[:, :, q50_i, 0]
+    s_q50 = s_pred_cal[:, :, q50_i, 0]
+    h_q50 = h_pred[:, :, q50_i, 0]
 
     predictions_for_formatter = {
         "subs_pred": s_pred_cal,
@@ -2328,13 +2345,13 @@ else:
         "gwl_pred": h_pred,
     }
 
-# if DEBUG and QUANTILES:
-#     debug_quantile_crossing_np(
-#         predictions_for_formatter["subs_pred"],
-#         n_q=len(QUANTILES),
-#         name="subs_pred",
-#         verbose=1,
-#     )
+if DEBUG and QUANTILES:
+    debug_quantile_crossing_np(
+        predictions_for_formatter["subs_pred"],
+        n_q=len(QUANTILES),
+        name="subs_pred",
+        verbose=1,
+    )
 
 ev_point = evaluate_point_forecast(
     model_inf,
@@ -2408,7 +2425,7 @@ future_grid = np.arange(
     FORECAST_START_YEAR + FORECAST_HORIZON_YEARS,
     dtype=float,
 )
-#%
+#%%
 df_eval, df_future = format_and_forecast(
     y_pred=predictions_for_formatter,
     y_true=y_true_for_format,
@@ -2517,62 +2534,46 @@ if df_eval is not None and not df_eval.empty:
         ),
         verbose=1,
     )
-#%%
-# =============================================================================
-# Evaluate metrics & physics on the forecasting split
-# (+ optional censoring + interval calibration diagnostics)
-#
-# Contract:
-#   - Quantile tensors are ALWAYS treated as BHQO:
-#       (batch, horizon, quantile, output)
-#   - We NEVER "guess" layout when H == Q.
-#   - We enforce BHQO explicitly via canonicalize_BHQO(
-#       layout="BHQO"
-#     )
-# =============================================================================
 
+#%
+# =============================================================================
+# Evaluate metrics & physics on the forecasting split (+ optional censoring)
+# =============================================================================
 eval_results = {}
 phys = {}
 
-# -------------------------------------------------------------------------
-# Build evaluation dataset.
-#
-# IMPORTANT:
-#   Reuse make_tf_dataset() so:
-#     - keys match training exactly,
-#     - shapes match the model signature,
-#     - no silent differences vs from_tensor_slices().
-# -------------------------------------------------------------------------
+# Better: reuse make_tf_dataset so keys/shapes match training exactly
+# (instead of tf.data.Dataset.from_tensor_slices)
 ds_eval = make_tf_dataset(
-    X_fore,
-    y_fore,
+    X_fore, y_fore,                 
     batch_size=BATCH_SIZE,
     shuffle=False,
     mode=MODE,
     forecast_horizon=FORECAST_HORIZON_YEARS,
 )
 
-# -------------------------------------------------------------------------
-# Optional debug:
-#   Inspect one batch end-to-end to confirm:
-#     - model output rank/shape,
-#     - canonicalization is stable and keeps BHQO.
-# -------------------------------------------------------------------------
 if DEBUG:
     xb, yb = next(iter(ds_eval))
     out = model_inf(xb, training=False)
-
     sp = out["subs_pred"]
     print("subs_pred shape:", sp.shape)
-    print("subs_pred dyn  :", tf.shape(sp).numpy())
+    print("subs_pred static:", sp.shape)
+    print("subs_pred dyn   :", tf.shape(sp).numpy())
+    
+    # Try both interpretations explicitly:
+    sp_fix = canonicalize_BHQO(
+        sp,
+        y_true=yb["subs_pred"],
+        q_values=QUANTILES,
+        n_q=(len(QUANTILES) if QUANTILES else None),
+        enforce_monotone=False,
+        verbose=1,
+        log_fn=(lambda *_: None),
+    )
+    
+    print("canonicalized shape:", sp_fix.shape)
 
-
-# -------------------------------------------------------------------------
-# Dataset validation debug (safe):
-#   Confirms that:
-#     - ds_eval yields what evaluate()/call expects,
-#     - quantile axes look sane on a couple of batches.
-# -------------------------------------------------------------------------
+# 1) Dataset debug (safe)
 _ = debug_val_interval(
     model_inf,
     ds_eval,
@@ -2580,75 +2581,47 @@ _ = debug_val_interval(
     max_batches=2,
     verbose=1,
 )
-
-# -------------------------------------------------------------------------
-# (Re)compile after loading with compile=False.
-#
-# Why:
-#   Keras requires compile() to run model.evaluate().
-#   We use a dummy optimizer (lr=0) because we are
-#   only evaluating, not training.
-# -------------------------------------------------------------------------
+# after loading with compile=False
 if not USE_IN_MEMORY_MODEL:
     model_inf.compile(
-        optimizer=tf.keras.optimizers.SGD(
-            learning_rate=0.0,
-        ),
+        optimizer=tf.keras.optimizers.SGD(learning_rate=0.0),  # dummy is fine
         loss=loss_arg,
         loss_weights=lossw_arg,
         metrics=metrics_compile,
         **physics_loss_weights,
     )
 
-# -------------------------------------------------------------------------
-# 2.1 Standard Keras evaluate() + physics diagnostics.
-#
-# Output:
-#   eval_results : JSON-safe scalar dict
-#   phys         : subset of epsilon_* diagnostics
-# -------------------------------------------------------------------------
-try:
+# --- 2.1 Standard Keras evaluate() + physics metrics ---
+try:# Use model_inf instead of subs_model_inst
     eval_raw = model_inf.evaluate(
         ds_eval,
         return_dict=True,
         verbose=1,
     )
-
+    
     eval_results = _logs_to_py(eval_raw)
     print("Evaluation:", eval_results)
 
-    # v3.2+: include epsilon_gw if present.
-    phys_keys = (
-        "epsilon_prior",
-        "epsilon_cons",
-        "epsilon_gw",
-    )
+    # v3.2: include epsilon_gw if available
+    phys_keys = ("epsilon_prior", "epsilon_cons", "epsilon_gw")
     phys = {
         k: float(_to_py(eval_raw[k]))
         for k in phys_keys
         if k in eval_results
     }
     if phys:
-        print("Physics diagnostics:", phys)
+        print("Physics diagnostics (from evaluate):", phys)
 
 except Exception as e:
-    print(
-        "[Warn] Evaluation failed "
-        f"(metrics + physics): {e}"
-    )
+    print(f"[Warn] Evaluation failed (metrics + physics): {e}")
     eval_results, phys = {}, {}
 
-# -------------------------------------------------------------------------
-# 2.2 Export physics payload on the same split used above.
-#
-# Notes:
-#   - Use model_inf (not a stale instance).
-#   - Use ds_eval so the payload matches evaluate().
-# -------------------------------------------------------------------------
+# --- 2.2 Save physics payload (use the same model & same ds split you evaluated) ---
 phys_npz_path = os.path.join(
     RUN_OUTPUT_PATH,
     f"{CITY_NAME}_phys_payload_run_val.npz",
-)
+    # f"{CITY_NAME}_phys_payload_{dataset_name_for_forecast.lower()}.npz"
+ )
 
 try:
     _ = model_inf.export_physics_payload(
@@ -2667,243 +2640,189 @@ try:
         },
     )
     print(f"[OK] Saved physics payload -> {phys_npz_path}")
-
-except Exception as e:
-    print(f"[Warn] Physics payload export failed: {e}")
-# %
-# =============================================================================
-# SM3: Interval diagnostics (+ optional censor metrics)
-# =============================================================================
-#
-# Fix C:
-#   Keep interval metrics consistent with the CSV diagnostics by
-#   reusing the SAME tensors used by format_and_forecast():
-#     - y_true  := y_fore_fmt["subs_pred"]
-#     - s_q     := s_pred         (uncalibrated)
-#     - s_q_cal := predictions_for_formatter["subs_pred"] (calibrated)
-#
-#   This avoids a second inference pass via:
-#     out = model_inf(xb)
-#     s_pred_b, _ = extract_preds(...)
-#   which can silently flip quantile/horizon axes when H == Q.
-# =============================================================================
-
-cov80_uncal = None
-cov80_cal = None
-sharp80_uncal = None
-sharp80_cal = None
-
-cov80_uncal_phys = None
-cov80_cal_phys = None
-sharp80_uncal_phys = None
-sharp80_cal_phys = None
-
-censor_metrics = None
-
-y_true_phys_np = None
-s_q_cal = None
-
-_subs_scale_key = SUBS_SCALER_KEY
-
+except Exception as e : 
+    print(f"Failed to saved physic payload: {e}")
+     
+#%%
 # -------------------------------------------------------------------------
-# 2.3.a Build tensors from the SAME sources used by CSV formatting.
+# SM3: log-offset diagnostics (δ_K, δ_Ss, δ_Hd, δ_tau)
 # -------------------------------------------------------------------------
-y_true = tf.convert_to_tensor(
-    y_fore_fmt["subs_pred"],
-    dtype=tf.float32,
-)
 
-if QUANTILES:
-    # spred and scal are already canolized, so no need 
-    # to recanonized again 
-    s_q = tf.convert_to_tensor(
-        s_pred,
-        dtype=tf.float32,
+# --- 2.3 Interval diagnostics + optional censor-stratified MAE ---
+cov80_uncal = cov80_cal = sharp80_uncal = sharp80_cal = None
+censor_metrics = None   # will become a dict if we have a flag
+
+y_true_list, s_q_list, mask_list = [], [], []
+
+
+for xb, yb in with_progress(ds_eval, desc="Interval-Censoring Diagnostics"):
+    out = model_inf(xb, training=False)
+
+    s_pred_b, _ = extract_preds(model_inf, out)   # <- (B,H,1) or (B,H,Q,1)
+    s_pred_b = canonicalize_BHQO(
+        s_pred_b,
+        y_true=yb["subs_pred"],
+        q_values=QUANTILES,
+        n_q=(len(QUANTILES) if QUANTILES else None),
+        enforce_monotone=True,
+        verbose=0,
+        log_fn=(lambda *_: None),
     )
-    s_q_cal = tf.convert_to_tensor(
-        predictions_for_formatter["subs_pred"],
-        dtype=tf.float32,
-    )
+    
+    # ----------------------------NEW---------------
+    # s_pred_b = canonicalize_BHQO_quantiles_np(
+    #     s_pred_b,
+    #     n_q=len(QUANTILES),
+    #     verbose=0,
+    #     log_fn=print,
+    # )
+    
+    # # If you still want monotone quantiles (optional):
+    # s_pred_b = np.sort(s_pred_b, axis=2)
+    
+    # ------------------------------
+    y_true_b = yb["subs_pred"]                    # (B,H,1)
+    y_true_list.append(y_true_b)
 
-else:
-    s_q = None
+    if QUANTILES:
+        # s_pred_b is already (B,H,Q,1)
+        s_q_list.append(s_pred_b)
 
-# -------------------------------------------------------------------------
-# Optional: build censor mask ONLY (no model calls).
-# -------------------------------------------------------------------------
-mask = None
-if CENSOR_FLAG_IDX is not None:
-    mask_list = []
-    for xb, yb in with_progress(
-        ds_eval,
-        desc="Censor mask (no preds)",
-    ):
-        H = tf.shape(yb["subs_pred"])[1]
+    if CENSOR_FLAG_IDX is not None:
+        H = tf.shape(y_true_b)[1]
         mask_b = build_censor_mask(
-            xb,
-            H,
-            CENSOR_FLAG_IDX,
-            CENSOR_THRESH,
-            source=(CENSOR_MASK_SOURCE or "dynamic"),
+            xb, H, CENSOR_FLAG_IDX, CENSOR_THRESH,
+            source=CENSOR_MASK_SOURCE or "dynamic",
             reduce_time="any",
             align="broadcast",
         )
         mask_list.append(mask_b)
+#%%
+# # Stack what we collected
+y_true = tf.concat(y_true_list, axis=0) if y_true_list else None  # (N,H,1)
+s_q = tf.concat(s_q_list, axis=0) if s_q_list else None           # (N,H,Q,1)
+mask = tf.concat(mask_list, axis=0) if mask_list else None        # (N,H,1) booleans
+#%
+#=========================test of axis shape 
+# s_q is (N,H,Q,1), y_true is (N,H,1)
+q10 = s_q[..., 0, :]      # (N,H,1)
+q90 = s_q[..., -1, :]     # (N,H,1)
 
-    mask = (
-        tf.concat(mask_list, axis=0)
-        if mask_list else None
-    )  # (N,H,1) bool
+cov_manual = tf.reduce_mean(
+    tf.cast((y_true >= q10) & (y_true <= q90), tf.float32)
+).numpy()
 
-# -------------------------------------------------------------------------
-# Sanity check (optional but very useful):
-#   Compare manual coverage/sharpness vs helper fns.
-# -------------------------------------------------------------------------
-if DEBUG and (QUANTILES and (s_q is not None)):
-    q10 = s_q[..., 0, :]    # (N,H,1)
-    q90 = s_q[..., -1, :]   # (N,H,1)
+print("cov_manual:", cov_manual)
+print("cov_fn    :", float(coverage80_fn(y_true, s_q).numpy()))
 
-    cov_manual = tf.reduce_mean(
-        tf.cast(
-            (y_true >= q10) & (y_true <= q90),
-            tf.float32,
-        )
-    ).numpy()
+sharp_manual = tf.reduce_mean((q90 - q10)).numpy()
+print("sharp_manual:", sharp_manual)
+print("sharp_fn    :", float(sharpness80_fn(y_true, s_q).numpy()))
 
-    sharp_manual = tf.reduce_mean(q90 - q10).numpy()
+hit = tf.cast((y_true >= q10) & (y_true <= q90), tf.float32)  # (N,H,1)
+cov_per_h = tf.reduce_mean(hit, axis=[0, 2])  # (H,)
 
-    print("cov_manual :", cov_manual)
-    print(
-        "cov_fn     :",
-        float(coverage80_fn(y_true, s_q).numpy()),
-    )
-    print("sharp_manual:", sharp_manual)
-    print(
-        "sharp_fn    :",
-        float(sharpness80_fn(y_true, s_q).numpy()),
-    )
+print("cov_per_h:", cov_per_h.numpy())
 
-    hit = tf.cast(
-        (y_true >= q10) & (y_true <= q90),
-        tf.float32,
-    )
-    cov_per_h = tf.reduce_mean(hit, axis=[0, 2])
-    print("cov_per_h :", cov_per_h.numpy())
+#%%
+# --- 2.3.a Interval coverage/sharpness (scaled + physical) ---------------
+cov80_uncal_phys = cov80_cal_phys = None
+sharp80_uncal_phys = sharp80_cal_phys = None
+s_q_cal = None
 
-# -------------------------------------------------------------------------
-# 2.3.b Coverage / sharpness in scaled space (model space).
-# -------------------------------------------------------------------------
-if QUANTILES and (s_q is not None):
-    cov80_uncal = float(
-        coverage80_fn(y_true, s_q).numpy()
-    )
-    sharp80_uncal = float(
-        sharpness80_fn(y_true, s_q).numpy()
-    )
+if QUANTILES and (y_true is not None) and (s_q is not None):
+    # ---------- SCALED metrics (as before) ----------
+    cov80_uncal   = float(coverage80_fn(y_true, s_q).numpy())
+    sharp80_uncal = float(sharpness80_fn(y_true, s_q).numpy())
+    # Calibrated (apply same calibrator to the whole tensor)
+    s_q_cal = apply_calibrator_to_subs(cal80, s_q)  # (N, H, Q, 1) # or keeps (N, H, 3, 1)
+    cov80_cal   = float(coverage80_fn(y_true, s_q_cal).numpy())
+    sharp80_cal = float(sharpness80_fn(y_true, s_q_cal).numpy())
 
-    cov80_cal = float(
-        coverage80_fn(y_true, s_q_cal).numpy()
-    )
-    sharp80_cal = float(
-        sharpness80_fn(y_true, s_q_cal).numpy()
-    )
+    # # ---------- PHYSICAL metrics (inverse-scaled) ----------
+    # # 1) inverse-transform y_true and quantiles to physical units
+    # y_true_phys_np = inverse_scale_target(
+    #     y_true,
+    #     scaler_info=scaler_info_dict,
+    #     target_name=SUBSIDENCE_COL,
+    # )
+    # s_q_phys_np = inverse_scale_target(
+    #     s_q,
+    #     scaler_info=scaler_info_dict,
+    #     target_name=SUBSIDENCE_COL,
+    # )
 
-# -------------------------------------------------------------------------
-# 2.3.c Coverage / sharpness in physical space (inverse-scaled).
-# -------------------------------------------------------------------------
-if QUANTILES and (s_q is not None):
-    y_true_np = (
-        y_true.numpy() if hasattr(y_true, "numpy")
-        else np.asarray(y_true)
-    )
-    s_q_np = (
-        s_q.numpy() if hasattr(s_q, "numpy")
-        else np.asarray(s_q)
-    )
-    s_q_cal_np = (
-        s_q_cal.numpy() if hasattr(s_q_cal, "numpy")
-        else np.asarray(s_q_cal)
-    )
+    # y_true_phys_tf = tf.convert_to_tensor(y_true_phys_np, dtype=tf.float32)
+    # s_q_phys_tf    = tf.convert_to_tensor(s_q_phys_np,    dtype=tf.float32)
 
+    # cov80_uncal_phys   = float(coverage80_fn(y_true_phys_tf, s_q_phys_tf).numpy())
+    # sharp80_uncal_phys = float(sharpness80_fn(y_true_phys_tf, s_q_phys_tf).numpy())
+
+    # if s_q_cal is not None:
+    #     s_q_cal_phys_np = inverse_scale_target(
+    #         s_q_cal,
+    #         scaler_info=scaler_info_dict,
+    #         target_name=SUBSIDENCE_COL,
+    #     )
+    #     s_q_cal_phys_tf = tf.convert_to_tensor(s_q_cal_phys_np, dtype=tf.float32)
+
+    #     cov80_cal_phys   = float(coverage80_fn(y_true_phys_tf, s_q_cal_phys_tf).numpy())
+    #     sharp80_cal_phys = float(sharpness80_fn(y_true_phys_tf, s_q_cal_phys_tf).numpy())
+
+    # ---------- PHYSICAL metrics (inverse-scaled) ----------
+    # IMPORTANT:
+    #   Stage-1 scaler_info is keyed by SUBS_SCALER_KEY (scaler entry name),
+    #   not by SUBSIDENCE_COL (df/output column name). Using SUBSIDENCE_COL
+    #   can silently skip or mis-apply inverse scaling.
+    _subs_scale_key = SUBS_SCALER_KEY
+    
+    # 1) inverse-transform y_true and quantiles to physical units
     y_true_phys_np = inverse_scale_target(
-        y_true_np,
+        y_true.numpy() if hasattr(y_true, "numpy") else y_true,
         scaler_info=scaler_info_dict,
         target_name=_subs_scale_key,
     )
     s_q_phys_np = inverse_scale_target(
-        s_q_np,
+        s_q.numpy() if hasattr(s_q, "numpy") else s_q,
         scaler_info=scaler_info_dict,
         target_name=_subs_scale_key,
     )
-    s_q_cal_phys_np = inverse_scale_target(
-        s_q_cal_np,
-        scaler_info=scaler_info_dict,
-        target_name=_subs_scale_key,
-    )
-
-    y_true_phys_tf = tf.convert_to_tensor(
-        y_true_phys_np,
-        dtype=tf.float32,
-    )
-    s_q_phys_tf = tf.convert_to_tensor(
-        s_q_phys_np,
-        dtype=tf.float32,
-    )
-    s_q_cal_phys_tf = tf.convert_to_tensor(
-        s_q_cal_phys_np,
-        dtype=tf.float32,
-    )
-
-    cov80_uncal_phys = float(
-        coverage80_fn(y_true_phys_tf, s_q_phys_tf).numpy()
-    )
-    sharp80_uncal_phys = float(
-        sharpness80_fn(y_true_phys_tf, s_q_phys_tf).numpy()
-    )
-    cov80_cal_phys = float(
-        coverage80_fn(y_true_phys_tf, s_q_cal_phys_tf).numpy()
-    )
-    sharp80_cal_phys = float(
-        sharpness80_fn(y_true_phys_tf, s_q_cal_phys_tf).numpy()
-    )
-
-# -------------------------------------------------------------------------
-# Debug: scaling should not change coverage, only sharpness.
-# -------------------------------------------------------------------------
-if DEBUG and (cov80_uncal is not None):
-    print("[SCALEDBG] subs scaler key:", _subs_scale_key)
-    print(
-        "[SCALEDBG] cov scaled vs phys:",
-        cov80_uncal,
-        cov80_uncal_phys,
-        "| cal:",
-        cov80_cal,
-        cov80_cal_phys,
-    )
-    print(
-        "[SCALEDBG] sharp scaled vs phys:",
-        sharp80_uncal,
-        sharp80_uncal_phys,
-        "| cal:",
-        sharp80_cal,
-        sharp80_cal_phys,
-    )
-
-    if y_true_phys_np is not None:
-        yt_np = (
-            y_true.numpy() if hasattr(y_true, "numpy")
-            else np.asarray(y_true)
+    
+    y_true_phys_tf = tf.convert_to_tensor(y_true_phys_np, dtype=tf.float32)
+    s_q_phys_tf    = tf.convert_to_tensor(s_q_phys_np,    dtype=tf.float32)
+    
+    cov80_uncal_phys   = float(coverage80_fn(y_true_phys_tf, s_q_phys_tf).numpy())
+    sharp80_uncal_phys = float(sharpness80_fn(y_true_phys_tf, s_q_phys_tf).numpy())
+    
+    if s_q_cal is not None:
+        s_q_cal_phys_np = inverse_scale_target(
+            s_q_cal.numpy() if hasattr(s_q_cal, "numpy") else s_q_cal,
+            scaler_info=scaler_info_dict,
+            target_name=_subs_scale_key,
         )
-        if np.allclose(
-            y_true_phys_np,
-            yt_np,
-            atol=1e-12,
-            rtol=0,
-        ):
-            print(
-                "[WARN] inverse_scale_target() no-op "
-                "(check scaler key / scaler entry)."
-            )
+        s_q_cal_phys_tf = tf.convert_to_tensor(s_q_cal_phys_np, dtype=tf.float32)
+    
+        cov80_cal_phys   = float(coverage80_fn(y_true_phys_tf, s_q_cal_phys_tf).numpy())
+        sharp80_cal_phys = float(sharpness80_fn(y_true_phys_tf, s_q_cal_phys_tf).numpy())
+#%
+# ---- Debug: scaling should NOT change coverage (only sharpness) ----
+if DEBUG:
+    print("[SCALEDBG] subs scaler key:", _subs_scale_key)
+    print("[SCALEDBG] cov scaled vs phys:",
+          cov80_uncal, cov80_uncal_phys,
+          "| cal:", cov80_cal, cov80_cal_phys)
+    print("[SCALEDBG] sharp scaled vs phys:",
+          sharp80_uncal, sharp80_uncal_phys,
+          "| cal:", sharp80_cal, sharp80_cal_phys)
+
+    # Detect silent 'no-op' inverse scaling
+    yt_np = y_true.numpy() if hasattr(y_true, "numpy") else np.asarray(y_true)
+    if np.allclose(y_true_phys_np, yt_np, atol=1e-12, rtol=0):
+        print("[WARN] inverse_scale_target() did not change y_true "
+              "(likely wrong target_name / scaler entry not resolved).")
+
+
+# 2) Tensor debug (safe)
 
     _ = debug_tensor_interval(
         y_true,
@@ -2912,6 +2831,7 @@ if DEBUG and (cov80_uncal is not None):
         name="RAW",
         verbose=1,
     )
+    
     _ = debug_tensor_interval(
         y_true,
         s_q_cal,
@@ -2920,65 +2840,113 @@ if DEBUG and (cov80_uncal is not None):
         verbose=1,
     )
 
-# -------------------------------------------------------------------------
-# 2.3.d Optional censor-stratified MAE (physical units).
-#
-# Uses median from CALIBRATED quantiles to stay consistent with
-# the CSV diagnostics pipeline.
-# -------------------------------------------------------------------------
+# # Interpret axis=2 as quantiles (what stage2 assumes)
+# w_axis2 = np.mean(s_q[:, :, 2, 0] - s_q[:, :, 0, 0])
+# c_axis2 = np.mean(
+#     (y_true[:, :, 0] >= s_q[:, :, 0, 0]) &
+#     (y_true[:, :, 0] <= s_q[:, :, 2, 0])
+# )
+
+# # Interpret axis=1 as quantiles (the “other” possibility)
+# w_axis1 = np.mean(s_q[:, 2, :, 0] - s_q[:, 0, :, 0])
+# c_axis1 = np.mean(
+#     (y_true[:, :, 0] >= s_q[:, 0, :, 0]) &
+#     (y_true[:, :, 0] <= s_q[:, 2, :, 0])
+# )
+
+# print("width axis2:", w_axis2, "coverage axis2:", c_axis2)
+# print("width axis1:", w_axis1, "coverage axis1:", c_axis1)
+#%%
+# --- 2.3.b Optional censor-stratified MAE on the same loop products ---
+# Works for both quantile mode (use median) and point-forecast mode (fallback).
+
+# Median quantile index (robust)
 _med_idx = None
 if QUANTILES:
-    _med_idx = int(
-        np.argmin(
-            np.abs(
-                np.asarray(QUANTILES, dtype=float) - 0.5
-            )
-        )
-    )
+    _med_idx = int(np.argmin(np.abs(np.asarray(QUANTILES, dtype=float) - 0.5)))
+    
+if (y_true is not None) and (mask is not None):
 
-if (mask is not None) and (y_true is not None):
-    if QUANTILES and (s_q_cal is not None):
-        s_med = s_q_cal[..., _med_idx, :]  # (N,H,1)
-    elif QUANTILES and (s_q is not None):
-        s_med = s_q[..., _med_idx, :]      # (N,H,1)
+    if QUANTILES and (s_q is not None):
+        # s_q: (N,H,Q,1) -> median: (N,H,1)
+        med_idx = _med_idx
+        s_med = s_q[..., med_idx, :]
     else:
-        # Point-mode fallback: use the same tensor that was
-        # passed to format_and_forecast (no re-predict).
-        s_med = tf.convert_to_tensor(
-            predictions_for_formatter["subs_pred"],
-            dtype=tf.float32,
-        )
+        # point-forecast: run model and collect (B,H,1) batches
+        s_pred_list = []
+        for xb2, yb2 in with_progress(ds_eval,
+                              desc="Point preds for censor-MAE"):
+            out2 = model_inf(xb2, training=False)
+            s2 = subs_point_from_out(model_inf, out2, QUANTILES, _med_idx)  # (B,H,1)
+            s_pred = out2["subs_pred"]
+            # s_pred = canonicalize_to_BHQO_using_ytrue(
+            #         s_pred,
+            #         yb2["subs_pred"],
+            #         q_values=QUANTILES,
+            #     )
+            s_pred = canonicalize_BHQO(
+                s_pred,
+                y_true=yb2["subs_pred"],
+                q_values=QUANTILES,
+                n_q=(len(QUANTILES) if QUANTILES else None),
+                enforce_monotone=True,
+                verbose=0,
+                log_fn=(lambda *_: None),
+            )
+            s2 = s_pred[:, :, int(_med_idx), :]
+            s_pred_list.append(s2)
 
+        if not s_pred_list:
+            raise RuntimeError("No batches collected for point preds (censor-MAE).")
+
+        s_med = tf.concat(s_pred_list, axis=0)  # (N,H,1) scaled/model space
+
+    # # Convert both y_true and s_med to physical units using Stage-1 scaler_info
+    # y_true_phys_np = inverse_scale_target(
+    #     y_true,
+    #     scaler_info=scaler_info_dict,
+    #     target_name=SUBSIDENCE_COL,
+    # )
+    # s_med_phys_np = inverse_scale_target(
+    #     s_med,
+    #     scaler_info=scaler_info_dict,
+    #     target_name=SUBSIDENCE_COL,
+    # )
+
+    # y_true_phys = tf.convert_to_tensor(y_true_phys_np, dtype=tf.float32)
+    # s_med_phys  = tf.convert_to_tensor(s_med_phys_np,  dtype=tf.float32)
+    
+    # Convert both y_true and s_med to physical units using Stage-1 scaler_info
+    # IMPORTANT: use SUBS_SCALER_KEY, not SUBSIDENCE_COL
+    _subs_scale_key = SUBS_SCALER_KEY
+    
     y_true_phys_np = inverse_scale_target(
-        y_true.numpy() if hasattr(y_true, "numpy")
-        else y_true,
+        y_true.numpy() if hasattr(y_true, "numpy") else y_true,
         scaler_info=scaler_info_dict,
         target_name=_subs_scale_key,
     )
     s_med_phys_np = inverse_scale_target(
-        s_med.numpy() if hasattr(s_med, "numpy")
-        else s_med,
+        s_med.numpy() if hasattr(s_med, "numpy") else s_med,
         scaler_info=scaler_info_dict,
         target_name=_subs_scale_key,
     )
+    
+    y_true_phys = tf.convert_to_tensor(y_true_phys_np, dtype=tf.float32)
+    s_med_phys  = tf.convert_to_tensor(s_med_phys_np,  dtype=tf.float32)
+    
+    if DEBUG:
+        yt_np = y_true.numpy() if hasattr(y_true, "numpy") else np.asarray(y_true)
+        if np.allclose(y_true_phys_np, yt_np, atol=1e-12, rtol=0):
+            print("[WARN] censor-MAE inverse_scale_target() no-op on y_true "
+                  "(check SUBS_SCALER_KEY/scaler_info).")
 
-    y_true_phys = tf.convert_to_tensor(
-        y_true_phys_np,
-        dtype=tf.float32,
-    )
-    s_med_phys = tf.convert_to_tensor(
-        s_med_phys_np,
-        dtype=tf.float32,
-    )
-
-    mask_f = tf.cast(mask, tf.float32)
+    mask_f = tf.cast(mask, tf.float32)  # (N,H,1)
     num_cens = tf.reduce_sum(mask_f) + 1e-8
-    num_unc = tf.reduce_sum(1.0 - mask_f) + 1e-8
+    num_unc  = tf.reduce_sum(1.0 - mask_f) + 1e-8
 
     abs_err = tf.abs(y_true_phys - s_med_phys)
-
     mae_cens = tf.reduce_sum(abs_err * mask_f) / num_cens
-    mae_unc = tf.reduce_sum(abs_err * (1.0 - mask_f)) / num_unc
+    mae_unc  = tf.reduce_sum(abs_err * (1.0 - mask_f)) / num_unc
 
     censor_metrics = {
         "flag_name": CENSOR_FLAG_NAME,
@@ -2988,21 +2956,18 @@ if (mask is not None) and (y_true is not None):
     }
 
     print(
-        "[CENSOR] MAE censored="
-        f"{censor_metrics['mae_censored']:.4f} | "
-        "uncensored="
-        f"{censor_metrics['mae_uncensored']:.4f}"
+        f"[CENSOR] MAE censored={censor_metrics['mae_censored']:.4f} | "
+        f"uncensored={censor_metrics['mae_uncensored']:.4f}"
     )
+    
+if DEBUG:
+    # Minimal sanity checks: If that var() is no longer tiny,  
+    # R² will stop being absurdly negative
 
-# -------------------------------------------------------------------------
-# Debug: physical y_true stats (variance sanity).
-# -------------------------------------------------------------------------
-if DEBUG and (y_true is not None):
     yt_phys = inverse_scale_target(
-        y_true.numpy() if hasattr(y_true, "numpy")
-        else y_true,
+        y_true.numpy() if hasattr(y_true, "numpy") else y_true,
         scaler_info=scaler_info_dict,
-        target_name=_subs_scale_key,
+        target_name=SUBS_SCALER_KEY,
     )
     print(
         "[DEBUG] y_true_phys stats:",
@@ -3011,56 +2976,25 @@ if DEBUG and (y_true is not None):
         float(np.mean(yt_phys)),
         float(np.var(yt_phys)),
     )
-# %
-# =============================================================================
-# Build + save evaluation payload JSON
-#
-# Goals:
-#   - Keep a single, compact JSON artifact that merges:
-#       * evaluate() metrics (scaled space)
-#       * physics diagnostics (epsilons)
-#       * interval calibration summary (scaled + physical)
-#       * optional censor-stratified MAE
-#       * point metrics + per-horizon MAE/R2 (unit-consistent)
-#   - Apply unit post-processing in ONE place, controlled by
-#     config (EVAL_JSON_UNITS_MODE / EVAL_JSON_UNITS_SCOPE).
-#   - Keep JSON strictly serializable.
-# =============================================================================
 
-# -------------------------------------------------------------------------
-# Choose which coverage/sharpness to persist for ablation.
-#
-# Preference order:
-#   1) calibrated physical (best for paper)
-#   2) calibrated scaled
-#   3) uncalibrated physical
-#   4) uncalibrated scaled
-# -------------------------------------------------------------------------
+
+# Normalize coverage/sharpness choices for ablation record (prefer calibrated)
 coverage80_for_abl = (
-    cov80_cal_phys
-    if (cov80_cal_phys is not None)
-    else cov80_cal
-    if (cov80_cal is not None)
-    else cov80_uncal_phys
-    if (cov80_uncal_phys is not None)
+    cov80_cal_phys if (cov80_cal_phys is not None)
+    else cov80_cal if (cov80_cal is not None)
+    else cov80_uncal_phys if (cov80_uncal_phys is not None)
     else cov80_uncal
 )
 
 sharpness80_for_abl = (
-    sharp80_cal_phys
-    if (sharp80_cal_phys is not None)
-    else sharp80_uncal_phys
-    if (sharp80_uncal_phys is not None)
-    else sharp80_cal
-    if (sharp80_cal is not None)
+    sharp80_cal_phys if (sharp80_cal_phys is not None)
+    else sharp80_uncal_phys if (sharp80_uncal_phys is not None)
+    else sharp80_cal if (sharp80_cal is not None)
     else sharp80_uncal
 )
 
-# -------------------------------------------------------------------------
-# Stamp + base payload fields.
-# -------------------------------------------------------------------------
+# Save summary JSON
 stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-
 payload = {
     "timestamp": stamp,
     "tf_version": tf.__version__,
@@ -3068,86 +3002,52 @@ payload = {
     "quantiles": QUANTILES,
     "horizon": FORECAST_HORIZON_YEARS,
     "batch_size": BATCH_SIZE,
-    "metrics_evaluate": {
-        k: _to_py(v)
-        for k, v in (eval_results or {}).items()
-    },
+    "metrics_evaluate": {k: _to_py(v) for k, v in (eval_results or {}).items()},
     "physics_diagnostics": phys,
 }
 
-# -------------------------------------------------------------------------
-# Interval calibration block:
-#   - factors_ are per-horizon multiplicative widths
-#   - store both scaled and physical coverage/sharpness
-#
-# Note:
-#   s_q_cal is computed earlier from apply_calibrator_to_subs()
-#   so the reported metrics reflect the exact tensor used.
-# -------------------------------------------------------------------------
 if QUANTILES:
     payload["interval_calibration"] = {
         "target": 0.80,
-        "factors_per_horizon": (
-            getattr(cal80, "factors_", None).tolist()
-            if hasattr(cal80, "factors_")
-            else None
-        ),
-        "factors_per_horizon_from_cal_stats": cal_stats, 
-        # ---- scaled metrics (backward compatible) ----
+        "factors_per_horizon": getattr(cal80, "factors_", None).tolist()
+        if hasattr(cal80, "factors_") else None,
+
+        # scaled-space metrics (backward compatible)
         "coverage80_uncalibrated": cov80_uncal,
-        "coverage80_calibrated": cov80_cal,
+        "coverage80_calibrated":   cov80_cal,
         "sharpness80_uncalibrated": sharp80_uncal,
-        "sharpness80_calibrated": sharp80_cal,
-        # ---- physical metrics (preferred for paper) ----
+        "sharpness80_calibrated":   sharp80_cal,
+
+        # physical-space metrics (new, recommended for the paper)
         "coverage80_uncalibrated_phys": cov80_uncal_phys,
-        "coverage80_calibrated_phys": cov80_cal_phys,
+        "coverage80_calibrated_phys":   cov80_cal_phys,
         "sharpness80_uncalibrated_phys": sharp80_uncal_phys,
-        "sharpness80_calibrated_phys": sharp80_cal_phys,
+        "sharpness80_calibrated_phys":   sharp80_cal_phys,
     }
 
-# -------------------------------------------------------------------------
-# Optional censor block (already in physical units).
-# -------------------------------------------------------------------------
 if censor_metrics is not None:
     payload["censor_stratified"] = censor_metrics
 
-# -------------------------------------------------------------------------
-# Point metrics + per-horizon values.
-#
-# IMPORTANT:
-#   The stage2 point-metrics pipeline can compute values
-#   in physical units (mm) and these should match the
-#   evaluate_forecast() diagnostics output.
-# -------------------------------------------------------------------------
+# Attach point metrics & per-horizon into payload
 if metrics_point:
     payload["point_metrics"] = {
         "mae": metrics_point.get("mae"),
         "mse": metrics_point.get("mse"),
-        "r2": metrics_point.get("r2"),
+        "r2":  metrics_point.get("r2"),
     }
-
 if per_h_mae_dict:
     payload.setdefault("per_horizon", {})
     payload["per_horizon"]["mae"] = per_h_mae_dict
-
 if per_h_r2_dict:
     payload.setdefault("per_horizon", {})
     payload["per_horizon"]["r2"] = per_h_r2_dict
 
 # -------------------------------------------------------------------------
-# Unit post-processing (config-driven).
-#
-# Single conversion point:
-#   convert_eval_payload_units() is responsible for
-#   updating values and writing a consistent "units" block.
-#
-# Controls:
-#   - EVAL_JSON_UNITS_MODE  : "si" (default) or "interpretable"
-#   - EVAL_JSON_UNITS_SCOPE : "subsidence" | "physics" | "all"
-#
-# NOTE:
-#   If conversion fails we keep the raw payload and warn.
+# Unit post-processing for evaluation JSON (controlled by config).
+# - EVAL_JSON_UNITS_MODE  : 'si' (default) or 'interpretable'
+# - EVAL_JSON_UNITS_SCOPE : 'subsidence', 'physics', or 'all'
 # -------------------------------------------------------------------------
+# XXX DO NOT CONVERT #: FOR DEBUG
 try:
     payload = convert_eval_payload_units(
         payload,
@@ -3156,34 +3056,13 @@ try:
         scope=_units_scope,
     )
 except Exception as e:
-    print(
-        "[Warn] unit conversion skipped "
-        f"(mode={_units_mode}, scope={_units_scope}): {e}"
-    )
-    
-#%
-# -------------------------------------------------------------------------
-# Save JSON (pretty printed for inspection).
-# -------------------------------------------------------------------------
-json_out = os.path.join(
-    RUN_OUTPUT_PATH,
-    f"geoprior_eval_phys_{stamp}.json",
-)
+    print(f"[Warn] unit conversion skipped (mode={_units_mode}, scope={_units_scope}): {e}")
+
+json_out = os.path.join(RUN_OUTPUT_PATH, f"geoprior_eval_phys_{stamp}.json")
 with open(json_out, "w", encoding="utf-8") as f:
     json.dump(payload, f, indent=2)
-
 print(f"Saved metrics + physics JSON -> {json_out}")
-
-# =============================================================================
-# Ablation record
-#
-# We pull MAE/MSE/coverage/sharpness preferentially from:
-#   1) unit-consistent payload fields (after post-process)
-#   2) fallback local metrics if missing
-#
-# This avoids mixing SI vs interpretable accidentally.
-# =============================================================================
-
+#%
 ABLCFG = {
     "PDE_MODE_CONFIG": PDE_MODE_CONFIG,
     "GEOPRIOR_USE_EFFECTIVE_H": GEOPRIOR_USE_EFFECTIVE_H,
@@ -3198,50 +3077,22 @@ ABLCFG = {
     "LAMBDA_Q": LAMBDA_Q,
 }
 
-_m_eval = (
-    payload.get("metrics_evaluate", {})
-    if isinstance(payload, dict)
-    else {}
-)
-_p_point = (
-    payload.get("point_metrics", {})
-    if isinstance(payload, dict)
-    else {}
-)
-_p_hor = (
-    payload.get("per_horizon", {})
-    if isinstance(payload, dict)
-    else {}
-)
+# Prefer MAE/MSE from the *unit-consistent* payload (already post-processed);
+# fall back to locally computed metrics when missing.
+_m_eval = payload.get("metrics_evaluate", {}) if isinstance(payload, dict) else {}
+_p_point = payload.get("point_metrics", {}) if isinstance(payload, dict) else {}
+_p_hor = payload.get("per_horizon", {}) if isinstance(payload, dict) else {}
 
-eval_mae = _m_eval.get(
-    "subs_pred_mae",
-    _p_point.get("mae"),
-)
-eval_mse = _m_eval.get(
-    "subs_pred_mse",
-    _p_point.get("mse"),
-)
+eval_mae = _m_eval.get("subs_pred_mae", _p_point.get("mae"))
+eval_mse = _m_eval.get("subs_pred_mse", _p_point.get("mse"))
 
-abl_coverage80 = _m_eval.get(
-    "subs_pred_coverage80",
-    coverage80_for_abl,
-)
-abl_sharpness80 = _m_eval.get(
-    "subs_pred_sharpness80",
-    sharpness80_for_abl,
-)
+# Coverage/sharpness for ablation: prefer evaluate() values if present.
+abl_coverage80 = _m_eval.get("subs_pred_coverage80", coverage80_for_abl)
+abl_sharpness80 = _m_eval.get("subs_pred_sharpness80", sharpness80_for_abl)
 
-per_h_mae_for_abl = (
-    (_p_hor.get("mae") if isinstance(_p_hor, dict)
-     else None)
-    or per_h_mae_dict
-)
-per_h_r2_for_abl = (
-    (_p_hor.get("r2") if isinstance(_p_hor, dict)
-     else None)
-    or per_h_r2_dict
-)
+# Per-horizon: prefer payload copies (unit-consistent) else local.
+per_h_mae_for_abl = (_p_hor.get("mae") if isinstance(_p_hor, dict) else None) or per_h_mae_dict
+per_h_r2_for_abl = (_p_hor.get("r2") if isinstance(_p_hor, dict) else None) or per_h_r2_dict
 
 save_ablation_record(
     outdir=RUN_OUTPUT_PATH,
@@ -3250,44 +3101,21 @@ save_ablation_record(
     cfg=ABLCFG,
     eval_dict={
         "r2": (_p_point or {}).get("r2"),
-        "mse": (
-            float(eval_mse) if eval_mse is not None
-            else None
-        ),
-        "mae": (
-            float(eval_mae) if eval_mae is not None
-            else None
-        ),
-        "coverage80": (
-            float(abl_coverage80)
-            if abl_coverage80 is not None
-            else None
-        ),
-        "sharpness80": (
-            float(abl_sharpness80)
-            if abl_sharpness80 is not None
-            else None
-        ),
+        "mse": float(eval_mse) if eval_mse is not None else None,
+        "mae": float(eval_mae) if eval_mae is not None else None,
+        "coverage80": float(abl_coverage80) if abl_coverage80 is not None else None,
+        "sharpness80": float(abl_sharpness80) if abl_sharpness80 is not None else None,
     },
     phys_diag=(phys or {}),
-    per_h_mae=per_h_mae_for_abl,
-    per_h_r2=per_h_r2_for_abl,
+    per_h_mae=per_h_mae_for_abl,   # unit-consistent when available
+    per_h_r2=per_h_r2_for_abl      # unit-consistent when available
 )
-
 print("Ablation record saved.")
-
-# -------------------------------------------------------------------------
-# Write an "interpretable" sibling JSON (optional convenience).
 #
-# postprocess_eval_json() converts an existing saved JSON
-# and can add RMSE. This keeps the main payload pipeline
-# simple and reproducible.
-# -------------------------------------------------------------------------
+# Convert an existing SI JSON to interpretable and write a new file:
 json_out_interp = os.path.join(
-    RUN_OUTPUT_PATH,
-    f"geoprior_eval_phys_{stamp}_interpretable.json",
-)
-
+    RUN_OUTPUT_PATH, f"geoprior_eval_phys_{stamp}_interpretable.json"
+ )
 out = postprocess_eval_json(
     json_out,
     scope="all",
@@ -3295,11 +3123,8 @@ out = postprocess_eval_json(
     overwrite=True,
     add_rmse=True,
 )
-
-print(
-    "Interpretable EVAL JSON file to",
-    out["units"]["subs_metrics_unit"],
-)
+# "mm" (if SUBS_UNIT_TO_SI ~ 1e-3)
+print("Interpretable EVAL JSON file to", out["units"]["subs_metrics_unit"])  
 
 
 try:
@@ -3384,4 +3209,3 @@ print(f"\n---- {CITY_NAME.upper()} {MODEL_NAME} TRAINING COMPLETE ----\n"
 
 tf.keras.backend.clear_session()
 gc.collect()
-
