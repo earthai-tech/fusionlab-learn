@@ -22,8 +22,10 @@ import os
 import platform
 import sys
 import warnings
-
+import re
 import joblib
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -49,7 +51,6 @@ from fusionlab.registry import _find_stage1_manifest
 from fusionlab.utils import (
     build_censor_mask,
     ensure_input_shapes,
-    extract_preds,
     load_nat_config,
     load_nat_config_payload,
     load_scaler_info,
@@ -59,7 +60,6 @@ from fusionlab.utils import (
     resolve_hybrid_config,
     resolve_si_affine,
     best_epoch_and_metrics, 
-    subs_point_from_out, 
     serialize_subs_params, 
     save_ablation_record, 
     audit_stage2_handshake, 
@@ -74,7 +74,6 @@ from fusionlab.utils import (
     evaluate_forecast,
     evaluate_point_forecast,
     inverse_scale_target, 
-    canonicalize_BHQO,
     deg_to_m_from_lat,
     convert_eval_payload_units, 
     postprocess_eval_json
@@ -83,7 +82,6 @@ from fusionlab.utils import (
 from fusionlab.plot import plot_eval_future
 from fusionlab.nn import (
     _logs_to_py, _to_py,
-    debug_quantile_crossing_np,
     debug_tensor_interval,
     debug_val_interval,
     make_weighted_pinball,
@@ -226,6 +224,144 @@ cfg = resolve_hybrid_config(
     live_cfg=cfg_global,
     verbose=True
 )
+
+# -------------------------------------------------------------------------
+# Env overrides (used by run_lambda_sensitivity.py)
+# -------------------------------------------------------------------------
+_TRUE = {"1", "true", "yes", "y", "on"}
+_FALSE = {"0", "false", "no", "n", "off"}
+
+
+def _env(name: str) -> str | None:
+    v = os.getenv(name)
+    if v is None:
+        return None
+    v = str(v).strip()
+    return v or None
+
+
+def _as_bool(v: str) -> bool:
+    s = v.strip().lower()
+    if s in _TRUE:
+        return True
+    if s in _FALSE:
+        return False
+    raise ValueError(f"Invalid bool for env var: {v!r}")
+
+
+def _apply_env_overrides(cfg: dict) -> tuple[dict, dict]:
+    """
+    Apply env var overrides to cfg (for ablations/sensitivity runs).
+    Returns (cfg, applied_overrides).
+    """
+    applied: dict = {}
+
+    def set_if(env_name: str, cfg_key: str, cast):
+        raw = _env(env_name)
+        if raw is None:
+            return
+        try:
+            val = cast(raw)
+        except Exception as e:
+            raise ValueError(
+                f"Failed to parse {env_name}={raw!r} "
+                f"for cfg[{cfg_key!r}]: {e}"
+            ) from e
+        cfg[cfg_key] = val
+        applied[cfg_key] = val
+
+    # --- exactly what run_lambda_sensitivity.py sets ---
+    set_if("EPOCHS_OVERRIDE", "EPOCHS", lambda x: int(float(x)))
+    set_if("PDE_MODE_OVERRIDE", "PDE_MODE_CONFIG",
+           lambda x: str(x).strip().lower())
+    set_if("LAMBDA_CONS_OVERRIDE", "LAMBDA_CONS", float)
+    set_if("LAMBDA_PRIOR_OVERRIDE", "LAMBDA_PRIOR", float)
+
+    # --- optional but handy for controlled sweeps ---
+    set_if("LAMBDA_GW_OVERRIDE", "LAMBDA_GW", float)
+    set_if("LAMBDA_SMOOTH_OVERRIDE", "LAMBDA_SMOOTH", float)
+    set_if("LAMBDA_BOUNDS_OVERRIDE", "LAMBDA_BOUNDS", float)
+    set_if("LAMBDA_MV_OVERRIDE", "LAMBDA_MV", float)
+    set_if("LAMBDA_Q_OVERRIDE", "LAMBDA_Q", float)
+    set_if("LOSS_WEIGHT_GWL_OVERRIDE", "LOSS_WEIGHT_GWL", float)
+
+    set_if("TRAINING_STRATEGY_OVERRIDE", "TRAINING_STRATEGY",
+           lambda x: str(x).strip().lower())
+
+    set_if("PHYSICS_WARMUP_STEPS_OVERRIDE", "PHYSICS_WARMUP_STEPS",
+           lambda x: int(float(x)))
+    set_if("PHYSICS_RAMP_STEPS_OVERRIDE", "PHYSICS_RAMP_STEPS",
+           lambda x: int(float(x)))
+
+    set_if("DISABLE_EARLY_STOPPING", "DISABLE_EARLY_STOPPING", _as_bool)
+
+    # Optional run tag for folder naming
+    set_if("RUN_TAG", "RUN_TAG", lambda x: str(x).strip())
+
+    # ---------- quality-of-life / speed knobs ----------
+    set_if(
+        "VERBOSE_OVERRIDE",
+        "VERBOSE",
+        lambda x: int(float(x)),
+    )
+    set_if(
+        "AUDIT_STAGES_OVERRIDE",
+        "AUDIT_STAGES",
+        lambda x: str(x).strip().lower(),
+    )
+    set_if("DEBUG_OVERRIDE", "DEBUG", _as_bool)
+    set_if(
+        "LOG_Q_DIAGNOSTICS_OVERRIDE",
+        "LOG_Q_DIAGNOSTICS",
+        _as_bool,
+    )
+
+    # ---------- policies that need propagation ----------
+    qpol = _env("Q_POLICY_OVERRIDE")
+    if qpol is not None:
+        qpol2 = str(qpol).strip().lower()
+        cfg["Q_POLICY_DATA_FIRST"] = qpol2
+        cfg["Q_POLICY_PHYSICS_FIRST"] = qpol2
+        applied["Q_POLICY_DATA_FIRST"] = qpol2
+        applied["Q_POLICY_PHYSICS_FIRST"] = qpol2
+
+    spol = _env("SUBS_RESID_POLICY_OVERRIDE")
+    if spol is not None:
+        spol2 = str(spol).strip().lower()
+        cfg["SUBS_RESID_POLICY_DATA_FIRST"] = spol2
+        cfg["SUBS_RESID_POLICY_PHYSICS_FIRST"] = spol2
+        applied["SUBS_RESID_POLICY_DATA_FIRST"] = spol2
+        applied["SUBS_RESID_POLICY_PHYSICS_FIRST"] = spol2
+
+    set_if(
+        "ALLOW_SUBS_RESIDUAL_OVERRIDE",
+        "ALLOW_SUBS_RESIDUAL",
+        _as_bool,
+    )
+
+    # LAMBDA_Q already set above into cfg["LAMBDA_Q"].
+    # If the env var exists, propagate to strategy-specific keys.
+    raw_lq = _env("LAMBDA_Q_OVERRIDE")
+    if raw_lq is not None:
+        lq = float(raw_lq)
+        # cfg["LAMBDA_Q"] = lq
+        cfg["LAMBDA_Q_DATA_FIRST"] = lq
+        cfg["LAMBDA_Q_PHYSICS_FIRST"] = lq
+        # applied["LAMBDA_Q"] = lq
+        applied["LAMBDA_Q_DATA_FIRST"] = lq
+        applied["LAMBDA_Q_PHYSICS_FIRST"] = lq
+
+    set_if("MV_WEIGHT_OVERRIDE", "MV_WEIGHT", float)
+
+    return cfg, applied
+
+
+cfg, ENV_OVERRIDES = _apply_env_overrides(cfg)
+
+if ENV_OVERRIDES:
+    print("\n[ENV OVERRIDES APPLIED]")
+    for k, v in ENV_OVERRIDES.items():
+        print(f"  - {k} = {v}")
 
 # cfg = dict(cfg_global)
 # cfg.update(cfg_manifest)  # manifest wins on overlapping keys
@@ -654,7 +790,24 @@ LOG_Q_DIAGNOSTICS = bool(cfg.get("LOG_Q_DIAGNOSTICS", False))
 # Output directory (reuse Stage-1 run_dir)
 BASE_OUTPUT_DIR = M["paths"]["run_dir"]
 STAMP = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-RUN_OUTPUT_PATH = os.path.join(BASE_OUTPUT_DIR, f"train_{STAMP}")
+
+
+
+def _sanitize_tag(s: str | None) -> str | None:
+    if not s:
+        return None
+    s = re.sub(r"[^0-9A-Za-z._-]+", "_", s.strip())
+    s = s.strip("._-")
+    return s[:120] or None
+
+# RUN_OUTPUT_PATH = os.path.join(BASE_OUTPUT_DIR, f"train_{STAMP}")
+RUN_TAG = _sanitize_tag(cfg.get("RUN_TAG"))
+run_name = f"train_{STAMP}"
+if RUN_TAG:
+    run_name = f"{run_name}__{RUN_TAG}"
+
+RUN_OUTPUT_PATH = os.path.join(BASE_OUTPUT_DIR, run_name)
+
 ensure_directory_exists(RUN_OUTPUT_PATH)
 
 config_sections = [
@@ -1772,14 +1925,25 @@ callbacks = [
         save_weights_only=True,
         verbose=1,
     ),
-    EarlyStopping(
-        monitor="val_loss",
-        patience=15,
-        restore_best_weights=True,
-        verbose=1,
-    ),
+    # EarlyStopping(
+    #     monitor="val_loss",
+    #     patience=15,
+    #     restore_best_weights=True,
+    #     verbose=1,
+    # ),
 ]
 
+disable_es = bool(cfg.get("DISABLE_EARLY_STOPPING", False))
+if not disable_es:
+    callbacks.append(
+        EarlyStopping(
+            monitor="val_loss",
+            patience=15,
+            restore_best_weights=True,
+            verbose=1,
+        )
+    )
+    
 csvlog_path = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_{MODEL_NAME}_train_log.csv")
 callbacks.append(CSVLogger(csvlog_path, append=False))
 callbacks.append(TerminateOnNaN())
@@ -3243,6 +3407,9 @@ per_h_r2_for_abl = (
     or per_h_r2_dict
 )
 
+if ENV_OVERRIDES:
+    ABLCFG["env_overrides"] = dict(ENV_OVERRIDES)
+
 save_ablation_record(
     outdir=RUN_OUTPUT_PATH,
     city=CITY_NAME,
@@ -3274,8 +3441,46 @@ save_ablation_record(
     per_h_r2=per_h_r2_for_abl,
 )
 
-print("Ablation record saved.")
 
+def _write_done_marker(
+    run_dir: Path,
+    *,
+    city: str,
+    pde_mode: str,
+    lambda_cons: float,
+    lambda_prior: float,
+    run_tag: str | None = None,
+) -> None:
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1) ultra-fast marker (touch)
+    (run_dir / "DONE").write_text("", encoding="utf-8")
+
+    # 2) optional structured marker for resume keys (recommended)
+    payload = {
+        "city": city,
+        "pde_mode": pde_mode,
+        "lambda_cons": float(lambda_cons),
+        "lambda_prior": float(lambda_prior),
+        "run_tag": run_tag,
+    }
+
+    done_json = run_dir / "DONE.json"
+    tmp = run_dir / "DONE.json.tmp"
+    tmp.write_text(json.dumps(payload), encoding="utf-8")
+    tmp.replace(done_json)  # atomic-ish on most platforms
+
+
+_write_done_marker(
+    RUN_OUTPUT_PATH,
+    city=CITY_NAME,
+    pde_mode=PDE_MODE_CONFIG,
+    lambda_cons=LAMBDA_CONS,
+    lambda_prior=LAMBDA_PRIOR,
+    run_tag=cfg.get("RUN_TAG"),
+)
+
+print("Ablation record saved.")
 # -------------------------------------------------------------------------
 # Write an "interpretable" sibling JSON (optional convenience).
 #
