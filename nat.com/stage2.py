@@ -49,7 +49,6 @@ from fusionlab.registry import _find_stage1_manifest
 from fusionlab.utils import (
     build_censor_mask,
     ensure_input_shapes,
-    extract_preds,
     load_nat_config,
     load_nat_config_payload,
     load_scaler_info,
@@ -59,7 +58,6 @@ from fusionlab.utils import (
     resolve_hybrid_config,
     resolve_si_affine,
     best_epoch_and_metrics, 
-    subs_point_from_out, 
     serialize_subs_params, 
     save_ablation_record, 
     audit_stage2_handshake, 
@@ -74,7 +72,6 @@ from fusionlab.utils import (
     evaluate_forecast,
     evaluate_point_forecast,
     inverse_scale_target, 
-    canonicalize_BHQO,
     deg_to_m_from_lat,
     convert_eval_payload_units, 
     postprocess_eval_json
@@ -83,7 +80,6 @@ from fusionlab.utils import (
 from fusionlab.plot import plot_eval_future
 from fusionlab.nn import (
     _logs_to_py, _to_py,
-    debug_quantile_crossing_np,
     debug_tensor_interval,
     debug_val_interval,
     make_weighted_pinball,
@@ -2157,7 +2153,7 @@ if DEBUG and (model_inf is not subs_model_inst):
         top_weights=30,
         log_fn=print,
     )
-#%%
+#
 # =============================================================================
 # Calibrate on validation set (BEFORE formatting)
 # =============================================================================

@@ -9,7 +9,8 @@ from .nat_utils import (
     map_targets_for_training,
     resolve_hybrid_config,
     resolve_si_affine,
-    load_windows_npz
+    load_windows_npz, 
+    sanitize_inputs_np
 )
 
 from .natutils import ( 
@@ -18,7 +19,11 @@ from .natutils import (
     serialize_subs_params, 
     save_ablation_record, 
     extract_preds, 
-    name_of
+    name_of, 
+    load_trained_hps_near_model,
+    load_tuned_hps_near_model, 
+    load_hps_auto_near_model,
+    
 )
 
 __all__ = [ 
@@ -37,6 +42,10 @@ __all__ = [
     'subs_point_from_out', 
     'serialize_subs_params', 
     'save_ablation_record', 
-    'load_windows_npz'
+    'load_windows_npz', 
+    'load_tuned_hps_near_model', 
+    'load_trained_hps_near_model',
+    'sanitize_inputs_np', 
+    'load_hps_auto_near_model'
     
     ]

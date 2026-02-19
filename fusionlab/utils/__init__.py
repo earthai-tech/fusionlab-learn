@@ -79,6 +79,7 @@ from .holdout_utils import (
     split_groups_holdout,
     filter_df_by_groups,
 )
+from .sequence_utils import build_future_sequences_npz
 
 __all__ = [
     'spatial_sampling', 
@@ -137,4 +138,5 @@ __all__ = [
     'compute_group_masks',
     'split_groups_holdout',
     'filter_df_by_groups',
+    'build_future_sequences_npz'
 ]

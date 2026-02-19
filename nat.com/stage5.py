@@ -44,15 +44,14 @@ from fusionlab.utils.forecast_utils import (
 )
 from fusionlab.utils.nat_utils import (
     ensure_input_shapes,
-    extract_preds,
+    # extract_preds,
     map_targets_for_training,
     sanitize_inputs_np,
     load_tuned_hps_near_model, 
     load_trained_hps_near_model, 
     load_hps_auto_near_model, 
 )
-
-from fusionlab.utils.shapes import canonicalize_BHQO
+# from fusionlab.utils.shapes import canonicalize_BHQO
 from fusionlab.nn.keras_metrics import (
     coverage80_fn,
     sharpness80_fn,
@@ -66,6 +65,8 @@ from fusionlab.compat.keras import (
     load_inference_model,
     load_model_from_tfv2,
 )
+from fusionlab.compat.keras_fit import normalize_predict_output
+
 from fusionlab.nn.pinn.geoprior.models import (
     GeoPriorSubsNet,
 )
@@ -1989,15 +1990,34 @@ def run_one_direction(
     # Predict
     # ------------------------------
 
-    pred_dict = model_pred.predict(
+    pred_out = model_pred.predict(
         X_tgt,
         verbose=int(verbose),
     )
     
-    subs_pred, gwl_pred = extract_preds(
-        model,
-        pred_dict,
+    pred_dict = normalize_predict_output(
+        model_pred,
+        x=X_tgt,
+        pred_out=pred_out,
+        required=("subs_pred", "gwl_pred"),
+        batch_n=32,
+        log_fn=log,
     )
+
+    if "subs_pred" not in pred_dict or "gwl_pred" not in pred_dict:
+        raise KeyError(
+            "predict() must return 'subs_pred' and "
+            "'gwl_pred'. Got keys="
+            f"{list(pred_dict.keys())}"
+        )
+        
+    subs_pred = pred_dict["subs_pred"]
+    gwl_pred = pred_dict["gwl_pred"]
+    
+    # subs_pred, gwl_pred = extract_preds(
+    #     model,
+    #     pred_dict,
+    # )
     
     # =================================================
     # Canonicalize quantile layout to BHQO (robust).
@@ -2049,16 +2069,16 @@ def run_one_direction(
         sp = tf.convert_to_tensor(subs_pred_raw)
         yt = tf.convert_to_tensor(y_true_src)
     
-        sp = canonicalize_BHQO(
-            sp,
-            y_true=yt,
-            q_values=Q,
-            n_q=(len(Q) if Q else None),
-            enforce_monotone=True,
-            layout="BHQO",
-            verbose=(1 if int(verbose) >= 4 else 0),
-            log_fn=(log if int(verbose) >= 4 else None),
-        )
+        # sp = canonicalize_BHQO(
+        #     sp,
+        #     y_true=yt,
+        #     q_values=Q,
+        #     n_q=(len(Q) if Q else None),
+        #     enforce_monotone=True,
+        #     layout="BHQO",
+        #     verbose=(1 if int(verbose) >= 4 else 0),
+        #     log_fn=(log if int(verbose) >= 4 else None),
+        # )
         subs_pred_raw = sp.numpy()
     
     elif (
@@ -2079,6 +2099,7 @@ def run_one_direction(
         subs_pred = apply_calibrator_to_subs(
             cal,
             subs_pred,
+            q_values=Q,
         )
     
     preds = {
