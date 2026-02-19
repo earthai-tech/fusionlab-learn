@@ -103,7 +103,7 @@ DEFAULT_LPRIOR: List[float] = [
     1.0,
 ]
 
-DEFAULT_PDE_MODES: List[str] = ["none", "both"]
+DEFAULT_PDE_MODES: List[str] = ["both"] # ["none", "both" ]
 
 
 def _fmt_float(x: float) -> str:
