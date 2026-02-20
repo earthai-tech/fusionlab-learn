@@ -814,7 +814,7 @@ CLIP_GLOBAL_NORM = 5.0
 # ===================================================================
 # 7) TRAINING LOOP DEFAULTS (non-tuner runs)
 # ===================================================================
-EPOCHS = 5           # Recommended: 50 to 200
+EPOCHS = 200           # Recommended: 50 to 200
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-3   # Slightly higher start, let Adam decay it
 

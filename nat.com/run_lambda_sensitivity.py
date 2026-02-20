@@ -44,13 +44,14 @@ DEFAULT_LCONS  = [1.0] # [0.01, 0.05, 0.10, 0.20]
 DEFAULT_LPRIOR = [0.5] # [0.01, 0.05, 0.10, 0.20]
 DEFAULT_PDE_MODES =["both"] #  ["none", "both"]  # you can trim to ["both"] if you want
 
-TRAIN_SCRIPT = Path(__file__).with_name("stage2.py")
+TRAIN_SCRIPT = Path(__file__).with_name("stage2.py") 
+
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Run lambda_cons / lambda_prior sensitivity grid "
-                    "using training_NATCOM_GEOPRIOR.py."
+                    "using stage2.py (training)."
     )
     p.add_argument(
         "--epochs",
