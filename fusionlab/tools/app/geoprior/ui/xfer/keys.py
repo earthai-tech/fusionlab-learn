@@ -101,12 +101,46 @@ K_MAP_LINKS_K = "xfer.map.links.k"                  # int
 K_MAP_LINKS_MAX = "xfer.map.links.max"              # int
 K_MAP_LINKS_SHOW_DIST = "xfer.map.links.show_dist"  # bool
 
+# Basemap / provider
+K_MAP_BASEMAP = "xfer.map.basemap"
+
 # Specific EPSG overrides for A and B
 K_MAP_A_EPSG = "xfer.map.a.epsg"
 K_MAP_B_EPSG = "xfer.map.b.epsg"
 
 # NEW: Path to loaded meta file
 K_CITIES_META_PATH = "cities.meta.path"
+
+BASEMAP_CHOICES = (
+    ("osm", "OpenStreetMap"),
+    ("esri_sat", "Esri Satellite"),
+    ("esri_topo", "Esri Topo"),
+    ("esri_terrain", "Esri Terrain"),
+    ("opentopo", "OpenTopoMap"),
+    ("carto_light", "Carto Light"),
+    ("carto_dark", "Carto Dark"),
+)
+
+# Add just below BASEMAP_CHOICES
+
+BASEMAP_ICON_ALIASES: Dict[str, str] = {
+    "osm": "bm_osm.svg",
+    "esri_sat": "bm_sat.svg",
+    "esri_topo": "bm_topo.svg",
+    "esri_terrain": "bm_terrain.svg",
+    "opentopo": "bm_opentopo.svg",
+    "carto_light": "bm_carto_light.svg",
+    "carto_dark": "bm_carto_dark.svg",
+}
+
+
+def basemap_icon_name(bid: str) -> str:
+    # Falls back to a convention if you later rename icons
+    # as bm_<bid>.svg
+    return BASEMAP_ICON_ALIASES.get(
+        bid,
+        f"bm_{bid}.svg",
+    )
 
 DEFAULTS: Dict[str, object] = {
     K_VIEW_MODE: "map",
@@ -174,6 +208,9 @@ DEFAULTS: Dict[str, object] = {
     K_MAP_LINKS_MAX: 12,
     K_MAP_LINKS_SHOW_DIST: True,
     
+    # Basemap / provider
+    K_MAP_BASEMAP: "osm",
+    
 }
 
 
@@ -233,6 +270,8 @@ def map_keys() -> Set[str]:
         K_MAP_LINKS_K,
         K_MAP_LINKS_MAX,
         K_MAP_LINKS_SHOW_DIST,
+        
+        K_MAP_BASEMAP,
         
         K_MAP_A_EPSG,
         K_MAP_B_EPSG,

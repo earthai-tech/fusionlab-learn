@@ -66,6 +66,7 @@ from ..keys import (
     K_MAP_B_JOB_ID,
     K_MAP_B_FILE,
     K_MAP_OPACITY,
+    K_MAP_BASEMAP,    
     K_MAP_POINTS_MODE,
     K_MAP_MARKER_SHAPE,
     K_MAP_MARKER_SIZE,
@@ -694,6 +695,14 @@ class XferMapController(QObject):
     # Rendering
     # -------------------------
     def _render_from_store(self) -> None:
+        try:
+            bm = str(
+                self._s.get(K_MAP_BASEMAP, "osm") or "osm"
+            )
+            self._v.set_basemap(bm)
+        except Exception:
+            pass
+
         self._clear_map_layers()
 
         overlay = str(self._s.get(K_MAP_OVERLAY, "both") or "both")
@@ -713,8 +722,8 @@ class XferMapController(QObject):
             layers.append(("B", "City B", str(b_file)))
 
         pts_out: Dict[str, pd.DataFrame] = {}
-        unit = ""
         
+        unit = ""
         ok_any = False
         last_err = ""
         step_max_seen = 1

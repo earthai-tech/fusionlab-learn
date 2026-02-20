@@ -29,7 +29,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, Iterable, Optional
 
-from PyQt5.QtCore import QUrl, Qt
+from PyQt5.QtCore import QUrl, Qt, QEvent, QTimer
 from PyQt5.QtWidgets import (
     QFrame,
     QLabel,
@@ -83,6 +83,7 @@ class MapView(QWidget):
 
         self._ready = False
         self._pending_js: list[str] = []
+        self._overlays: list[QWidget] = []
 
         if QWebEngineView is None:
             self._web = None
@@ -101,12 +102,12 @@ class MapView(QWidget):
                 .LocalContentCanAccessRemoteUrls,
                 True,
             )
-            # Use centralized HTML
             self._web.setHtml(
                 _LEAFLET_HTML,
                 QUrl("https://geoprior.local/"),
             )
             self._web.loadFinished.connect(self._on_loaded)
+            self._web.installEventFilter(self)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -114,9 +115,34 @@ class MapView(QWidget):
 
         if self._web is not None:
             root.addWidget(self._web, 1)
+            QTimer.singleShot(0, self._sync_overlays)
         else:
             root.addWidget(self._fallback, 1)
 
+    def eventFilter(self, obj, ev):
+        if obj is self._web and ev.type() in (
+            QEvent.Resize,
+            QEvent.Show,
+        ):
+            self._sync_overlays()
+        return super().eventFilter(obj, ev)
+
+    def _sync_overlays(self) -> None:
+        if self._web is None:
+            return
+        r = self._web.rect()
+        for w in self._overlays:
+            w.setGeometry(r)
+            w.raise_()
+
+    def add_overlay(self, w: QWidget) -> None:
+        if self._web is None:
+            return
+        w.setParent(self._web)
+        w.setGeometry(self._web.rect())
+        w.show()
+        w.raise_()
+        self._overlays.append(w)
     # -------------------------
     # Internal
     # -------------------------
@@ -307,6 +333,15 @@ class MapView(QWidget):
         js = (
             "if (window.__GeoPriorMap) {"
             "  window.__GeoPriorMap.clearLayers();"
+            "}"
+        )
+        self._run_js(js)
+
+    def set_basemap(self, basemap: str) -> None:
+        bid = _as_js_str(str(basemap or "osm"))
+        js = (
+            "if (window.__GeoPriorMap) {"
+            f"  window.__GeoPriorMap.setBasemap('{bid}');"
             "}"
         )
         self._run_js(js)

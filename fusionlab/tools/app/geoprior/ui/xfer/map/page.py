@@ -22,6 +22,7 @@ from .controller import XferMapController
 from .head import XferMapHeadBar
 from .toolbar import XferMapToolbar
 from .view import MapView
+from .basemap_overlay import XferBasemapQuickOverlay
 
 
 class XferMapPage(QWidget):
@@ -79,14 +80,23 @@ class XferMapPage(QWidget):
 
         self._view = MapView(parent=self._host)
 
-        self._adv = XferMapAdvDrawer(
-            store=self._s,
-            parent=self._host,
-        )
-        self._adv.set_open(False)
+        # self._adv = XferMapAdvDrawer(
+        #     store=self._s,
+        #     parent=self._host,
+        # )
+        # self._adv.set_open(False)
 
         self._host_stack.addWidget(self._view)
-        self._host_stack.addWidget(self._adv)
+
+        self._bm = XferBasemapQuickOverlay(self._s)
+        self._view.add_overlay(self._bm)
+
+        self._adv = XferMapAdvDrawer(store=self._s)
+        self._adv.set_open(False)
+        self._view.add_overlay(self._adv)
+        
+        # self._host_stack.addWidget(self._bm)
+        # self._host_stack.addWidget(self._adv)
 
         # Floating window for "Pin"
         self._adv_win = XferMapAdvWindow(parent=self)
@@ -185,19 +195,47 @@ class XferMapPage(QWidget):
         self._adv.request_close.connect(self._close_adv)
         self._adv.request_pin.connect(self._pin_adv)
 
+        self._bm.request_open_advanced.connect(
+            self._on_adv_toggle
+        )
         # Floating window controls
         self._adv_win.request_unpin.connect(self._unpin_adv)
 
     # -------------------------
     # Advanced drawer handlers
     # -------------------------
-    def _on_adv_toggle(self, on: bool) -> None:
+    # def _on_adv_toggle(self, on: bool) -> None:
+    #     if self._adv_win.isVisible():
+    #         self._adv_win.raise_()
+    #         self._adv_win.activateWindow()
+    #         return
+    #     self._adv.set_open(bool(on))
+
+    def _on_adv_toggle(self, on: Optional[bool] = None) -> None:
+        # If advanced is pinned in a floating window,
+        # clicking the icon just brings it to front.
         if self._adv_win.isVisible():
             self._adv_win.raise_()
             self._adv_win.activateWindow()
             return
-        self._adv.set_open(bool(on))
 
+        # If called without args (basemap gear),
+        # toggle based on current drawer state.
+        if on is None:
+            on = not self._adv.is_open()
+        else:
+            # If some callers always emit True, treat
+            # "True while already open" as toggle-close.
+            if bool(on) and self._adv.is_open():
+                on = False
+
+        on = bool(on)
+        self._adv.set_open(on)
+
+        # Keep toolbar icon state consistent (if supported)
+        if hasattr(self._toolbar, "set_advanced_open"):
+            self._toolbar.set_advanced_open(on)
+            
     def _close_adv(self) -> None:
         self._adv.set_open(False)
         if hasattr(self._toolbar, "set_advanced_open"):

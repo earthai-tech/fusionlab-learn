@@ -177,7 +177,8 @@ def scan_job_files(job_root: Path) -> List[MapFile]:
     - any *.csv
     - prefer those containing "forecast"
     """
-    csvs = sorted(job_root.glob("*.csv"))
+    # Also catch nested outputs (e.g. exports/ subfolders).
+    csvs = sorted(job_root.rglob("*.csv"))
     if not csvs:
         return []
 
@@ -212,12 +213,23 @@ def scan_job_files(job_root: Path) -> List[MapFile]:
 
 def classify_file(filename: str) -> str:
     s = str(filename or "").lower()
-    if "calibrated" in s:
+    # if "calibrated" in s:
+    #     return "val"
+    # if "validationset" in s:
+    #     return "val"
+    if "future" in s:
+        return "future"
+    # Eval CSVs (Validation/Test) include actuals.
+    if "eval" in s:
         return "val"
     if "validationset" in s:
         return "val"
-    if "future" in s:
-        return "future"
+    if "testset" in s:
+        return "val"
+    # Calibrated eval files are still "val".
+    if "calibrated" in s:
+        return "val"
+
     return "other"
 
 
@@ -229,12 +241,23 @@ def short_file_label(
 ) -> str:
     tag = extract_tag(filename)
 
+    low = str(filename or "").lower()
+    prefix = ""
+    if "testset" in low:
+        prefix = "Test"
+    elif "validationset" in low:
+        prefix = "Val"
+
     if kind == "val":
-        base = "Val"
+        # base = "Val"
+        base = prefix or "Val"
+        
     elif kind == "future":
-        base = "Future"
+        # base = "Future"
+        base = f"{prefix} Future" if prefix else "Future"
     else:
-        base = "File"
+        # base = "File"
+        base = prefix or "File"
 
     if idx > 1:
         base = f"{base}{idx}"
@@ -258,6 +281,10 @@ def extract_tag(filename: str) -> str:
         tok = tail.split("_", 1)[0].strip()
         if tok:
             return tok
+    # Generic: "..._H3_..." -> "H3"
+    m = re.search(r"_(H\d+)(?:_|$)", s, flags=re.IGNORECASE)
+    if m:
+        return str(m.group(1)).upper()
 
     return ""
 
@@ -548,8 +575,8 @@ def _infer_unit_from_eval_json(p: Path) -> Optional[str]:
     
 
     pats = (
-        "geoprior_eval*_interpretable.json",
-        "geoprior_eval*.json",
+        "*geoprior_eval*_interpretable.json",
+        "*geoprior_eval*.json",
     )
 
     for d in (p.parent, p.parent.parent):

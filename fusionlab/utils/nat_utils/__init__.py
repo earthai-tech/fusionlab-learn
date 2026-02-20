@@ -10,7 +10,8 @@ from .nat_utils import (
     resolve_hybrid_config,
     resolve_si_affine,
     load_windows_npz, 
-    sanitize_inputs_np
+    sanitize_inputs_np, 
+    pick_npz_for_dataset, 
 )
 
 from .natutils import ( 
@@ -23,6 +24,10 @@ from .natutils import (
     load_trained_hps_near_model,
     load_tuned_hps_near_model, 
     load_hps_auto_near_model,
+    load_or_rebuild_geoprior_model, 
+    compile_for_eval,
+    load_best_hps_near_model, 
+    
     
 )
 
@@ -46,6 +51,10 @@ __all__ = [
     'load_tuned_hps_near_model', 
     'load_trained_hps_near_model',
     'sanitize_inputs_np', 
-    'load_hps_auto_near_model'
+    'load_hps_auto_near_model', 
+    'load_or_rebuild_geoprior_model', 
+    'compile_for_eval', 
+    'load_best_hps_near_model', 
+    'pick_npz_for_dataset'
     
     ]

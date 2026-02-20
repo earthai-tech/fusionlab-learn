@@ -94,9 +94,75 @@ _LEAFLET_HTML = r"""
 
   const map = L.map('map', { zoomControl:true }).setView([0,0], 2);
   map.attributionControl.setPrefix('');
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom:19, attribution:'&copy; OpenStreetMap'
-  }).addTo(map);
+
+  const BASEMAPS = {
+    osm: {
+      url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      maxZoom: 19,
+      attr: '&copy; OpenStreetMap contributors'
+    },
+    esri_sat: {
+      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/' +
+           'World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      maxZoom: 19,
+      attr: 'Tiles &copy; Esri'
+    },
+    esri_topo: {
+      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/' +
+           'World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+      maxZoom: 19,
+      attr: 'Tiles &copy; Esri'
+    },
+    esri_terrain: {
+      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/' +
+           'World_Terrain_Base/MapServer/tile/{z}/{y}/{x}',
+      maxZoom: 13,
+      attr: 'Tiles &copy; Esri'
+    },
+    opentopo: {
+      url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+      maxZoom: 17,
+      attr: 'Map data: &copy; OpenStreetMap, SRTM | ' +
+            'Map style: &copy; OpenTopoMap (CC-BY-SA)'
+    },
+    carto_light: {
+      url: 'https://{s}.basemaps.cartocdn.com/light_all/' +
+           '{z}/{x}/{y}{r}.png',
+      maxZoom: 20,
+      attr: '&copy; OpenStreetMap &copy; CARTO'
+    },
+    carto_dark: {
+      url: 'https://{s}.basemaps.cartocdn.com/dark_all/' +
+           '{z}/{x}/{y}{r}.png',
+      maxZoom: 20,
+      attr: '&copy; OpenStreetMap &copy; CARTO'
+    },
+  };
+
+  const _base_cache = {};
+  let _base_id = 'osm';
+  let _base_layer = null;
+
+  function _getBase(id) {
+    const bid = BASEMAPS[id] ? id : 'osm';
+    if (_base_cache[bid]) return _base_cache[bid];
+    const spec = BASEMAPS[bid];
+    _base_cache[bid] = L.tileLayer(spec.url, {
+      maxZoom: spec.maxZoom || 19,
+      attribution: spec.attr || ''
+    });
+    return _base_cache[bid];
+  }
+
+  function setBasemap(id) {
+    const bid = BASEMAPS[id] ? id : 'osm';
+    if (_base_layer) map.removeLayer(_base_layer);
+    _base_layer = _getBase(bid);
+    _base_layer.addTo(map);
+    _base_id = bid;
+  }
+
+  setBasemap('osm');
 
   const canvas = L.canvas({ padding:0.3 });
 
@@ -628,7 +694,8 @@ _LEAFLET_HTML = r"""
     setRadar: setRadar,
     clearRadar: clearRadar,
     fitLayers: fitLayers,
-    setLegend: setLegend
+    setLegend: setLegend,
+    setBasemap: setBasemap
   };
 
 })();

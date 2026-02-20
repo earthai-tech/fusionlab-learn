@@ -2153,11 +2153,7 @@ if DEBUG and (model_inf is not subs_model_inst):
         top_weights=30,
         log_fn=print,
     )
-<<<<<<< HEAD
-#
-=======
-#%
->>>>>>> f9eb78c7ccb1fbd1fbd353cc2a90ee867436c95f
+    
 # =============================================================================
 # Calibrate on validation set (BEFORE formatting)
 # =============================================================================

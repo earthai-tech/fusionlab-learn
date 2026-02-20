@@ -51,6 +51,7 @@ from ..keys import (
     K_MAP_RADAR_DWELL_MS,
     K_MAP_RADAR_RADIUS_KM,
     K_MAP_RADAR_RINGS,
+    K_MAP_BASEMAP,
     K_MAP_LINKS_ENABLE,
     K_MAP_LINKS_MODE,
     K_MAP_LINKS_K,
@@ -60,7 +61,9 @@ from ..keys import (
     K_MAP_INTERP_TIP,
     K_MAP_A_EPSG, 
     K_MAP_B_EPSG,
-    K_CITIES_META_PATH
+    K_CITIES_META_PATH, 
+    BASEMAP_CHOICES, 
+    basemap_icon_name
 )
 from ...view.keys import (
     K_PLOT_KIND, 
@@ -76,6 +79,7 @@ from ...view.keys import (
     K_SPACE_MODE, 
     K_CONTOUR_METRIC
 )
+from ...icon_utils import try_icon
 from .interactions_ui import XferMapInteractionsBlock
 from .interpretation import map_help_html
 
@@ -222,6 +226,20 @@ class XferMapAdvancedPanel(QWidget):
         self.sp_epsg_b.setSpecialValueText("Auto / Meta")
         self.sp_epsg_b.setToolTip("Override EPSG for City B (Target)")
 
+        self.cmb_basemap = QComboBox(self.sec_view)
+        self.cmb_basemap.setIconSize(QSize(18, 18))
+        for bid, label in BASEMAP_CHOICES:
+            ico = try_icon(basemap_icon_name(bid))
+            self.cmb_basemap.addItem(ico, label, bid)
+            
+        # self.cmb_basemap.addItem("OpenStreetMap", "osm")
+        # self.cmb_basemap.addItem("Esri Satellite", "esri_sat")
+        # self.cmb_basemap.addItem("Esri Topo", "esri_topo")
+        # self.cmb_basemap.addItem("Esri Terrain", "esri_terrain")
+        # self.cmb_basemap.addItem("OpenTopoMap", "opentopo")
+        # self.cmb_basemap.addItem("Carto Light", "carto_light")
+        # self.cmb_basemap.addItem("Carto Dark", "carto_dark")
+
         # 3. NEW: Load Meta JSON
         self.btn_load_meta = QToolButton(self)
         self.btn_load_meta.setText("Load cities.meta.json...")
@@ -233,16 +251,24 @@ class XferMapAdvancedPanel(QWidget):
         # Add to layout
         self.sec_view.add_row(0, "Max points", self.sp_max_pts)
         self.sec_view.add_row(1, "Opacity", self.sp_opacity)
-        self.sec_view.add_row(2, "Coords Mode", self.cmb_coord)
-        self.sec_view.add_row(3, "Default EPSG", self.sp_utm)
-        
+        # self.sec_view.add_row(2, "Coords Mode", self.cmb_coord)
+        # self.sec_view.add_row(3, "Default EPSG", self.sp_utm)
+        self.sec_view.add_row(2, "Basemap", self.cmb_basemap)
+        self.sec_view.add_row(3, "Coords Mode", self.cmb_coord)
+        self.sec_view.add_row(4, "Default EPSG", self.sp_utm)
+
         # Separator or label for specifics
         lbl_spec = QLabel("<b>Specific Overrides</b>", self)
-        self.sec_view.body_l.addWidget(lbl_spec, 5, 0, 1, 2)
+        # self.sec_view.body_l.addWidget(lbl_spec, 5, 0, 1, 2)
         
-        self.sec_view.add_row(6, "City A EPSG", self.sp_epsg_a)
-        self.sec_view.add_row(7, "City B EPSG", self.sp_epsg_b)
-        self.sec_view.body_l.addWidget(self.btn_load_meta, 8, 0, 1, 2)
+        # self.sec_view.add_row(6, "City A EPSG", self.sp_epsg_a)
+        # self.sec_view.add_row(7, "City B EPSG", self.sp_epsg_b)
+        # self.sec_view.body_l.addWidget(self.btn_load_meta, 8, 0, 1, 2)
+        self.sec_view.body_l.addWidget(lbl_spec, 6, 0, 1, 2)
+        self.sec_view.add_row(7, "City A EPSG", self.sp_epsg_a)
+        self.sec_view.add_row(8, "City B EPSG", self.sp_epsg_b)
+        self.sec_view.body_l.addWidget(self.btn_load_meta, 9, 0, 1, 2)
+
         root.addWidget(self.sec_view, 0)
 
         # -------------------------
@@ -535,6 +561,13 @@ class XferMapAdvancedPanel(QWidget):
     def _wire(self) -> None:
         self.sp_max_pts.valueChanged.connect(self._push_view)
         self.sp_opacity.valueChanged.connect(self._push_view)
+        self.cmb_basemap.currentIndexChanged.connect(
+           self._push_view
+        )
+        self.cmb_coord.currentIndexChanged.connect(
+             self._push_view
+        )
+         
         self.cmb_coord.currentIndexChanged.connect(
             self._push_view
         )
@@ -626,6 +659,7 @@ class XferMapAdvancedPanel(QWidget):
         b_op = QSignalBlocker(self.sp_opacity)
         b_cm = QSignalBlocker(self.cmb_coord)
         b_utm = QSignalBlocker(self.sp_utm)
+        b_bm = QSignalBlocker(self.cmb_basemap)
         # b_src = QSignalBlocker(self.sp_src)
         b_pm = QSignalBlocker(self.cmb_pts_mode)
         b_sep = QSignalBlocker(self.sp_sep)
@@ -663,6 +697,7 @@ class XferMapAdvancedPanel(QWidget):
             
             b_cmet,
             b_pm,
+            b_bm,
             b_sep,
             b_met,
             b_q,
@@ -842,6 +877,13 @@ class XferMapAdvancedPanel(QWidget):
                 i = 0
             self.cmb_cont_metric.setCurrentIndex(i)
 
+        if not ch or K_MAP_BASEMAP in ch:
+            bid = str(s.get(K_MAP_BASEMAP, "osm") or "osm")
+            for i in range(self.cmb_basemap.count()):
+                if self.cmb_basemap.itemData(i) == bid:
+                    self.cmb_basemap.setCurrentIndex(i)
+                    break
+
         self._enable_viz_opts()
         self._enable_hot_ana()
         
@@ -911,6 +953,10 @@ class XferMapAdvancedPanel(QWidget):
         with s.batch():
             s.set(K_MAP_MAX_POINTS, int(self.sp_max_pts.value()))
             s.set(K_MAP_OPACITY, float(self.sp_opacity.value()))
+            s.set(
+                K_MAP_BASEMAP,
+                str(self.cmb_basemap.currentData() or "osm"),
+            )
             s.set(K_MAP_COORD_MODE, cm)
             s.set(K_MAP_UTM_EPSG, int(self.sp_utm.value()))
             # s.set(K_MAP_SRC_EPSG, int(self.sp_src.value()))

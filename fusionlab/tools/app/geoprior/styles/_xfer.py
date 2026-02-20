@@ -458,15 +458,107 @@ QTextBrowser#xferMapInterpDoc .gpTag {
 }
 """
 
+XFER_BM_QUICK_LIGHT = """
+/* ===== Xfer Map: Basemap quick overlay (Light) ===== */
+
+QFrame#xferBasemapDock {
+  background: rgba(255,255,255,0.92);
+  border: 1px solid rgba(46,49,145,0.16);
+  border-radius: 12px;
+}
+
+QFrame#xferBasemapDock QToolButton {
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-weight: 800;
+  color: rgba(15,23,42,0.92);
+}
+
+QFrame#xferBasemapDock QToolButton:hover:enabled {
+  background: rgba(51,153,255,0.12);
+  border-color: rgba(51,153,255,0.45);
+}
+
+/* Pin button state */
+QToolButton#xferBasemapBtnPin:checked {
+  background: rgba(46,49,145,0.12);
+  border-color: rgba(46,49,145,0.30);
+}
+
+/* List container */
+QWidget#xferBasemapList {
+  background: transparent;
+}
+
+/* Basemap items */
+QToolButton[bmItem="true"] {
+  background: transparent;
+  padding: 6px 10px;
+  text-align: left;
+  border-radius: 10px;
+}
+
+QToolButton[bmItem="true"]:checked {
+  background: rgba(46,49,145,0.10);
+  border-color: rgba(46,49,145,0.28);
+}
+"""
+
+XFER_BM_QUICK_DARK = """
+/* ===== Xfer Map: Basemap quick overlay (Dark) ===== */
+
+QFrame#xferBasemapDock {
+  background: rgba(15,23,42,0.26);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 12px;
+}
+
+QFrame#xferBasemapDock QToolButton {
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-weight: 800;
+  color: rgba(226,232,240,0.95);
+}
+
+QFrame#xferBasemapDock QToolButton:hover:enabled {
+  background: rgba(51,153,255,0.14);
+  border-color: rgba(51,153,255,0.32);
+}
+
+QToolButton#xferBasemapBtnPin:checked {
+  background: rgba(46,49,145,0.22);
+  border-color: rgba(46,49,145,0.40);
+}
+
+QWidget#xferBasemapList {
+  background: transparent;
+}
+
+QToolButton[bmItem="true"] {
+  background: transparent;
+  padding: 6px 10px;
+  text-align: left;
+  border-radius: 10px;
+}
+
+QToolButton[bmItem="true"]:checked {
+  background: rgba(99,102,241,0.18);
+  border-color: rgba(99,102,241,0.32);
+}
+"""
+
 XFER_ADVSEC_LIGHT = (
     XFER_ADVSEC_LIGHT
     + XFER_INTERP_LIGHT
     + XFER_INTERP_BADGES_LIGHT
+    + XFER_BM_QUICK_LIGHT
 )
-# dark:
+
 XFER_ADVSEC_DARK = (
     XFER_ADVSEC_DARK
     + XFER_INTERP_DARK
     + XFER_INTERP_BADGES_DARK
+    + XFER_BM_QUICK_DARK
 )
-

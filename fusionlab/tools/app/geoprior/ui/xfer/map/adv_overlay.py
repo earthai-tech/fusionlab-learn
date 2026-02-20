@@ -6,7 +6,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer
+from PyQt5.QtGui import QRegion
 from PyQt5.QtWidgets import (
     QDialog,
     QFrame,
@@ -122,6 +123,18 @@ class XferMapAdvDrawer(QWidget):
         if bool(on):
             self.raise_()
             self.drawer.raise_()
+        QTimer.singleShot(0, self._update_mask)
+
+    def _update_mask(self) -> None:
+        if not self.isVisible():
+            self.clearMask()
+            return
+        r = self.drawer.geometry()
+        self.setMask(QRegion(r))
+
+    def resizeEvent(self, ev) -> None:
+        super().resizeEvent(ev)
+        QTimer.singleShot(0, self._update_mask)
 
     def is_open(self) -> bool:
         return bool(self.isVisible())
