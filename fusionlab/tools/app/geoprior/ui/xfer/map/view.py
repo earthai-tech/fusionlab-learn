@@ -298,6 +298,25 @@ class MapView(QWidget):
             data = []
             if points:
                 for p in points:
+                    if isinstance(p, (list, tuple)):
+                        data.append(list(p))
+                        continue
+                
+                    if isinstance(p, dict):
+                        data.append(
+                            [
+                                p.get("lat"),
+                                p.get("lon"),
+                                p.get("v"),
+                                p.get("sid"),
+                                p.get("tip"),
+                                p.get("pulseMs"),
+                                p.get("pulseScale"),
+                                p.get("rMult"),
+                            ]
+                        )
+                        continue
+                
                     data.append([p.lat, p.lon, p.v, p.sid, p.tip])
 
             p_dict = {

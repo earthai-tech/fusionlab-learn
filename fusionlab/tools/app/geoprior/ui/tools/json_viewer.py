@@ -47,7 +47,6 @@ from PyQt5.QtWidgets import (
 )
 
 
-
 @dataclass
 class _JsonDoc:
     path: Optional[Path]
@@ -72,7 +71,6 @@ class _Chip(QLabel):
             "background: palette(midlight);"
             "color: palette(text);"
         )
-
 
 class JsonViewerTool(QWidget):
     """

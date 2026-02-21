@@ -23,7 +23,12 @@ from .head import XferMapHeadBar
 from .toolbar import XferMapToolbar
 from .view import MapView
 from .basemap_overlay import XferBasemapQuickOverlay
-
+from .quick_controls import (
+    XferMapQuickBarOverlay,
+    XferMapControlsDrawer,
+    XferMapControlsWindow,
+    K_CTL_OPEN
+)
 
 class XferMapPage(QWidget):
     """
@@ -90,17 +95,29 @@ class XferMapPage(QWidget):
 
         self._bm = XferBasemapQuickOverlay(self._s)
         self._view.add_overlay(self._bm)
-
-        self._adv = XferMapAdvDrawer(store=self._s)
-        self._adv.set_open(False)
-        self._view.add_overlay(self._adv)
         
-        # self._host_stack.addWidget(self._bm)
-        # self._host_stack.addWidget(self._adv)
+        self._quick = XferMapQuickBarOverlay(self._s)
+        self._view.add_overlay(self._quick)
+        
+        self._controls = XferMapControlsDrawer(self._s)
+        self._controls.set_toolbar(self._toolbar)
+        self._view.add_overlay(self._controls)
+        self._controls.set_open(False)
+        
+        self._adv = XferMapAdvDrawer(store=self._s)
+        self._view.add_overlay(self._adv)
+        self._adv.set_open(False)
+        
+        self._controls_win = XferMapControlsWindow(
+            store=self._s,
+            parent=self,
+        )
 
         # Floating window for "Pin"
-        self._adv_win = XferMapAdvWindow(parent=self)
-
+        self._adv_win = XferMapAdvWindow(
+            store=self._s,
+            parent=self,
+        )
         # -------------------------
         # Controller wires tb <-> view
         # -------------------------
@@ -165,7 +182,7 @@ class XferMapPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
         root.addWidget(self.head, 0)
-        root.addWidget(self._toolbar, 0)
+        # root.addWidget(self._toolbar, 0)
         root.addWidget(self._host, 1)
 
     def _wire(self) -> None:
@@ -200,16 +217,43 @@ class XferMapPage(QWidget):
         )
         # Floating window controls
         self._adv_win.request_unpin.connect(self._unpin_adv)
+        
+        self._quick.request_open_advanced.connect(
+            self._on_adv_toggle
+        )
+        self._quick.request_fit.connect(
+            self._toolbar.request_fit.emit
+        )
+        self._controls.request_detach.connect(self._detach_controls)
+        self._controls_win.request_attach.connect(self._attach_controls)
 
     # -------------------------
     # Advanced drawer handlers
     # -------------------------
-    # def _on_adv_toggle(self, on: bool) -> None:
-    #     if self._adv_win.isVisible():
-    #         self._adv_win.raise_()
-    #         self._adv_win.activateWindow()
-    #         return
-    #     self._adv.set_open(bool(on))
+    def _detach_controls(self):
+        # Force a real store transition so "attach" can
+        # reopen (True -> True does not emit).
+        self._s.set(K_CTL_OPEN, False)
+
+        w = self._controls.scroll.widget()
+        if w is None:
+            return
+        self._controls.scroll.takeWidget()
+        w.setParent(None)
+        self._controls.set_open(False)
+        self._controls_win.set_toolbar(w)
+        self._controls_win.show()
+        self._controls_win.raise_()
+        self._controls_win.activateWindow()
+    
+    def _attach_controls(self):
+        w = self._controls_win.take_toolbar()
+        if w is None:
+            self._controls_win.hide()
+            return
+        self._controls.set_toolbar(w)
+        self._controls_win.hide()
+        self._s.set(K_CTL_OPEN, True)
 
     def _on_adv_toggle(self, on: Optional[bool] = None) -> None:
         # If advanced is pinned in a floating window,
@@ -231,15 +275,11 @@ class XferMapPage(QWidget):
 
         on = bool(on)
         self._adv.set_open(on)
-
-        # Keep toolbar icon state consistent (if supported)
-        if hasattr(self._toolbar, "set_advanced_open"):
-            self._toolbar.set_advanced_open(on)
+        self._toolbar.set_advanced_open(on)
             
     def _close_adv(self) -> None:
         self._adv.set_open(False)
-        if hasattr(self._toolbar, "set_advanced_open"):
-            self._toolbar.set_advanced_open(False)
+        self._toolbar.set_advanced_open(False)
 
     def _pin_adv(self) -> None:
         w = self._adv.take_panel()
@@ -247,8 +287,7 @@ class XferMapPage(QWidget):
             return
 
         self._adv.set_open(False)
-        if hasattr(self._toolbar, "set_advanced_open"):
-            self._toolbar.set_advanced_open(False)
+        self._toolbar.set_advanced_open(False)
 
         self._adv_win.set_panel(w)
         self._adv_win.show()
@@ -263,3 +302,6 @@ class XferMapPage(QWidget):
 
         self._adv.set_panel(w)
         self._adv_win.hide()
+        # Restore the attached/open state (expected UX).
+        self._adv.set_open(True)
+        self._toolbar.set_advanced_open(True)

@@ -49,7 +49,7 @@ CITY_NAME = "zhongshan"
 #   - "HybridAttn-NoPhysics" : HybridAttn encoder-decoder, physics OFF
 #   - "PoroElasticSubsNet"   : poroelastic surrogate (consolidation-only)
 #   - "GeoPriorSubsNet"      : full GeoPriorSubsNet (default)
-MODEL_NAME = "GeoPriorSubsNet"
+MODEL_NAME = "PoroElasticSubsNet"
 
 
 # -------------------------------------------------------------------
@@ -814,7 +814,7 @@ CLIP_GLOBAL_NORM = 5.0
 # ===================================================================
 # 7) TRAINING LOOP DEFAULTS (non-tuner runs)
 # ===================================================================
-EPOCHS = 200           # Recommended: 50 to 200
+EPOCHS = 20           # Recommended: 50 to 200
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-3   # Slightly higher start, let Adam decay it
 

@@ -27,7 +27,11 @@ from PyQt5.QtCore import QObject
 
 from ....config.store import GeoConfigStore
 from ...map.coord_utils import ensure_lonlat
-from ...map.hotspots import HotspotCfg, compute_hotspots
+from ...map.hotspots import (
+    HotspotCfg,
+    compute_hotspots,
+    hotspots_points_with_pulse,
+)
 from ...view.factory import ViewFactory
 
 from ...view.keys import (
@@ -42,7 +46,8 @@ from ...view.keys import (
     K_FILTER_V_MIN, 
     K_FILTER_V_MAX, 
     K_SPACE_MODE, 
-    K_CONTOUR_METRIC
+    K_CONTOUR_METRIC, 
+    
 )
 from ..insights import build_xfer_badges
 from ..types import MapApi, MapPoint
@@ -56,6 +61,10 @@ from ..keys import (
     K_MAP_TIME_MODE,
     K_MAP_STEP,
     K_MAP_MAX_POINTS,
+    # K_MAP_PLAY,
+    K_MAP_STEP_MAX,
+    K_MAP_STEP_MODE,
+    K_MAP_YEAR0,
     K_MAP_COORD_MODE,
     K_MAP_UTM_EPSG,
     K_MAP_SRC_EPSG,
@@ -74,6 +83,9 @@ from ..keys import (
     K_MAP_HOTSPOT_MIN_SEP_KM,
     K_MAP_HOTSPOT_METRIC,
     K_MAP_HOTSPOT_QUANTILE,
+    K_MAP_HOT_RINGS_ENABLE,
+    K_MAP_HOT_RINGS_RADIUS_KM,
+    K_MAP_HOT_RINGS_COUNT,
     K_MAP_ANIM_PULSE,
     K_MAP_ANIM_PLAY_MS,
     K_MAP_INSIGHT, 
@@ -104,8 +116,7 @@ from ..keys import (
     K_MAP_LINKS_SHOW_DIST,
     K_MAP_A_EPSG, 
     K_MAP_B_EPSG, 
-    
-    # VIEW_DEFAULTS, 
+
 )
 from .interpretation import interpret_transfer
 from .interpretation import render_html, render_tip
@@ -261,9 +272,12 @@ class XferMapController(QObject):
         self._tb.request_fit.connect(self._on_fit)
 
     def _on_fit(self) -> None:
-        ids = self._active_layer_ids()
+        # ids = self._active_layer_ids()
         try:
-            self._v.fit_layers(ids)
+            # self._v.fit_layers(ids)
+            # Pro UX: fit what the user is currently seeing
+            # (checked/visible in the Leaflet layer control).
+            self._v.fit_layers(["visible"])
         except Exception:
             return
 
@@ -727,9 +741,10 @@ class XferMapController(QObject):
         ok_any = False
         last_err = ""
         step_max_seen = 1
+        year0_seen = None
         
         for lid, name, fp in layers:
-            df, ok, msg, u, step_max = self._load_points(
+            df, ok, msg, u, step_max, year0 = self._load_points(
                 fp=fp, lid=lid, value=value,
                 time_mode=mode, step=step,
             )
@@ -738,6 +753,10 @@ class XferMapController(QObject):
             except Exception:
                 pass
             
+            if year0 is not None:
+                if year0_seen is None or year0 < year0_seen:
+                    year0_seen = int(year0)
+ 
             if not ok:
                 last_err = msg or last_err
                 continue
@@ -746,7 +765,13 @@ class XferMapController(QObject):
             unit = unit or (u or "")
             pts_out[lid] = df
         
-        self._update_step_range(step, step_max_seen)
+        # self._update_step_range(step, step_max_seen)
+        self._update_step_range(
+            step,
+            step_max_seen,
+            time_mode=mode,
+            year0=year0_seen,
+        )
         
         if not ok_any:
             if last_err:
@@ -795,7 +820,7 @@ class XferMapController(QObject):
 
             # 2. Hotspots Overlay
             if pts_mode in ("hotspots", "hotspots_plus"):
-                hp = self._hotspot_points(df)
+                hp = self._hotspot_points(df, name=base_name)
                 if hp:
                     try:
                         mk_shape = str(
@@ -804,22 +829,29 @@ class XferMapController(QObject):
                         mk_size = int(
                             self._s.get(K_MAP_MARKER_SIZE, 6) or 6
                         )
-                        
+                        pulse_on = bool(self._s.get(K_MAP_ANIM_PULSE, True))
+                        rings_on = bool(self._s.get(K_MAP_HOT_RINGS_ENABLE, False))
+                        ring_km = float(self._s.get(K_MAP_HOT_RINGS_RADIUS_KM, 0.0) or 0.0)
+                        ring_n = int(self._s.get(K_MAP_HOT_RINGS_COUNT, 0) or 0)
+                        opts=self._layer_opts(
+                            lid,
+                            vmin=vmin,
+                            vmax=vmax,
+                            shape=self._shape_for(mk_shape, is_hot=True),
+                            radius=self._radius_for(mk_size, is_hot=True),
+                            opacity=opacity,
+                            pulse=pulse_on,
+                            force_html=True,
+                            rings=rings_on,
+                            ring_radius_km=ring_km,
+                            ring_count=ring_n,
+                            enable_tip=True,
+                        )
                         self._v.set_layer(
                             layer_id=f"{lid}_hot",
                             name=f"{base_name} hotspots",
                             points=hp,
-                            opts=self._layer_opts(
-                                lid, vmin=vmin, vmax=vmax,
-                                shape=self._shape_for(
-                                    mk_shape, is_hot=True
-                                ),
-                                radius=self._radius_for(
-                                    mk_size, is_hot=True
-                                ),
-                                opacity=opacity, pulse=True,
-                                enable_tip=True,
-                            ),
+                            opts=opts
                         )
                     except:
                         pass
@@ -841,23 +873,43 @@ class XferMapController(QObject):
     def _load_points(
         self, *, fp: str, lid: str, value: str,
         time_mode: str, step: int,
-    ) -> Tuple[pd.DataFrame, bool, str, str, int]:
+    ) -> Tuple[pd.DataFrame, bool, str, str, int, Optional[int]]:
         p = Path(str(fp)).expanduser()
         if not p.exists():
-            return (pd.DataFrame(), False, f"Missing file: {p.name}", "", 1)
-
+            # return (pd.DataFrame(), False, f"Missing file: {p.name}", "", 1)
+            return (
+                pd.DataFrame(),
+                False,
+                f"Missing file: {p.name}",
+                "",
+                1,
+                None,
+            )
+        
         df = self._read_cached(p)
         if df is None or df.empty:
-            return (pd.DataFrame(), False, f"Empty CSV: {p.name}", "", 1)
+            # return (pd.DataFrame(), False, f"Empty CSV: {p.name}", "", 1)
+            return (
+                pd.DataFrame(),
+                False,
+                f"Empty CSV: {p.name}",
+                "",
+                1,
+                None,
+            )
 
         step_max = self._infer_step_max(df, time_mode)
+        year0 = self._infer_year0(df, time_mode)
         sl, label = self._slice_time(df, time_mode, step)
         if sl.empty:
             return (
                 pd.DataFrame(), False,
-                f"No rows for {label} in {p.name}", "", step_max
-            )
-
+                f"No rows for {label} in {p.name}",
+                "",
+                step_max,
+                year0,
+             )
+        
         v = self._compute_value(sl, value)
         out = pd.DataFrame({
             "lon": sl.get("coord_x", np.nan),
@@ -899,7 +951,10 @@ class XferMapController(QObject):
                 pd.DataFrame(), False,
                 "No mappable points after CRS conversion. "
                 "Check Coords + EPSG (UTM/src).",
-                "", step_max,
+                # "", step_max,
+                "",
+                step_max,
+                year0,
             )
 
         unit = ""
@@ -909,7 +964,7 @@ class XferMapController(QObject):
             except Exception:
                 unit = ""
 
-        return out, True, "", unit, step_max
+        return out, True, "", unit, step_max, year0
 
     def _read_cached(self, p: Path) -> Optional[pd.DataFrame]:
         try:
@@ -932,13 +987,30 @@ class XferMapController(QObject):
     ) -> Tuple[pd.DataFrame, str]:
         m = str(mode or "forecast_step")
         st = int(step or 1)
+        # if m == "year" and "coord_t" in df.columns:
+        #     yrs = sorted(pd.unique(df["coord_t"]))
+        #     if not yrs:
+        #         return df.iloc[0:0], "year"
+        #     idx = max(0, min(st - 1, len(yrs) - 1))
+        #     y = yrs[idx]
+        #     return df[df["coord_t"] == y], f"year={y}"
         if m == "year" and "coord_t" in df.columns:
-            yrs = sorted(pd.unique(df["coord_t"]))
+            s = pd.to_numeric(df["coord_t"], errors="coerce")
+            s = s[np.isfinite(s)]
+            if s.empty:
+                return df.iloc[0:0], "year"
+
+            yrs = sorted(pd.unique(s.astype(int)))
             if not yrs:
                 return df.iloc[0:0], "year"
+
             idx = max(0, min(st - 1, len(yrs) - 1))
-            y = yrs[idx]
-            return df[df["coord_t"] == y], f"year={y}"
+            y = int(yrs[idx])
+
+            sel = pd.to_numeric(df["coord_t"], errors="coerce")
+            sel = sel.astype("Int64")
+            return df.loc[sel == y], f"year={y}"
+        
         if "forecast_step" in df.columns:
             return df[df["forecast_step"] == st], f"step={st}"
         return df, "all"
@@ -946,14 +1018,69 @@ class XferMapController(QObject):
     def _infer_step_max(self, df: pd.DataFrame, mode: str) -> int:
         m = str(mode or "forecast_step")
         if m == "year" and "coord_t" in df.columns:
-            yrs = pd.unique(df["coord_t"])
+            # yrs = pd.unique(df["coord_t"])
+            # return int(max(1, len(yrs)))
+            s = pd.to_numeric(df["coord_t"], errors="coerce")
+            s = s[np.isfinite(s)]
+            if s.empty:
+                return 1
+            yrs = pd.unique(s.astype(int))
+            
             return int(max(1, len(yrs)))
+
         if "forecast_step" in df.columns:
             try:
                 return int(pd.to_numeric(df["forecast_step"]).max())
             except Exception:
                 return 1
         return 1
+    
+    def _infer_year0(
+        self,
+        df: pd.DataFrame,
+        mode: str,
+    ) -> Optional[int]:
+        m = str(mode or "forecast_step").strip().lower()
+        if m != "year":
+            return None
+        if "coord_t" not in df.columns:
+            return None
+
+        s = df["coord_t"]
+        if s is None or s.empty:
+            return None
+
+
+        try:
+            yy = pd.to_numeric(s, errors="coerce")
+            yy = yy[np.isfinite(yy)]
+            if yy.size:
+                # y0 = int(np.min(yy))
+                # return y0 if y0 > 0 else None
+                y_min = int(np.min(yy))
+                y_max = int(np.max(yy))
+
+                # If it looks like a YEAR column, return it directly.
+                # (Avoid pandas treating 2020 as ns since epoch => 1970.)
+                if 1500 <= y_min <= 2500 and 1500 <= y_max <= 2500:
+                    return int(y_min)
+                
+        except Exception:
+            # return None
+            pass
+
+        # Fallback: parse as datetime, but only after coercing to string
+        # so "2020" becomes year 2020, not ns since epoch.
+        try:
+            ss = s.astype(str).str.strip()
+            dt = pd.to_datetime(ss, errors="coerce")
+            if dt.notna().any():
+                y0 = int(dt.min().year)
+                return y0 if y0 > 0 else None
+        except Exception:
+            pass
+ 
+        return None
 
     def _compute_value(
         self, df: pd.DataFrame, value: str
@@ -1025,10 +1152,18 @@ class XferMapController(QObject):
         return out
 
     def _layer_opts(
-        self, lid: str, *, vmin: Optional[float] = None,
-        vmax: Optional[float] = None, shape: str = "circle",
-        radius: int = 6, opacity: float = 0.90,
-        pulse: bool = False, enable_tip: bool = False,
+        self, lid: str, *, 
+        vmin: Optional[float] = None,
+        vmax: Optional[float] = None, 
+        shape: str = "circle",
+        radius: int = 6, 
+        opacity: float = 0.90,
+        pulse: bool = False,
+        enable_tip: bool = False,
+        force_html: bool = False,
+        rings: bool = False,
+        ring_radius_km: float = 0.0,
+        ring_count: int = 0,
     ) -> Dict[str, Any]:
         stroke = "#2E3191" if lid == "A" else "#F28620"
         d: Dict[str, Any] = {
@@ -1039,6 +1174,10 @@ class XferMapController(QObject):
             "opacity": float(opacity or 0.90),
             "pulse": bool(pulse),
             "enableTooltip": bool(enable_tip),
+            "forceHtml": bool(force_html),
+            "rings": bool(rings),
+            "ringRadiusKm": float(ring_radius_km or 0.0),
+            "ringCount": int(ring_count or 0),
         }
         if vmin is not None and vmax is not None:
             d["vmin"] = float(vmin)
@@ -1067,14 +1206,37 @@ class XferMapController(QObject):
         except Exception:
             return
 
-    def _update_step_range(self, step: int, step_max: int) -> None:
+    def _update_step_range(
+        self,
+        step: int,
+        step_max: int,
+        *,
+        time_mode: str,
+        year0: Optional[int],
+    ) -> None:
         st = int(step or 1)
-        mx = int(step_max or 1)
-        mx = max(1, mx)
+        mx = max(1, int(step_max or 1))
         st = max(1, min(st, mx))
-        self._tb.set_time_range(step_min=1, step_max=mx, step=st)
-        if st != int(self._s.get(K_MAP_STEP, 1) or 1):
-            self._s.set(K_MAP_STEP, st)
+
+        self._tb.set_time_range(
+            step_min=1,
+            step_max=mx,
+            step=st,
+        )
+
+        with self._s.batch():
+            self._s.set(K_MAP_STEP_MAX, mx)
+
+            tm = str(time_mode or "").strip().lower()
+            if tm == "year":
+                self._s.set(K_MAP_STEP_MODE, "year")
+                if year0 is not None:
+                    self._s.set(K_MAP_YEAR0, int(year0))
+            else:
+                self._s.set(K_MAP_STEP_MODE, "step")
+
+            if st != int(self._s.get(K_MAP_STEP, 1) or 1):
+                self._s.set(K_MAP_STEP, st)
 
     def _coord_mode(self) -> str:
         cm = str(self._s.get(K_MAP_COORD_MODE, "auto") or "auto")
@@ -1105,10 +1267,16 @@ class XferMapController(QObject):
             return r
         return max(r + 2, int(r * 1.4))
 
-    def _hotspot_points(self, df: pd.DataFrame) -> List[MapPoint]:
+
+    def _hotspot_points(
+        self,
+        df: pd.DataFrame,
+        *,
+        name: str = "",
+    ) -> List[list]:
         if df is None or df.empty:
             return []
-        
+    
         topn = int(self._s.get(K_MAP_HOTSPOT_TOPN, 8) or 8)
         min_sep = float(
             self._s.get(K_MAP_HOTSPOT_MIN_SEP_KM, 2.0) or 2.0
@@ -1119,32 +1287,37 @@ class XferMapController(QObject):
         q = float(
             self._s.get(K_MAP_HOTSPOT_QUANTILE, 0.98) or 0.98
         )
-
+    
         pts = df[["lon", "lat", "v"]].copy()
-        pts["lon"] = pd.to_numeric(pts["lon"], errors="coerce")
-        pts["lat"] = pd.to_numeric(pts["lat"], errors="coerce")
-        pts["v"] = pd.to_numeric(pts["v"], errors="coerce")
+        for c in ("lon", "lat", "v"):
+            pts[c] = pd.to_numeric(pts[c], errors="coerce")
         pts = pts.dropna(subset=["lon", "lat", "v"])
         if pts.empty:
             return []
-
+    
         cfg = HotspotCfg(
-            method="grid", metric=metric, quantile=q,
-            max_n=topn, min_sep_km=min_sep,
+            method="grid",
+            metric=metric,
+            quantile=q,
+            max_n=topn,
+            min_sep_km=min_sep,
         )
         hs = compute_hotspots(
-            pts, cfg=cfg, coord_mode=self._coord_mode()
+            pts,
+            cfg=cfg,
+            coord_mode=self._coord_mode(),
         )
         if not hs:
             return []
-
-        out: List[MapPoint] = []
-        for h in hs:
-            out.append(MapPoint(
-                lat=float(h.lat), lon=float(h.lon),
-                v=float(h.v), sid=int(h.rank),
-            ))
-        return out
+    
+        pref = str(name or "").strip()
+        if pref:
+            pref = f"{pref} hotspot"
+    
+        return hotspots_points_with_pulse(
+            hs,
+            tip_prefix=pref,
+        )
     
     def _hotspot_df(
         self, df: pd.DataFrame, *, name: str
@@ -1607,3 +1780,4 @@ class XferMapController(QObject):
                 f"city_meta.{nm}.utm_epsg", f"city_meta.{nm}.epsg",
             ])
         return out
+

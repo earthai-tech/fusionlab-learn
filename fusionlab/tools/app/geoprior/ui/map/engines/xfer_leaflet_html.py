@@ -1,4 +1,4 @@
-# geoprior/ui/map/engines/leaflet_html.py
+# geoprior/ui/map/engines/xfer_leaflet_html.py
 # -*- coding: utf-8 -*-
 
 """
@@ -56,16 +56,32 @@ _LEAFLET_HTML = r"""
   .gp-mkr.square   { border-radius: 3px; }
 
   @keyframes gpPulse {
-    0%   { transform: scale(0.95); opacity: 0.65; }
-    100% { transform: scale(1.45); opacity: 0.00; }
+    0% {
+      transform: translate(-50%, -50%) scale(0.95);
+      opacity: 0.65;
+    }
+    70% {
+      transform: translate(-50%, -50%)
+        scale(var(--gp-pulse-scale, 1.65));
+      opacity: 0.00;
+    }
+    100% { opacity: 0.00; }
   }
   .gp-pulse::after {
-    content: ""; position: absolute; left: 50%; top: 50%;
-    width: calc(var(--gp-r) * 2); height: calc(var(--gp-r) * 2);
-    transform: translate(-50%, -50%); border-radius: 999px;
-    border: 2px solid var(--gp-stroke); animation: gpPulse 1.2s ease-out infinite;
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: calc(var(--gp-r) * 2);
+    height: calc(var(--gp-r) * 2);
+    border-radius: 999px;
+    border: 2px solid var(--gp-stroke);
+    animation-name: gpPulse;
+    animation-duration: var(--gp-pulse-ms, 1200ms);
+    animation-timing-function: ease-out;
+    animation-iteration-count: infinite;
     pointer-events: none;
-  }
+   }
   
   /* --- Links --- */
   .gp-link-label {
@@ -218,6 +234,22 @@ _LEAFLET_HTML = r"""
     return out;
   }
 
+  function _boundsFromData(data) {
+    const bb = L.latLngBounds([]);
+    if (!data || !data.length) return bb;
+
+    for (let i = 0; i < data.length; i++) {
+      const d = data[i];
+      const lat = Array.isArray(d) ? d[0] : d.lat;
+      const lon = Array.isArray(d) ? d[1] : d.lon;
+
+      if (!isFinite(lat) || !isFinite(lon)) continue;
+      bb.extend([lat, lon]);
+    }
+
+    return bb;
+  }
+
   // --- 3. THE LAYER FACTORY ---
   const LayerFactory = {
     render: function(id, kind, data, opts) {
@@ -232,6 +264,13 @@ _LEAFLET_HTML = r"""
       }
 
       if (layer) {
+        // Ensure fitLayers can work for custom layers that
+        // don't implement getBounds() (e.g., contour/hex).
+        if (typeof layer.getBounds !== 'function') {
+          const bb = _boundsFromData(data);
+          layer.getBounds = function() { return bb; };
+        }
+
         layer.addTo(map);
         layer.__name = opts.name || id; 
         layers[id] = layer;
@@ -252,43 +291,127 @@ _LEAFLET_HTML = r"""
 
     // --- A. Scatter ---
     _buildScatter: function(data, opts) {
-      const g = L.layerGroup();
+      const g = L.featureGroup();
       const o = opts || {};
-      
-      const radius = o.radius || 6;
-      const opacity = o.opacity || 0.9;
-      const stroke = o.stroke || '#2E3191';
-      const shape = o.shape || 'circle';
+      const arr = data || [];
+    
+      const radius = Number(o.radius || 6);
+      const opacity = (o.opacity != null) ? Number(o.opacity) : 0.9;
+      const stroke = o.stroke || "#2E3191";
+      const shape = o.shape || "circle";
       const pulse = (o.pulse === true);
-      const vmin = o.vmin, vmax = o.vmax;
-      const useHtml = (data.length < 2500 && (shape !== 'circle' || pulse));
-
-      data.forEach(d => {
-        let fc = o.fill || stroke;
-        const val = (Array.isArray(d) ? d[2] : d.v);
-        if (val != null && vmin != null && vmax != null) {
-           const t = (val - vmin) / (vmax - vmin + 1e-12);
-           fc = _ramp(t);
-        }
-
+      const enableTip = (o.enableTooltip === true);
+      const vmin = o.vmin;
+      const vmax = o.vmax;
+    
+      // Force HTML markers for small, high-salience overlays
+      // (e.g., hotspots) so CSS pulse always works.
+      const forceHtml = (o.forceHtml === true);
+      const useHtml = (
+        forceHtml ||
+        (arr.length < 2500 && (shape !== "circle" || pulse))
+      );
+    
+      // Optional: impact rings around each point.
+      const ringsOn = (o.rings === true);
+      const ringKm = Number(o.ringRadiusKm || 0);
+      const ringCount = Math.max(0, parseInt(o.ringCount || 0, 10));
+      const ringOpacity = (o.ringOpacity != null)
+        ? Number(o.ringOpacity)
+        : 0.28;
+      const ringWeight = (o.ringWeight != null)
+        ? Number(o.ringWeight)
+        : 1;
+      const ringFillOpacity = (o.ringFillOpacity != null)
+        ? Number(o.ringFillOpacity)
+        : 0.0;
+    
+      arr.forEach(d => {
         const lat = Array.isArray(d) ? d[0] : d.lat;
         const lon = Array.isArray(d) ? d[1] : d.lon;
-        const tipTxt = d.tip ? d.tip : (d.v ? `v=${d.v}` : '');
-
+        if (!_isFiniteNum(lat) || !_isFiniteNum(lon)) return;
+    
+        // Tooltip
+        const tipTxt = Array.isArray(d)
+          ? (d[4] || "")
+          : (d.tip || (d.v ? `v=${d.v}` : ""));
+    
+        // Fill color (shared domain)
+        let fc = o.fill || stroke;
+        const val = Array.isArray(d) ? d[2] : d.v;
+        if (_isFiniteNum(val) && _isFiniteNum(vmin) && _isFiniteNum(vmax)) {
+          const t = (Number(val) - Number(vmin)) / (Number(vmax) - Number(vmin) + 1e-12);
+          fc = _ramp(t);
+        }
+    
+        // Rings first so markers stay on top
+        if (ringsOn && ringKm > 0 && ringCount > 0) {
+          const rM = ringKm * 1000.0;
+          for (let k = 1; k <= ringCount; k++) {
+            const rr = rM * (k / ringCount);
+            L.circle([lat, lon], {
+              radius: rr,
+              color: stroke,
+              weight: ringWeight,
+              opacity: ringOpacity,
+              fillColor: stroke,
+              fillOpacity: ringFillOpacity,
+              interactive: false
+            }).addTo(g);
+          }
+        }
+    
         if (useHtml) {
-           const cls = `gp-mkr ${shape} ${pulse?'gp-pulse':''}`;
-           const html = `<div class="${cls}" style="--gp-r:${radius}px;--gp-fill:${fc};--gp-stroke:${stroke};--gp-op:${opacity};"></div>`;
-           const icon = L.divIcon({ html: html, iconSize: [2*radius, 2*radius], iconAnchor: [radius, radius], className: '' });
-           const m = L.marker([lat, lon], { icon: icon }).addTo(g);
-           if(tipTxt) m.bindTooltip(tipTxt);
+          // Per-point overrides layout:
+          // [lat, lon, v, sid, tip, pulseMs, pulseScale, rMult]
+          const pms = Array.isArray(d) ? d[5] : d.pulseMs;
+          const psc = Array.isArray(d) ? d[6] : d.pulseScale;
+          const rmult = Array.isArray(d) ? d[7] : d.rMult;
+    
+          const rpx = (rmult != null) ? (radius * Number(rmult)) : radius;
+    
+          const mkrCls = pulse
+            ? `gp-mkr ${shape} gp-pulse`
+            : `gp-mkr ${shape}`;
+    
+          let sty =
+            `--gp-r:${rpx}px;` +
+            `--gp-fill:${fc};` +
+            `--gp-stroke:${stroke};` +
+            `--gp-op:${opacity};`;
+    
+          if (pms != null) {
+            sty += `--gp-pulse-ms:${Number(pms)}ms;`;
+          }
+          if (psc != null) {
+            sty += `--gp-pulse-scale:${Number(psc)};`;
+          }
+    
+          const html = `<div class="${mkrCls}" style="${sty}"></div>`;
+          const icon = L.divIcon({
+            html: html,
+            iconSize: [2 * rpx, 2 * rpx],
+            iconAnchor: [rpx, rpx],
+            className: ""
+          });
+    
+          const m = L.marker([lat, lon], { icon: icon }).addTo(g);
+          if (enableTip && tipTxt) m.bindTooltip(tipTxt);
         } else {
-           const m = L.circleMarker([lat, lon], {
-             radius: radius, color: stroke, weight: 1, opacity: opacity,
-             fillColor: fc, fillOpacity: opacity, renderer: canvas
-           }).addTo(g);
-           if(tipTxt) m.bindTooltip(tipTxt);
+          const m = L.circleMarker([lat, lon], {
+            radius: radius,
+            color: stroke,
+            weight: 1,
+            opacity: opacity,
+            fillColor: fc,
+            fillOpacity: opacity,
+            renderer: canvas
+          }).addTo(g);
+    
+          if (enableTip && tipTxt) m.bindTooltip(tipTxt);
         }
       });
+    
       return g;
     },
 
@@ -572,19 +695,125 @@ _LEAFLET_HTML = r"""
     Object.keys(linkLayers).forEach(k => clearLinks(k));
     Object.keys(radarLayers).forEach(k => clearRadar(k));
   }
+  
   function fitLayers(ids) {
-    const use = (ids && ids.length) ? ids : Object.keys(layers);
-    const b = [];
-    if(srcMarker) b.push(srcMarker.getLatLng());
-    if(tgtMarker) b.push(tgtMarker.getLatLng());
-    use.forEach(id => {
-       const g = layers[id];
-       if(g) { try{ const bb=g.getBounds(); if(bb.isValid()) {b.push(bb.getNorthEast()); b.push(bb.getSouthWest());} }catch(e){} }
-    });
-    if(!b.length) return;
-    map.fitBounds(L.latLngBounds(b).pad(0.2));
-  }
+    // Pro modes:
+    // - fitLayers(["visible"])  => fit only layers currently on the map
+    // - fitLayers(["__ALL__"])  => fit everything in registries
+    //
+    // Back-compat:
+    // - fitLayers([]/null)      => fit everything in registries (same as before)
+    // - fitLayers(["A","B"])    => fit those ids (even if hidden)
 
+    let arr = ids;
+    if (typeof arr === "string") arr = [arr];
+
+    const first = (arr && arr.length)
+      ? String(arr[0] || "").trim().toLowerCase()
+      : "";
+
+    const mode = (!arr || !arr.length)
+      ? "all"
+      : (first === "visible" || first === "__visible__")
+        ? "visible"
+        : (first === "__all__" || first === "all")
+          ? "all"
+          : "ids";
+
+    function _allIds() {
+      return [].concat(
+        Object.keys(layers),
+        Object.keys(linkLayers),
+        Object.keys(radarLayers),
+      );
+    }
+
+    let want = [];
+    if (mode === "all") {
+      want = _allIds();
+    } else if (mode === "visible") {
+      const all = _allIds();
+      for (let i = 0; i < all.length; i++) {
+        const id = all[i];
+        const g = layers[id] || linkLayers[id] || radarLayers[id];
+        if (g && map.hasLayer(g)) want.push(id);
+      }
+    } else {
+      want = arr || [];
+    }
+
+    const bbAll = L.latLngBounds([]);
+
+    // Only include these if actually on the map (visible mode behavior).
+    if (srcMarker && map.hasLayer(srcMarker)) bbAll.extend(srcMarker.getLatLng());
+    if (tgtMarker && map.hasLayer(tgtMarker)) bbAll.extend(tgtMarker.getLatLng());
+
+    // linkLine is separate from linkLayers (centroid link)
+    if (linkLine && map.hasLayer(linkLine) && linkLine.getBounds) {
+      const bb = linkLine.getBounds();
+      if (bb && bb.isValid && bb.isValid()) {
+        bbAll.extend(bb.getNorthEast());
+        bbAll.extend(bb.getSouthWest());
+      }
+    }
+
+    function _extendFromGroup(g, tag) {
+      if (!g) return;
+
+      try {
+        if (typeof g.getBounds === "function") {
+          const bb = g.getBounds();
+          if (bb && bb.isValid && bb.isValid()) {
+            bbAll.extend(bb.getNorthEast());
+            bbAll.extend(bb.getSouthWest());
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn("fitLayers bounds failed:", tag, e);
+      }
+
+      // Fallback: extend from children
+      try {
+        if (typeof g.eachLayer === "function") {
+          g.eachLayer(function(l) {
+            try {
+              if (l.getBounds && l.getBounds().isValid()) {
+                const b = l.getBounds();
+                bbAll.extend(b.getNorthEast());
+                bbAll.extend(b.getSouthWest());
+              } else if (l.getLatLng) {
+                bbAll.extend(l.getLatLng());
+              }
+            } catch (_e) {}
+          });
+        }
+      } catch (_e2) {}
+    }
+
+    for (let i = 0; i < want.length; i++) {
+      const id = want[i];
+
+      const gL = layers[id];
+      const gK = linkLayers[id];
+      const gR = radarLayers[id];
+
+      // In visible mode we already filtered, but keep a safety check.
+      if (mode === "visible") {
+        if (gL && !map.hasLayer(gL)) continue;
+        if (gK && !map.hasLayer(gK)) continue;
+        if (gR && !map.hasLayer(gR)) continue;
+      }
+
+      if (gL) _extendFromGroup(gL, `layer:${id}`);
+      if (gK) _extendFromGroup(gK, `link:${id}`);
+      if (gR) _extendFromGroup(gR, `radar:${id}`);
+    }
+
+    if (!bbAll.isValid || !bbAll.isValid()) return;
+    map.fitBounds(bbAll.pad(0.2));
+  }
+    
   // Links
   function _arrowIcon(ang, col) {
     const html = `<div class="gp-arrow" style="--gp-rot:${ang}deg;--gp-ac:${col};">▶</div>`;
@@ -605,7 +834,9 @@ _LEAFLET_HTML = r"""
     clearLinks(id);
     const o = opts || {};
     const color = o.color || '#111827';
-    const g = L.layerGroup(); g.__name = name || id;
+    // Use featureGroup so getBounds() exists (for fitLayers).
+    const g = L.featureGroup();
+    g.__name = name || id;
     for (let i=0; i<links.length; i++) {
       const p = links[i];
       const a = L.latLng(p[0],p[1]), b = L.latLng(p[2],p[3]);
@@ -652,7 +883,9 @@ _LEAFLET_HTML = r"""
     const o=opts||{};
     const dwell=o.dwellMs||520, rM=(o.radiusKm||8.0)*1000, rings=o.rings||3;
     if(!centers||!centers.length) return;
-    const g=L.layerGroup(); g.__name='Radar';
+    // Use featureGroup so getBounds() exists (for fitLayers).
+    const g=L.featureGroup();
+    g.__name='Radar';
     let idx=0, baseT=Date.now(), ringL=[], wedge=null;
     function _draw(c) {
        ringL.forEach(l=>g.removeLayer(l)); ringL=[];

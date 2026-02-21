@@ -54,234 +54,9 @@ from ..config.prior_schema import (
     PHYSICS_SCHEMA,
 )
 from ..config.helps import help_text, first_line
-from ..styles import (
-    PALETTE,
-    PRIMARY,
-    SECONDARY,
-    SECONDARY_TBLUE
+from ..ui.delegates.nav_badge_delegate import (
+    NavCountBadgeDelegate,
 )
-
-_DLG_QSS = f"""
-/* ---------------------------------------------------------
-   GeoPrior PhysicsConfigDialog - dialog scoped stylesheet
-   --------------------------------------------------------- */
-
-QDialog {{
-  background: {PALETTE.get("light_bg", "#f8fafc")};
-  color: {PALETTE.get("light_text", "#0f172a")};
-  font-family: "Segoe UI", "Helvetica Neue", sans-serif;
-}}
-
-QToolTip {{
-  background-color: rgba(15, 23, 42, 0.96);
-  color: #e5e7eb;
-  border: 1px solid {PRIMARY};
-  border-radius: 6px;
-  padding: 6px 10px;
-  font-size: 11px;
-}}
-
-QFrame#card {{
-  background: {PALETTE.get("light_card_bg", "#ffffff")};
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 12px;
-}}
-
-QLabel#title {{
-  font-weight: 800;
-  font-size: 18px;
-  color: {PALETTE.get("light_text_title", PRIMARY)};
-}}
-
-QLabel#muted {{
-  color: {PALETTE.get("light_text_muted", "#64748b")};
-}}
-
-QLabel[role="hint"] {{
-  color: {PALETTE.get("light_text_muted", "#64748b")};
-  font-style: italic;
-  font-weight: 400;
-  font-size: 11px;
-}}
-
-QFrame#fieldTile {{
-  background: rgba(0, 0, 0, 0.02);
-  border: 1px solid rgba(0, 0, 0, 0.06);
-  border-radius: 10px;
-}}
-
-QLabel#fieldLabel {{
-  font-weight: 600;
-}}
-
-QFrame#inspector {{
-  background: rgba(0, 0, 0, 0.015);
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 12px;
-}}
-
-QFrame#settingRow {{
-  background: {PALETTE.get("light_card_bg", "#ffffff")};
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 12px;
-}}
-
-QFrame#settingRow[sel="true"] {{
-  border: 1px solid rgba(0, 0, 0, 0.18);
-}}
-
-QLabel#badge {{
-  padding: 2px 8px;
-  border-radius: 10px;
-  border: 1px solid rgba(0, 0, 0, 0.10);
-  background: rgba(0, 0, 0, 0.02);
-}}
-
-QLabel#badge[accent="true"] {{
-  background: {SECONDARY};
-  color: #ffffff;
-  border: 0px;
-}}
-
-/* Inputs */
-QLineEdit,
-QSpinBox,
-QDoubleSpinBox,
-QComboBox {{
-  background: {PALETTE.get("light_input_bg", "#f1f5f9")};
-  border: 1px solid rgba(0, 0, 0, 0.14);
-  border-radius: 8px;
-  padding: 5px 8px;
-}}
-
-QLineEdit:focus,
-QSpinBox:focus,
-QDoubleSpinBox:focus,
-QComboBox:focus {{
-  border: 1px solid {PRIMARY};
-}}
-
-QPlainTextEdit,
-QTextBrowser {{
-  background: {PALETTE.get("light_input_bg", "#f1f5f9")};
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  border-radius: 10px;
-  padding: 8px;
-}}
-
-/* Buttons */
-QPushButton {{
-  background: {PRIMARY};
-  color: #ffffff;
-  border: 0px;
-  border-radius: 10px;
-  padding: 7px 14px;
-}}
-
-QPushButton:hover:enabled {{
-  background: {SECONDARY};
-}}
-
-QPushButton:pressed {{
-  background: {SECONDARY};
-}}
-
-QPushButton:disabled {{
-  background: rgba(0, 0, 0, 0.10);
-  color: rgba(0, 0, 0, 0.35);
-}}
-
-/* Ghost buttons (you setObjectName("ghost")) */
-QPushButton#ghost {{
-  background: transparent;
-  color: {PALETTE.get("light_text", "#0f172a")};
-  border: 1px solid rgba(0, 0, 0, 0.16);
-  border-radius: 10px;
-  padding: 6px 12px;
-}}
-
-QPushButton#ghost:hover:enabled {{
-  background: rgba(0, 0, 0, 0.04);
-}}
-
-/* Reset buttons (you setObjectName("reset")) */
-QPushButton#reset {{
-  background: {PALETTE.get("light_reset_bg", "#e2e8f0")};
-  color: {PALETTE.get("light_text", "#0f172a")};
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  border-radius: 10px;
-  padding: 7px 14px;
-}}
-
-QPushButton#reset:hover:enabled {{
-  background: rgba(0, 0, 0, 0.08);
-}}
-
-/* OK button (QDialogButtonBox.Ok -> objectName "runButton") */
-QDialog QPushButton#runButton:enabled {{
-  background: {PRIMARY};
-  color: #ffffff;
-  border: 0px;
-  padding: 8px 16px;
-  border-radius: 10px;
-  min-width: 90px;
-  font-weight: 700;
-}}
-
-QDialog QPushButton#runButton:hover:enabled {{
-  background: {SECONDARY};
-}}
-
-QDialog QPushButton#runButton:pressed {{
-  background: {SECONDARY};
-}}
-
-QDialog QPushButton#runButton:disabled {{
-  background: rgba(0, 0, 0, 0.10);
-  color: rgba(0, 0, 0, 0.35);
-}}
-
-
-/* Nav tree */
-QTreeWidget {{
-  background: {PALETTE.get("light_card_bg", "#ffffff")};
-  border: 1px solid rgba(0, 0, 0, 0.10);
-  border-radius: 12px;
-  padding: 6px;
-}}
-
-QTreeWidget::item {{
-  padding: 7px 8px;
-  border-radius: 10px;
-}}
-
-QTreeWidget::item:hover {{
-  background: {SECONDARY_TBLUE};
-  color: #ffffff;
-  font-weight: 600;
-}}
-
-QTreeWidget::item:selected {{
-  background: {SECONDARY};
-  color: #ffffff;
-  font-weight: 700;
-}}
-
-QTreeWidget::item:selected:hover {{
-  background: {SECONDARY};
-  color: #ffffff;
-  font-weight: 700;
-}}
-
-/* Splitter handle */
-QSplitter::handle {{
-  background: rgba(0, 0, 0, 0.06);
-}}
-
-QSplitter::handle:hover {{
-  background: rgba(0, 0, 0, 0.10);
-}}
-"""
 
 
 class _Badge(QLabel):
@@ -325,6 +100,7 @@ class _InspectorPanel(QFrame):
         self.lbl_state.setWordWrap(True)
 
         self.btn_reset = QPushButton("Reset this setting")
+        self.btn_reset.setObjectName("reset")
         # self.btn_reset.setObjectName("reset")
         self.btn_reset.setEnabled(False)
         self.btn_reset.clicked.connect(self._on_reset)
@@ -555,7 +331,7 @@ class PhysicsConfigDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Physics & Units")
         self.setModal(True)
-        self.setStyleSheet(_DLG_QSS)
+        self.setObjectName("physicsDialog")
 
         self._store = store
         self._default_cfg = GeoPriorConfig()
@@ -681,7 +457,24 @@ class PhysicsConfigDialog(QDialog):
         mid.setStretchFactor(0, 1)
         mid.setStretchFactor(1, 0)
     
-        outer.addWidget(self.nav)
+        # outer.addWidget(self.nav)
+        nav_wrap = QFrame()
+        nav_wrap.setMinimumWidth(260)
+        nav_wrap.setMaximumWidth(340)
+        
+        nav_wrap.setObjectName("physicsNavWrap")
+        vl = QVBoxLayout(nav_wrap)
+        vl.setContentsMargins(8, 8, 8, 8)
+        vl.setSpacing(6)
+        
+        lbl = QLabel("Sections")
+        lbl.setObjectName("physicsNavTitle")
+        
+        vl.addWidget(lbl)
+        vl.addWidget(self.nav, 1)
+        
+        outer.addWidget(nav_wrap)
+        
         outer.addWidget(mid)
         outer.setStretchFactor(0, 0)
         outer.setStretchFactor(1, 1)
@@ -690,8 +483,13 @@ class PhysicsConfigDialog(QDialog):
 
     def _build_nav_tree(self) -> QTreeWidget:
         tree = QTreeWidget()
+        tree.setObjectName("physicsNav")
+        tree.setItemDelegate(
+            NavCountBadgeDelegate(tree, primary="#2E3191")
+        )
         tree.setHeaderHidden(True)
-    
+        tree.setMouseTracking(True)
+        
         root_over = QTreeWidgetItem(["Quick setup"])
         root_over.setData(0, Qt.UserRole, "physics.overview")
         tree.addTopLevelItem(root_over)
@@ -1235,11 +1033,13 @@ class PhysicsConfigDialog(QDialog):
         row.setSpacing(10)
     
         self.btn_reset_group = QPushButton("Reset group")
+        self.btn_reset_group.setObjectName("reset")
         self.btn_reset_group.clicked.connect(
             self._reset_current_group
         )
     
         self.btn_reset_all = QPushButton("Reset all")
+        self.btn_reset_all.setObjectName("reset")
         self.btn_reset_all.clicked.connect(self._reset_all)
     
         row.addWidget(self.btn_reset_group)

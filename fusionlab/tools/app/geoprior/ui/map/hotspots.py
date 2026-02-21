@@ -306,6 +306,64 @@ def hotspots_payload(hs: Iterable[Hotspot]) -> List[Dict[str, object]]:
         )
     return out
 
+def hotspot_pulse_triplet(
+    rank: int,
+) -> tuple[int, float, float]:
+    """
+    Rank -> (pulse_ms, pulse_scale, r_mult).
+    """
+    r = int(rank or 0)
+
+    if r <= 1:
+        return 650, 3.25, 1.55
+    if r == 2:
+        return 820, 3.05, 1.40
+    if r == 3:
+        return 980, 2.85, 1.25
+
+    return 1300, 2.60, 1.00
+
+
+def hotspots_points_with_pulse(
+    hs: Iterable[Hotspot],
+    *,
+    tip_prefix: str = "",
+) -> List[list]:
+    """
+    Output per point:
+      [lat, lon, v, sid, tip, pms, psc, rmult]
+    """
+    out: List[list] = []
+    pref = str(tip_prefix or "").strip()
+
+    for h in hs or []:
+        pms, psc, rm = hotspot_pulse_triplet(h.rank)
+
+        if pref:
+            tip0 = f"{pref}\n{h.label}"
+        else:
+            tip0 = str(h.label or "")
+
+        tip = (
+            f"{tip0}\n"
+            f"v={float(h.v):.4g}\n"
+            f"score={float(h.score):.4g}"
+        )
+
+        out.append(
+            [
+                float(h.lat),
+                float(h.lon),
+                float(h.v),
+                int(h.rank),
+                tip,
+                int(pms),
+                float(psc),
+                float(rm),
+            ]
+        )
+
+    return out
 
 # -------------------------------------------------
 # Internals
