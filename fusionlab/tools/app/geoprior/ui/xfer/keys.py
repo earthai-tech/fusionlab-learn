@@ -30,6 +30,12 @@ K_MAP_TIME_MODE = "xfer.map.time_mode"
 K_MAP_STEP = "xfer.map.step"
 K_MAP_YEAR = "xfer.map.year"
 
+# Time scrubber UX
+K_MAP_PLAY = "xfer.map.play"
+K_MAP_STEP_MAX = "xfer.map.step_max"
+K_MAP_STEP_MODE = "xfer.map.step_mode"  # step|year
+K_MAP_YEAR0 = "xfer.map.year0"          # int
+
 K_MAP_MAX_POINTS = "xfer.map.max_points"
 K_MAP_RADIUS = "xfer.map.radius"
 K_MAP_OPACITY = "xfer.map.opacity"
@@ -43,6 +49,10 @@ K_MAP_HOTSPOT_TOPN = "xfer.map.hotspot.top_n"
 K_MAP_HOTSPOT_MIN_SEP_KM = "xfer.map.hotspot.min_sep_km"
 K_MAP_HOTSPOT_METRIC = "xfer.map.hotspot.metric"
 K_MAP_HOTSPOT_QUANTILE = "xfer.map.hotspot.quantile"
+# Hotspot neighborhood (impact rings)
+K_MAP_HOT_RINGS_ENABLE = "xfer.map.hotspot.rings.enable"
+K_MAP_HOT_RINGS_RADIUS_KM = "xfer.map.hotspot.rings.radius_km"
+K_MAP_HOT_RINGS_COUNT = "xfer.map.hotspot.rings.count"
 
 K_MAP_ANIM_PULSE = "xfer.map.anim.pulse"
 K_MAP_ANIM_PLAY_MS = "xfer.map.anim.play_ms"
@@ -151,6 +161,12 @@ DEFAULTS: Dict[str, object] = {
     K_MAP_TIME_MODE: "forecast_step",
     K_MAP_STEP: 1,
     K_MAP_YEAR: None,
+
+    K_MAP_PLAY: False,
+    K_MAP_STEP_MAX: 1,
+    K_MAP_STEP_MODE: "step",
+    K_MAP_YEAR0: None,
+
     K_MAP_MAX_POINTS: 15000,
     K_MAP_RADIUS: 6,
     K_MAP_OPACITY: 0.90,
@@ -165,6 +181,10 @@ DEFAULTS: Dict[str, object] = {
     K_MAP_HOTSPOT_QUANTILE: 0.98,
     K_MAP_EXPANDED: False,
     
+    K_MAP_HOT_RINGS_ENABLE: False,
+    K_MAP_HOT_RINGS_RADIUS_KM: 4.0,
+    K_MAP_HOT_RINGS_COUNT: 3,
+
     K_MAP_ANIM_PULSE: True,
     K_MAP_ANIM_PLAY_MS: 320,
     K_MAP_COORD_MODE: "auto",
@@ -234,6 +254,9 @@ def map_keys() -> Set[str]:
         K_MAP_HOTSPOT_MIN_SEP_KM,
         K_MAP_HOTSPOT_METRIC,
         K_MAP_HOTSPOT_QUANTILE,
+        K_MAP_HOT_RINGS_ENABLE,
+        K_MAP_HOT_RINGS_RADIUS_KM,
+        K_MAP_HOT_RINGS_COUNT,
         K_MAP_ANIM_PULSE,
         K_MAP_ANIM_PLAY_MS,
         K_MAP_COORD_MODE,

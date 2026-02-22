@@ -27,11 +27,12 @@ from PyQt5.QtWidgets import (
     QGridLayout,
     QLabel,
     QSpinBox,
+    QStyle,
     QToolButton,
     QVBoxLayout,
     QWidget,
     QTextBrowser, 
-    QFileDialog
+    QFileDialog, 
 )
 
 from ....config.store import GeoConfigStore
@@ -41,6 +42,9 @@ from ..keys import (
     K_MAP_HOTSPOT_METRIC,
     K_MAP_HOTSPOT_MIN_SEP_KM,
     K_MAP_HOTSPOT_QUANTILE,
+    K_MAP_HOT_RINGS_ENABLE,
+    K_MAP_HOT_RINGS_RADIUS_KM,
+    K_MAP_HOT_RINGS_COUNT,
     K_MAP_MAX_POINTS,
     K_MAP_OPACITY,
     K_MAP_POINTS_MODE,
@@ -63,7 +67,8 @@ from ..keys import (
     K_MAP_B_EPSG,
     K_CITIES_META_PATH, 
     BASEMAP_CHOICES, 
-    basemap_icon_name
+    basemap_icon_name, 
+    K_MAP_ANIM_PULSE,
 )
 from ...view.keys import (
     K_PLOT_KIND, 
@@ -418,11 +423,30 @@ class XferMapAdvancedPanel(QWidget):
         self.sec_hot.add_row(1, "Min sep (km)", self.sp_sep)
         self.sec_hot.add_row(2, "Metric", self.cmb_metric)
         self.sec_hot.add_row(3, "Quantile", self.sp_q)
+        
+        self.btn_hot_pro = QToolButton(self)
+        self.btn_hot_pro.setAutoRaise(True)
+        self.btn_hot_pro.setText("Apply pro preset")
+        self.btn_hot_pro.setToolTip(
+            "1-click hotspot view: pulse + rings + "
+            "radar + links."
+        )
+        self.btn_hot_pro.setIcon(
+            try_icon(
+                "sparkles.svg",
+                fallback=self.style().standardIcon(
+                    QStyle.SP_ArrowUp
+                ),
+            )
+        )
+        self.sec_hot.body_l.addWidget(
+            self.btn_hot_pro, 4, 0, 1, 2
+        )
 
         # ---- NEW: Hotspot analytics (Radar + Arrows) ----
         self.lbl_hot_ana = QLabel("<b>Hotspot analytics</b>", self)
         self.lbl_hot_ana.setObjectName("xferMapAdvSectionTitle")
-        self.sec_hot.body_l.addWidget(self.lbl_hot_ana, 4, 0, 1, 2)
+        self.sec_hot.body_l.addWidget(self.lbl_hot_ana, 5, 0, 1, 2)
 
         # Radar
         self.chk_radar = QCheckBox("Radar sweep hotspots", self)
@@ -447,12 +471,12 @@ class XferMapAdvancedPanel(QWidget):
         self.sp_radar_rings.setRange(1, 8)
         self.sp_radar_rings.setSingleStep(1)
 
-        self.sec_hot.add_row(5, "Radar", self.chk_radar)
-        self.sec_hot.add_row(6, "Radar target", self.cmb_radar_target)
-        self.sec_hot.add_row(7, "Radar order", self.cmb_radar_order)
-        self.sec_hot.add_row(8, "Radar dwell (ms)", self.sp_radar_ms)
-        self.sec_hot.add_row(9, "Radar radius (km)", self.sp_radar_rkm)
-        self.sec_hot.add_row(10, "Radar rings", self.sp_radar_rings)
+        self.sec_hot.add_row(6, "Radar", self.chk_radar)
+        self.sec_hot.add_row(7, "Radar target", self.cmb_radar_target)
+        self.sec_hot.add_row(8, "Radar order", self.cmb_radar_order)
+        self.sec_hot.add_row(9, "Radar dwell (ms)", self.sp_radar_ms)
+        self.sec_hot.add_row(10, "Radar radius (km)", self.sp_radar_rkm)
+        self.sec_hot.add_row(11, "Radar rings", self.sp_radar_rings)
 
         # Links (arrows)
         self.chk_links = QCheckBox("Arrows between hotspots", self)
@@ -469,12 +493,31 @@ class XferMapAdvancedPanel(QWidget):
 
         self.chk_links_dist = QCheckBox("Show distance labels", self)
 
-        self.sec_hot.add_row(11, "Links", self.chk_links)
-        self.sec_hot.add_row(12, "Link mode", self.cmb_links_mode)
-        self.sec_hot.add_row(13, "k (knn)", self.sp_links_k)
-        self.sec_hot.add_row(14, "Max links", self.sp_links_max)
-        self.sec_hot.add_row(15, "Distance", self.chk_links_dist)
+        self.sec_hot.add_row(12, "Links", self.chk_links)
+        self.sec_hot.add_row(13, "Link mode", self.cmb_links_mode)
+        self.sec_hot.add_row(14, "k (knn)", self.sp_links_k)
+        self.sec_hot.add_row(15, "Max links", self.sp_links_max)
+        self.sec_hot.add_row(16, "Distance", self.chk_links_dist)
         
+        self.chk_hot_rings = QCheckBox(
+            "Impact rings around hotspots", self
+        )
+        self.sp_hot_ring_km = QDoubleSpinBox(self)
+        self.sp_hot_ring_km.setDecimals(1)
+        self.sp_hot_ring_km.setRange(0.5, 80.0)
+        self.sp_hot_ring_km.setSingleStep(0.5)
+
+        self.sp_hot_ring_n = QSpinBox(self)
+        self.sp_hot_ring_n.setRange(1, 8)
+        self.sp_hot_ring_n.setSingleStep(1)
+
+        self.sec_hot.add_row(17, "Rings", self.chk_hot_rings)
+        self.sec_hot.add_row(
+            18, "Ring radius (km)", self.sp_hot_ring_km
+        )
+        self.sec_hot.add_row(
+            19, "Ring count", self.sp_hot_ring_n
+        )
 
         root.addWidget(self.sec_hot, 0)
 
@@ -583,6 +626,10 @@ class XferMapAdvancedPanel(QWidget):
         )
         self.sp_q.valueChanged.connect(self._push_hot)
 
+        self.btn_hot_pro.clicked.connect(
+            self._apply_hot_pro_preset
+        )
+
         # NEW: hotspot analytics -> store
         self.chk_radar.toggled.connect(self._push_hot_ana)
         self.cmb_radar_target.currentIndexChanged.connect(
@@ -603,6 +650,10 @@ class XferMapAdvancedPanel(QWidget):
         self.sp_links_max.valueChanged.connect(self._push_hot_ana)
         self.chk_links_dist.toggled.connect(self._push_hot_ana)
         
+        self.chk_hot_rings.toggled.connect(self._push_hot_ana)
+        self.sp_hot_ring_km.valueChanged.connect(self._push_hot_ana)
+        self.sp_hot_ring_n.valueChanged.connect(self._push_hot_ana)
+
         self.sp_epsg_a.valueChanged.connect(self._push_view)
         self.sp_epsg_b.valueChanged.connect(self._push_view)
         
@@ -1036,6 +1087,9 @@ class XferMapAdvancedPanel(QWidget):
                 K_MAP_LINKS_SHOW_DIST,
                 bool(self.chk_links_dist.isChecked()),
             )
+            s.set(K_MAP_HOT_RINGS_ENABLE, bool(self.chk_hot_rings.isChecked()))
+            s.set(K_MAP_HOT_RINGS_RADIUS_KM, float(self.sp_hot_ring_km.value()))
+            s.set(K_MAP_HOT_RINGS_COUNT, int(self.sp_hot_ring_n.value()))
 
         self._enable_hot_ana()
 
@@ -1055,3 +1109,29 @@ class XferMapAdvancedPanel(QWidget):
         self.sp_links_max.setEnabled(l)
         self.chk_links_dist.setEnabled(l)
         self.sp_links_k.setEnabled(l and self.cmb_links_mode.currentText() == "knn")
+        hr = bool(self.chk_hot_rings.isChecked())
+        self.sp_hot_ring_km.setEnabled(hr)
+        self.sp_hot_ring_n.setEnabled(hr)
+        
+    def _apply_hot_pro_preset(self) -> None:
+        s = self._s
+        with s.batch():
+            s.set(K_MAP_POINTS_MODE, "hotspots_plus")
+    
+            s.set(K_MAP_ANIM_PULSE, True)
+            s.set(K_MAP_HOT_RINGS_ENABLE, True)
+            s.set(K_MAP_HOT_RINGS_RADIUS_KM, 4.0)
+            s.set(K_MAP_HOT_RINGS_COUNT, 3)
+    
+            s.set(K_MAP_RADAR_ENABLE, True)
+            s.set(K_MAP_RADAR_TARGET, "overlay")
+            s.set(K_MAP_RADAR_ORDER, "score")
+            s.set(K_MAP_RADAR_DWELL_MS, 620)
+            s.set(K_MAP_RADAR_RADIUS_KM, 8.0)
+            s.set(K_MAP_RADAR_RINGS, 3)
+    
+            s.set(K_MAP_LINKS_ENABLE, True)
+            s.set(K_MAP_LINKS_MODE, "nearest")
+            s.set(K_MAP_LINKS_K, 1)
+            s.set(K_MAP_LINKS_MAX, 24)
+            s.set(K_MAP_LINKS_SHOW_DIST, False)
