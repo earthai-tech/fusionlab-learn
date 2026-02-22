@@ -380,6 +380,12 @@ _MAP_DEFAULTS = {
     
     MAP_SELECT_ANCHOR_X: -1,
     MAP_SELECT_ANCHOR_Y: -1,
+    
+    # keys.py  (inside _MAP_DEFAULTS)
+
+    MAP_SHOW_ANALYTICS: False,
+    MAP_ANALYTICS_PINNED: True,   # default: floating
+    MAP_ANALYTICS_HEIGHT: 280,    # used if unpinned later
 
 
 }
