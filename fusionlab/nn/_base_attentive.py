@@ -33,19 +33,19 @@ if KERAS_BACKEND:
         HierarchicalAttention,
         MemoryAugmentedAttention, 
         MultiDecoder, 
-        MultiHeadAttention, 
         MultiResolutionAttentionFusion,
         MultiScaleLSTM, 
         PositionalEncoding, 
         QuantileDistributionModeling, 
         VariableSelectionNetwork, 
         aggregate_multiscale_on_3d, 
-        aggregate_time_window_output
-    )
+        aggregate_time_window_output 
+  )
     
 Add =KERAS_DEPS.Add 
 Dense= KERAS_DEPS.Dense 
 Tensor = KERAS_DEPS.Tensor
+MultiHeadAttention =KERAS_DEPS.MultiHeadAttention
 Layer=KERAS_DEPS.Layer
 LayerNormalization=KERAS_DEPS.LayerNormalization
 register_keras_serializable= KERAS_DEPS.register_keras_serializable 
@@ -98,7 +98,8 @@ class BaseAttentive(Model, NNLearner):
             None
         ], 
         "activation": [StrOptions(
-            {"elu", "relu", "tanh", "sigmoid", "linear", "gelu", "swish"}),callable 
+            {"elu", "relu", "tanh", "sigmoid", "linear", "gelu", "swish"}),
+            callable 
             ],
         "multi_scale_agg": [ 
             StrOptions({"last", "average",  "flatten", "auto", "sum", "concat"}),
@@ -148,6 +149,7 @@ class BaseAttentive(Model, NNLearner):
         attention_levels : Optional [Union[str, List[str]]]=None,
         objective: str = 'hybrid',
         architecture_config: Optional[Dict] = None,
+        verbose: int = 0, 
         name: str = "BaseAttentiveModel",
         **kwargs
     ):
@@ -196,6 +198,7 @@ class BaseAttentive(Model, NNLearner):
             attention_levels=attention_levels,
             architecture_config=architecture_config
         )
+        self.verbose = verbose 
         # ---------------------------------------------------
         
         self._build_attentive_layers()
@@ -956,6 +959,7 @@ class BaseAttentive(Model, NNLearner):
             "attention_levels": self.attention_levels, 
             "use_batch_norm": self.use_batch_norm, 
             "architecture_config": self.architecture_config,
+            "verbose": self.verbose, 
             "name": self.name 
         })
         return config
@@ -1115,13 +1119,38 @@ attention_levels : str or list[str], optional
     decoder. It is recommended to use
     `architecture_config={{'decoder_attention_stack': [...]}}` instead.
 
-objective : str, default 'hybrid' 
+objective : {{'hybrid', 'transformer'}}, default ``'hybrid'``  
     Legacy parameter. Defines the underlying architecture of the model. 
     The configuration  can be either 'hybrid' 
     (combining LSTM and attention mechanisms) or 'transformer' 
     (using only transformer-based attention mechanisms).It is
     recommended to use `architecture_config={{'encoder_type': 'hybrid'}}`
     instead.
+
+    Selects the backbone architecture that processes dynamic-past  
+    and (optionally) known-future covariates before the decoding stage.  
+
+    * ``'hybrid'`` – **Multi-scale LSTM -> Transformer**.  
+      The encoder first extracts multi-resolution temporal features  
+      with a stack of LSTMs (one per *scale*), then refines these  
+      features with hierarchical/cross attention blocks.  
+      This configuration balances the strong sequence-memory capability  
+      of recurrent networks with the global-context modelling power of  
+      Transformers and is recommended for most tabular time-series data.  
+
+    * ``'transformer'`` – **Pure Transformer**.  
+      Bypasses the LSTM stack and feeds the embeddings directly into the  
+      attention encoder, resulting in a lightweight, fully self-attention  
+      model.  Choose this if your data exhibit long-range dependencies  
+      for which an LSTM adds little benefit, or when you need faster  
+      training/inference at the cost of some short-term pattern capture.  
+
+    In future release: 
+        
+    Shortcut for common loss presets.  Should be recognised:  
+    * ``'nse'`` – Nash–Sutcliffe model-efficiency score.  
+    * ``'rmse'`` – root-mean-square error.  
+    When *None* we will supply losses via :py:meth:`compile`
     
 architecture_config : dict, optional
     A dictionary for fine-grained control over the model's internal
@@ -1151,12 +1180,6 @@ Notes
 - The attention mechanism allows for both cross-attention (between encoder 
   and decoder) and self-attention within the decoder.
 
-
-See Also  
---------
-* :class:`fusionlab.nn.pinn.PIHALNet` – physics-informed extension.  
-* :func:`fusionlab.utils.data_utils.widen_temporal_columns` – prepares 
-  wide data frames for plotting forecasts.
 
 **Smart Configuration**
 
@@ -1190,6 +1213,13 @@ The legacy parameters (`objective`, `use_vsn`, `attention_levels`)
 are maintained for backward compatibility but will be overridden by
 any settings provided in ``architecture_config``.
 
+
+See Also  
+--------
+* :class:`fusionlab.nn.pinn.PIHALNet` – physics-informed extension.  
+* :func:`fusionlab.utils.data_utils.widen_temporal_columns` – prepares 
+  wide data frames for plotting forecasts.
+  
 Examples
 --------
 >>> from fusionlab.nn.models._base_attentive import BaseAttentive  

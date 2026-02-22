@@ -26,10 +26,13 @@ from ...core.io import SaveFile
 from ...core.handlers import columns_manager
 from ...utils.validator import validate_positive_integer 
 from ...metrics.utils import compute_quantile_diagnostics 
-from ...decorators import isdf 
+from ...decorators import isdf
+from ...utils.data_utils import mask_by_reference  
 from ...utils.deps_utils import ensure_pkg 
 from ...utils.forecast_utils import normalize_for_pinn
-from ...utils.generic_utils import print_box, vlog, select_mode
+from ...utils.generic_utils import ( 
+    print_box, vlog, select_mode, rename_dict_keys
+)
 from ...utils.geo_utils import resolve_spatial_columns 
 from ...utils.io_utils import save_job 
 from ...utils.sequence_utils import check_sequence_feasibility
@@ -58,7 +61,7 @@ all__= [
         'format_pinn_predictions', 
         'extract_txy_in', 
         'extract_txy', 
-        'plot_hydraulic_head', 
+        'plot_hydraulic_head',
 ]
 
 @SaveFile 
@@ -83,12 +86,12 @@ def format_pinn_predictions(
     savefile: Optional[str] = None,
     _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
     name: Optional[str]=None, 
+    model_name: Optional[str] = None,
     stop_check: Callable[[], bool] = None, 
     verbose: int = 0,
-    
     **kwargs
 ) -> 'pd.DataFrame':
-    """Formats PINN model predictions into a structured pandas DataFrame.
+    r"""Formats PINN model predictions into a structured pandas DataFrame.
 
     This is a general-purpose utility for transforming raw model outputs
     (from models like PIHALNet or TransFlowSubsNet) into a long-format
@@ -176,6 +179,9 @@ def format_pinn_predictions(
     name: str or None 
         Name of the prediction. Name is used to format the output of 
         the data and coverage result if applicable. 
+    model_name: str, None, 
+        Name of the model. 
+        
     verbose : int, default=0
         The verbosity level, from 0 (silent) to 5 (trace every step).
     **kwargs: dict,  
@@ -225,200 +231,134 @@ def format_pinn_predictions(
         coverage_quantile_indices=coverage_quantile_indices,
         savefile=savefile,
         name =name, 
+        model_name=model_name,
         verbose=verbose,
         _logger = _logger, 
         stop_check = stop_check, 
         **kwargs 
     )
 
+@SaveFile
 def format_pihalnet_predictions(
-    pihalnet_outputs: Optional[Dict[str, Tensor]] = None,
-    model: Optional[Model] = None,
-    model_inputs: Optional[Dict[str, Tensor]] = None,
-    y_true_dict: Optional[Dict[str, Union[np.ndarray, Tensor]]] = None,
+    pihalnet_outputs: Optional[Dict[str, "Tensor"]] = None,
+    model: Optional["Model"] = None,
+    model_inputs: Optional[Dict[str, "Tensor"]] = None,
+    y_true_dict: Optional[Dict[str, Union[np.ndarray, "Tensor"]]] = None,
     target_mapping: Optional[Dict[str, str]] = None,
     include_gwl: bool = True,
     include_coords: bool = True,
     quantiles: Optional[List[float]] = None,
     forecast_horizon: Optional[int] = None,
     output_dims: Optional[Dict[str, int]] = None,
-    ids_data_array: Optional[Union[np.ndarray, pd.DataFrame]] = None,
+    ids_data_array: Optional[Union[np.ndarray, 'pd.DataFrame']] = None,
     ids_cols: Optional[List[str]] = None,
     ids_cols_indices: Optional[List[int]] = None,
     scaler_info: Optional[Dict[str, Dict[str, Any]]] = None,
-    # e.g., {'subsidence': {'scaler': scaler_obj, 
-    #                       'all_features': ['f1', 'subs', 'f3'], 'idx': 1}}
-    coord_scaler: Optional[Any] = None, 
+    coord_scaler: Optional[Any] = None,
     evaluate_coverage: bool = False,
     coverage_quantile_indices: Tuple[int, int] = (0, -1),
-    savefile: str = None, 
+    savefile: Optional[str] = None,
     name: Optional[str]=None, 
+    model_name: Optional[str] = None, 
+    apply_mask: bool=False,
+    mask_values: Optional [Union[float, int]]=None,
+    mask_fill_value: Optional[float]=None,
     verbose: int = 0, 
     _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None, 
     stop_check : Callable [[], bool] =None, 
     **kwargs
 ) -> pd.DataFrame:
-    """
-    Formats PIHALNet predictions into a structured pandas DataFrame.
+    r"""
+    Formats PIHALNet/GeoPriorSubsNet predictions into a structured 
+    pandas DataFrame, handling inversion, quantiles, and coordinates.
 
-    This function processes the output dictionary from PIHALNet (or
-    generates predictions if a model and inputs are provided) and
-    transforms them into a long-format DataFrame. It handles dual
-    targets (subsidence, GWL), point or quantile forecasts, and can
-    optionally include true target values, coordinate information,
-    additional identifiers, perform inverse scaling, and evaluate
-    quantile coverage.
+    This function is the core formatter. It:
+    1. Gets model outputs (or uses provided ones).
+    2. Unpacks 'data_final' if `model_name` is 'geoprior'.
+    3. Inverse-transforms all prediction and actual arrays using `scaler_info`.
+    4. Builds a long-format DataFrame with sample_idx and forecast_step.
+    5. Appends inverted quantile/point predictions.
+    6. Appends inverted actual values.
+    7. Appends inverted coordinates.
+    8. Appends static/ID columns.
+    9. Evaluates coverage on the inverted data.
     
-    Structure PIHALNet predictions, targets, coordinates, and user
-    metadata into a **long‑format** :pyclass:`pandas.DataFrame`
-    ready for post‑processing, plotting, or export.
-
-    The routine accepts either a pre‑computed output dictionary
-    from :class:`~fusionlab.nn.pinn.PIHALNet` **or** a compiled model
-    and its inputs.  It supports single‑point as well as quantile
-    forecasts, dual‑target learning (subsidence / ground‑water level),
-    optional inverse scaling, coordinate recovery, quantile‑coverage
-    diagnostics, and the injection of arbitrary static ID columns.
-
     Parameters
     ----------
-    pihalnet_outputs : dict[str, Tensor] or None, default=None
-        Dictionary returned by ``PIHALNet.predict``.  Keys should
-        include ``'subs_pred'`` and/or ``'gwl_pred'``; a
-        ``'pde_residual'`` key is silently ignored.  If *None*,
-        predictions are generated from *model* and *model_inputs*.
-    model : keras.Model or None, default=None
-        A compiled PIHALNet instance used to generate predictions
-        when *pihalnet_outputs* is *None*.
-    model_inputs : dict[str, Tensor] or None, default=None
-        Input dictionary matching the signature of
-        :pymeth:`PIHALNet.call`.  Required with *model*.
-    y_true_dict : dict[str, ndarray | Tensor] or None, default=None
-        Ground‑truth arrays keyed by ``'subsidence'`` / ``'gwl'`` or
-        by their prediction keys.  Shapes must match
-        ``(N, H, O)``.
-    target_mapping : dict[str, str] or None, default=None
-        Custom mapping between network output keys and column base
-        names.  Example: ``{'subs_pred': 'subs', 'gwl_pred': 'gwl'}``.
-    include_gwl, include_coords_in_df : bool, default=True
-        Toggles the export of GWL predictions and coordinate columns.
-    quantiles : list[float] or None, default=None
-        Sorted quantile levels *q* such that
-        :math:`0 < q_1 < \dots < q_Q < 1`.
-    forecast_horizon : int or None, default=None
-        Overrides the horizon inferred from prediction shape.
-    output_dims : dict[str, int] or None, default=None
-        Explicit feature dimension per target.  If *None*, each
-        target’s last axis defines :math:`O`.
-    ids_data_array : ndarray | DataFrame | Tensor or None, default=None
-        Static identifiers (e.g. well ID, lithology) of shape
-        ``(N, P)``.
-    ids_cols : list[str] or None, default=None
-        Column names for *ids_data_array* (DataFrame or ndarray).
-    ids_cols_indices : list[int] or None, default=None
-        Subset of columns to retain from an *ids_data_array* ndarray.
-    scaler_info : dict[str, dict] or None, default=None
-        Per‑target inverse‑scaling metadata.  Each sub‑dict must
-        contain ``'scaler'``, ``'all_features'``, and ``'idx'``.
-    coord_scaler : object or None, default=None
-        Scikit‑learn‑compatible scaler used to denormalize the
-        coordinate triplet *(t, x, y)*.
-    evaluate_coverage : bool, default=False
-        Compute unconditional coverage of the central quantile band
-        defined by *coverage_quantile_indices*.
-    coverage_quantile_indices : tuple[int, int], default=(0, -1)
-        Indices ``(L, U)`` pointing to the lower and upper
-        quantile columns used in the coverage test.
-
-        .. math::
-
-           \text{Coverage} \;=\;
-           \frac{1}{n}\sum_{i=1}^{n}
-           \mathbb{1}\!\bigl[
-               y_i \in \bigl[\hat{y}^{(L)}_i,
-                              \hat{y}^{(U)}_i\bigr]
-           \bigr]
-    savefile : str or None, default=None
-        If given, ``final_df.to_csv(savefile, index=False)`` is called.
-    name: str or None 
-        Name of the prediction. Name is used to format the output of 
-        the data and coverage result if applicable. 
-    
-    verbose : int, default=0
-        Verbosity from *0* (silent) to *5* (trace every step).
-
+    pihalnet_outputs : dict, optional
+        Raw output from `model.predict()`. If None, `model` and 
+        `model_inputs` must be provided.
+    model : tf.keras.Model, optional
+        Trained model instance (if `pihalnet_outputs` is None).
+    model_inputs : dict, optional
+        Inputs for the model to generate predictions 
+        (if `pihalnet_outputs` is None).
+    y_true_dict : dict, optional
+        Dictionary of true target arrays (e.g., {'subs_pred': y_true_s}).
+        Required for including actuals and evaluating coverage.
+    target_mapping : dict, optional
+        Maps prediction keys to base names for DataFrame columns.
+        Default: {'subs_pred': 'subsidence', 'gwl_pred': 'gwl'}.
+    include_gwl : bool, default True
+        Whether to include 'gwl_pred' in the final DataFrame.
+    include_coords : bool, default True
+        Whether to include 'coord_t', 'coord_x', 'coord_y' columns.
+    quantiles : list[float], optional
+        List of quantiles (e.g., [0.1, 0.5, 0.9]). If provided,
+        quantile columns (e.g., 'subsidence_q10') are created.
+    forecast_horizon : int, optional
+        The forecast horizon length (H). If not provided, it's
+        inferred from the prediction array's shape.
+    output_dims : dict, optional
+        Maps prediction keys to their output dimension (O).
+        E.g., {'subs_pred': 1, 'gwl_pred': 1}. Crucial for
+        correctly splitting GeoPrior outputs and reshaping.
+    ids_data_array : np.ndarray or pd.DataFrame, optional
+        Static/ID data (e.g., original coordinates) to merge.
+        Must have the same number of samples (B) as predictions.
+    ids_cols : list[str], optional
+        Column names if `ids_data_array` is a DataFrame.
+    ids_cols_indices : list[int], optional
+        Column indices if `ids_data_array` is a NumPy array.
+    scaler_info : dict, optional
+        Dictionary for inverse scaling, structured as:
+        { 'subsidence': {'scaler': scaler_obj, 'idx': 0, 'all_features': [...]},
+          'gwl': {'scaler': scaler_obj, 'idx': 1, 'all_features': [...]} }
+    coord_scaler : sklearn.preprocessing.Scaler, optional
+        A *fitted* scaler object for inverse transforming the 'coords' tensor.
+    evaluate_coverage : bool, default False
+        If True, calculates coverage percentage for quantiles.
+    coverage_quantile_indices : tuple[int, int], default (0, -1)
+        Indices of the low and high quantiles in the `quantiles` list
+        to use for coverage (e.g., 0 and -1 for 10th and 90th).
+    savefile : str, optional
+        If provided, saves the final DataFrame to this path.
+    model_name : str, optional
+        Specifies the model type. If 'geoprior' or 'geopriorsubsnet',
+        triggers unpacking of the 'data_final' output.
+    apply_mask : bool, default False
+        If True, masks predictions based on `mask_values` in the
+        first target's `_actual` column.
+    mask_values : float or int, optional
+        The value in the `_actual` column to trigger masking.
+    mask_fill_value : float, optional
+        The value to replace masked predictions with (e.g., np.nan).
+    verbose : int, default 0
+        Logging verbosity.
+    _logger : logging.Logger or callable, optional
+        Logger object.
+    stop_check : callable, optional
+        Function to check for early stopping.
+        
     Returns
     -------
-    pandas.DataFrame
-        Long‑format frame with one row per sample–step pair and
-        columns
-
-        * ``sample_idx`` – original sample index :math:`n`.
-        * ``forecast_step`` – lead time :math:`h\;(\ge 1)`.
-        * ``coord_t``, ``coord_x``, ``coord_y`` – coordinates
-          (optional).
-        * Prediction columns ``<base>[_<k>]`` or
-          ``<base>_q<q%>``.
-        * ``<base>_actual`` – ground‑truth targets (optional).
-        * Extra ID columns supplied via *ids_data_array*.
-
-    Raises
-    ------
-    ValueError
-        Missing mandatory inputs or shape mismatches.
-    RuntimeError
-        Model prediction failures.
-    TypeError
-        Unsupported tensor type in *pihalnet_outputs*.
-    Warning
-        Non‑fatal issues are logged when *verbose* > 0.
-
-    Notes
-    -----
-    * The exported DataFrame is **column‑aligned** across targets,
-      enabling straightforward melt/merge operations.
-    * If *quantiles* is provided and predictions are shape
-      ``(N, H, Q, O)``, columns are named
-      ``<base>_q{int(q*100)}``.
-    * Inverse transforms are applied **after concatenation** to avoid
-      duplicate scaler calls.
-
-    Examples
-    --------
-    >>> from fusionlab.nn.pinn.utils import format_pihalnet_predictions
-    >>> df = format_pihalnet_predictions(
-    ...     model=pihalnet,
-    ...     model_inputs=batch,
-    ...     y_true_dict={'subsidence': y_true},
-    ...     quantiles=[0.05, 0.50, 0.95],
-    ...     ids_data_array=meta_df[['well_id', 'region']],
-    ...     ids_cols=['well_id', 'region'],
-    ...     verbose=3,
-    ... )
-    >>> df.head()
-       sample_idx  forecast_step  subs_q5  subs_q50  subs_q95  subs_actual
-    0           0              1    -2.11     -1.34     -0.54        -1.20
-    1           0              2    -2.35     -1.62     -0.80        -1.58
-    2           0              3    -2.58     -1.91     -1.01        -1.85
-    3           1              1    -3.05     -2.40     -1.72        -2.55
-    4           1              2    -3.29     -2.67     -1.99        -2.81
-
-    See Also
-    --------
-    fusionlab.metrics.coverage_score
-    fusionlab.nn.pinn.PIHALNet.predict
-    fusionlab.nn.pinn.utils._format_target_predictions
-
-    References
-    ----------
-    .. [1] Kouadio M. K. *et al.* “Physics‑Informed Heterogeneous
-       Attention Learning for Spatio‑Temporal Subsidence Prediction,”
-       *IEEE T‑PAMI*, 2025 (in press).
+    pd.DataFrame
+        A long-format DataFrame with predictions, actuals, and coordinates.
     """
     vlog(f"Starting model prediction formatting (verbose={verbose}).",
          level=3, verbose=verbose, logger=_logger)
 
-    # --- 1. Obtain Model Predictions if not provided ---
+    # --- 1. Obtain Model Predictions (if not provided) ---
     if pihalnet_outputs is None:
         if model is None or model_inputs is None:
             raise ValueError(
@@ -428,447 +368,256 @@ def format_pihalnet_predictions(
         vlog("  Predictions not provided, generating from model...",
              level=4, verbose=verbose, logger=_logger)
         try:
-            # model.predict expects a format that its call method understands
-            # For PIHALNet, it's a dictionary.
             pihalnet_outputs = model.predict(model_inputs, verbose=0)
             if not isinstance(pihalnet_outputs, dict):
-                 # If model.predict doesn't return dict (e.g. if it's not PIHALNet)
-                 # this indicates a mismatch. Forcing it for PIHALNet's structure.
                  raise ValueError(
-                     "Model output is not a dictionary"
-                     " as expected from PIHALNet.")
+                     "Model output is not a dictionary as expected.")
             vlog("  Model predictions generated.", level=5,
                  verbose=verbose, logger=_logger)
         except Exception as e:
             raise RuntimeError(
                 f"Failed to generate predictions from model: {e}"
             ) from e
-    
+        
         if stop_check and stop_check():
             raise InterruptedError("Model prediction aborted.")
+            
+    # --- 2. Unpack GeoPrior Model Output (if needed) ---
+    is_geoprior = str(model_name).lower().strip() in ('geoprior', 'geopriorsubsnet')
+    if is_geoprior:
+        vlog(f"GeoPrior model detected (model_name='{model_name}'). "
+             "Unpacking 'data_final' tensor.",
+             level=3, verbose=verbose, logger=_logger)
         
-    # Ensure predictions are NumPy arrays
-    processed_outputs = {}
-    for key, val_tensor in pihalnet_outputs.items():
-        if key in ['subs_pred', 'gwl_pred']: # Only process expected pred keys
-            if hasattr(val_tensor, 'numpy'):
-                processed_outputs[key] = val_tensor.numpy()
-            elif isinstance(val_tensor, np.ndarray):
-                processed_outputs[key] = val_tensor
-            else:
-                try:
-                    processed_outputs[key] = np.array(val_tensor)
-                except Exception as e:
-                    raise TypeError(
-                        f"Could not convert output '{key}' to NumPy. "
-                        f"Type: {type(val_tensor)}. Error: {e}"
-                    ) from e
-        elif key == 'pde_residual':
-            # PDE residual can be handled differently if needed
-            pass # Not typically added to this output DataFrame
+        if output_dims is None:
+            output_dims = {'subs_pred': 1, 'gwl_pred': 1}
+            vlog("  `output_dims` not provided, defaulting to "
+                 "{'subs_pred': 1, 'gwl_pred': 1}.",
+                 level=4, verbose=verbose, logger=_logger)
+        
+        pihalnet_outputs = _unpack_geoprior_outputs(
+            geoprior_outputs=pihalnet_outputs,
+            output_dims=output_dims,
+            quantiles=quantiles,
+            verbose=verbose,
+            _logger=_logger
+        )
 
-    if not processed_outputs:
-        vlog("  No 'subs_pred' or 'gwl_pred'"
-             " found in outputs. Returning empty DF.",
-             level=1, verbose=verbose, logger=_logger)
-        return pd.DataFrame()
-
-    # --- 2. Define Targets to Process and Their Names ---
+    # --- 3. Ensure all data is NumPy & INVERSE TRANSFORM ---
     if target_mapping is None:
         target_mapping = {'subs_pred': 'subsidence', 'gwl_pred': 'gwl'}
+        vlog("  `target_mapping` not provided, using defaults.",
+             level=4, verbose=verbose, logger=_logger)
+             
+    if not include_gwl:
+        target_mapping.pop('gwl_pred', None)
 
-    targets_to_process = {}
-    if 'subs_pred' in processed_outputs:
-        targets_to_process['subs_pred'] = target_mapping.get(
-            'subs_pred', 'subsidence'
-            )
-    if include_gwl and 'gwl_pred' in processed_outputs:
-        targets_to_process['gwl_pred'] = target_mapping.get(
-            'gwl_pred', 'gwl'
-            )
-
-    if not targets_to_process:
-        vlog("  No valid targets to process after"
-             " filtering. Returning empty DF.",
-             level=1, verbose=verbose, logger=_logger)
-        return pd.DataFrame()
+    # Process predictions
+    processed_preds = {}
+    if pihalnet_outputs:
+        vlog("  Converting and inverse-transforming predictions...",
+             level=4, verbose=verbose, logger=_logger)
+        for pred_key, base_name in target_mapping.items():
+            if pred_key in pihalnet_outputs:
+                val_tensor = pihalnet_outputs[pred_key]
+                pred_array = val_tensor.numpy() if hasattr(
+                    val_tensor, 'numpy') else np.asarray(val_tensor)
+                
+                inverted_array = _inverse_transform_array(
+                    pred_array, base_name, scaler_info, verbose, _logger
+                )
+                processed_preds[pred_key] = inverted_array
+            else:
+                 vlog(f"  [WARN] Prediction key '{pred_key}' not found "
+                      "in model outputs.",
+                      level=2, verbose=verbose, logger=_logger)
     
-    if stop_check and stop_check():
-        raise InterruptedError("Target confifuration aborted.")
-        
-    # --- 3. Prepare Base DataFrame (Sample Index and Forecast Step) ---
-    # Infer num_samples and horizon from the first available target
-    first_pred_key = list(targets_to_process.keys())[0]
-    first_pred_array = processed_outputs[first_pred_key]
+    if not processed_preds:
+         vlog("  No valid prediction keys found in model output. "
+              "Returning empty DF.",
+              level=1, verbose=verbose, logger=_logger)
+         return pd.DataFrame()
+
+    # Process actuals (y_true)
+    processed_actuals = {}
+    if y_true_dict:
+        vlog("  Converting and inverse-transforming actuals (y_true)...",
+             level=4, verbose=verbose, logger=_logger)
+        for true_key, base_name in target_mapping.items():
+            
+            # --- START FIX ---
+            # Try to get the tensor using the pred_key ('subs_pred') first
+            val_tensor = y_true_dict.get(true_key)
+            if val_tensor is None:
+                # If not found, try getting it with the base_name ('subsidence')
+                val_tensor = y_true_dict.get(base_name)
+            
+            if val_tensor is not None:
+            # --- END FIX ---
+                true_array = val_tensor.numpy() if hasattr(
+                    val_tensor, 'numpy') else np.asarray(val_tensor)
+                
+                inverted_array = _inverse_transform_array(
+                    true_array, base_name, scaler_info, verbose, _logger
+                )
+                # Use true_key ('subs_pred') to align with processed_preds
+                processed_actuals[true_key] = inverted_array
+            else:
+                vlog(f"  [WARN] True data key '{true_key}' (or '{base_name}') "
+                     "not found in y_true_dict.",
+                     level=2, verbose=verbose, logger=_logger)
+
+    # --- 4. Initialize DataFrame (Base) ---
+    first_pred_key = list(processed_preds.keys())[0]
+    first_pred_array = processed_preds[first_pred_key]
     
     num_samples = first_pred_array.shape[0]
     H_inferred = forecast_horizon or first_pred_array.shape[1]
     
     if num_samples == 0 or H_inferred == 0:
-        vlog("  No samples or zero forecast horizon."
-             " Returning empty DF.",
-              level=1, verbose=verbose, logger=_logger)
+        vlog("  No samples or zero forecast horizon. Returning empty DF.",
+             level=1, verbose=verbose, logger=_logger)
         return pd.DataFrame()
 
-    vlog(f"  Formatting for {num_samples} samples,"
-         f" Horizon={H_inferred}.",
+    vlog(f"  Formatting for {num_samples} samples, Horizon={H_inferred}.",
          level=4, verbose=verbose, logger=_logger)
 
     sample_indices = np.repeat(np.arange(num_samples), H_inferred)
     forecast_steps = np.tile(np.arange(1, H_inferred + 1), num_samples)
     
-    # List to hold all column DataFrames
     all_data_dfs = [
         pd.DataFrame({
             'sample_idx': sample_indices,
             'forecast_step': forecast_steps
         })
     ]
-    
-    # --- 4. Add Coordinates if Requested ---
-    if include_coords:
-        if model_inputs and 'coords' in model_inputs and \
-           model_inputs['coords'] is not None:
-            coords_arr = model_inputs['coords']
-            if hasattr(coords_arr, 'numpy'): 
-                coords_arr = coords_arr.numpy()
-            
-            if coords_arr.shape[0] == num_samples and \
-               coords_arr.shape[1] == H_inferred and coords_arr.shape[2] == 3:
-                coords_reshaped = coords_arr.reshape(num_samples * H_inferred, 3)
-                # --- INSERT THE INVERSE TRANSFORM LOGIC HERE ---
-                if coord_scaler is not None:
-                    vlog("  Applying inverse transform to t,x,y coordinates...",
-                         level=4, verbose=verbose, logger=_logger)
-                    try:
-                        # Overwrite the reshaped coordinates with their original scale
-                        coords_reshaped = coord_scaler.inverse_transform(coords_reshaped)
-                    except Exception as e:
-                        vlog(f"  WARNING: Could not inverse transform coordinates: {e}."
-                             " Using normalized coordinates instead.",
-                             level=1, verbose=verbose, logger=_logger)
-                # --- END OF NEW LOGIC ---
-                coord_names = ['coord_t', 'coord_x', 'coord_y']
-                all_data_dfs.append(
-                    pd.DataFrame(coords_reshaped, columns=coord_names)
-                )
-                vlog(f"  Added coordinate columns: {coord_names}",
-                     level=4, verbose=verbose, logger=_logger)
-            else:
-                vlog("  'coords' shape mismatch or not found."
-                     " Skipping coordinate columns.",
-                     level=2, verbose=verbose, logger=_logger)
-        else:
-            vlog("  `model_inputs['coords']` not available."
-                 " Skipping coordinate columns.",
-                 level=2, verbose=verbose, logger=_logger)
+
+    # --- 5. Populate DataFrame with INVERTED Data ---
+    if output_dims is None:
+        vlog("  [WARN] `output_dims` is None. Inferring from arrays. "
+             "This may be unreliable for multi-output models.",
+             level=2, verbose=verbose, logger=_logger)
+        output_dims = {}
+        for k, v in processed_preds.items():
+            output_dims[k] = v.shape[-1] if quantiles is None else v.shape[-1]
         
-        if stop_check and stop_check():
-            raise InterruptedError("Coordinates transformation aborted.")
-            
-
-    # --- 5. Add Additional Static/ID Columns ---
-    # These are static per original sample, so they need to be
-    # repeated H_inferred times.
-    # `sample_indices` (created earlier as np.repeat(np.arange(num_samples), H_inferred))
-    # already provides the correct mapping to expand these static IDs.
-    
-    if ids_data_array is not None:
-        vlog("  Processing additional static/ID columns...",
-             level=4, verbose=verbose, logger=_logger)
-        
-        # Ensure ids_data_array is a NumPy array for consistent indexing
-        ids_np_array: np.ndarray
-        if isinstance(ids_data_array, pd.DataFrame):
-            if ids_cols is None:
-                logger.warning(
-                    "ids_data_array is a DataFrame but `ids_cols` is "
-                    "missing. Using all columns from ids_data_array."
-                )
-                ids_cols_to_use = list(ids_data_array.columns)
-                ids_np_array = ids_data_array.values
-            else:
-                ids_cols_to_use = list(ids_cols) # Ensure it's a list
-                try:
-                    ids_np_array = ids_data_array[ids_cols_to_use].values
-                except KeyError as e:
-                    logger.warning(
-                        f"One or more columns in `ids_cols` not found "
-                        f"in ids_data_array: {e}. Skipping IDs."
-                    )
-                    ids_np_array = None # Flag to skip
-        elif isinstance(ids_data_array, pd.Series):
-            ids_np_array = ids_data_array.to_frame().values # Convert to 2D array
-            ids_cols_to_use = [ids_data_array.name or 'id_0'] \
-                if ids_cols is None else list(ids_cols)
-            if len(ids_cols_to_use) != 1:
-                 logger.warning(
-                    "ids_data_array is a Series, but `ids_cols` "
-                    "suggests multiple columns. Using Series name or 'id_0'."
-                )
-                 ids_cols_to_use = [ids_cols_to_use[0]]
-
-        elif isinstance(ids_data_array, np.ndarray):
-            ids_np_array = ids_data_array
-            if ids_cols_indices is not None:
-                try:
-                    ids_np_array = ids_np_array[:, ids_cols_indices]
-                except IndexError as e:
-                    logger.warning(
-                        f"One or more `ids_cols_indices` out of bounds "
-                        f"for ids_data_array: {e}. Skipping IDs."
-                    )
-                    ids_np_array = None # Flag to skip
-            
-            # Determine column names for NumPy array
-            if ids_cols:
-                ids_cols_to_use = list(ids_cols)
-                if ids_np_array is not None and \
-                   len(ids_cols_to_use) != ids_np_array.shape[1]:
-                    logger.warning(
-                        f"Length of `ids_cols` ({len(ids_cols_to_use)}) "
-                        f"does not match number of selected columns "
-                        f"({ids_np_array.shape[1]}) from ids_data_array. "
-                        "Using default names 'id_N'."
-                    )
-                    ids_cols_to_use = [
-                        f"id_{k}" for k in range(ids_np_array.shape[1])
-                    ]
-            elif ids_np_array is not None: # No ids_cols provided for NumPy array
-                ids_cols_to_use = [
-                    f"id_{k}" for k in range(ids_np_array.shape[1])
-                ]
-            else: # ids_np_array became None due to error
-                ids_cols_to_use = []
-
-        elif hasattr(ids_data_array, 'numpy'): # Check for TensorFlow Tensor
-            ids_np_array = ids_data_array.numpy()
-            # Recurse with NumPy array logic (similar to above)
-            if ids_cols_indices is not None:
-                try:
-                    ids_np_array = ids_np_array[:, ids_cols_indices]
-                except IndexError as e:
-                    logger.warning(
-                        f"One or more `ids_cols_indices` out of bounds "
-                        f"for tensor ids_data_array: {e}. Skipping IDs."
-                    )
-                    ids_np_array = None
-            if ids_cols:
-                ids_cols_to_use = list(ids_cols)
-                if ids_np_array is not None and \
-                    len(ids_cols_to_use) != ids_np_array.shape[1]:
-                    logger.warning(
-                        f"Length of `ids_cols` ({len(ids_cols_to_use)}) "
-                        f"does not match number of selected columns "
-                        f"({ids_np_array.shape[1]}) from tensor ids_data_array. "
-                        "Using default names 'id_N'."
-                    )
-                    ids_cols_to_use = [
-                        f"id_{k}" for k in range(ids_np_array.shape[1])
-                    ]
-            elif ids_np_array is not None:
-                ids_cols_to_use = [
-                    f"id_{k}" for k in range(ids_np_array.shape[1])
-                ]
-            else:
-                ids_cols_to_use = []
-        else:
-            logger.warning(
-                f"Unsupported type for `ids_data_array`: "
-                f"{type(ids_data_array)}. Skipping additional ID columns."
-            )
-            ids_np_array = None
-
-        if ids_np_array is not None:
-            num_id_samples = ids_np_array.shape[0]
-            if num_id_samples == num_samples:
-                # Repeat each static ID row H_inferred times using sample_indices
-                # sample_indices has length num_samples * H_inferred
-                # and contains values from 0 to num_samples-1, repeated.
-                # Example: if num_samples=2, H=3 -> [0,0,0,1,1,1]
-                
-                # If ids_np_array is 1D (e.g. a single ID column from Series)
-                if ids_np_array.ndim == 1:
-                    ids_np_array = ids_np_array.reshape(-1, 1)
-                    if len(ids_cols_to_use) == 0 and ids_np_array.shape[1]==1:
-                        ids_cols_to_use = ['id_0'] # Default name for single col
-
-                if len(ids_cols_to_use) == ids_np_array.shape[1]:
-                    expanded_ids_data = ids_np_array[sample_indices // H_inferred]
-                    ids_df_part = pd.DataFrame(
-                        expanded_ids_data, columns=ids_cols_to_use
-                    )
-                    all_data_dfs.append(ids_df_part)
-                    vlog(f"    Added additional static/ID columns: {ids_cols_to_use}",
-                         level=5, verbose=verbose, logger=_logger)
-                else:
-                    logger.warning(
-                        "Mismatch between number of resolved ID column names "
-                        f"({len(ids_cols_to_use)}) and columns in processed "
-                        f"ID data ({ids_np_array.shape[1]}). Skipping IDs."
-                    )
-            else:
-                vlog(
-                    f"  `ids_data_array` has {num_id_samples} samples, but "
-                    f"predictions have {num_samples} samples. Skipping ID columns.",
-                    level=2, verbose=verbose, logger=_logger
-                )
-        if stop_check and stop_check():
-            raise InterruptedError("Dyn/Stat/Fut arrays processing aborted.")
-            
-    elif verbose >= 4:
-        vlog("  No `ids_data_array` provided, skipping additional static/ID columns.",
-             level=4, verbose=verbose, logger=_logger)
-
-    # --- 6. Process Each Target Variable (Subsidence, GWL) ---
-    for pred_key, base_name in targets_to_process.items():
-        preds_np_target = processed_outputs[pred_key]
-        y_true_target = None
-        if y_true_dict:
-            y_true_target = y_true_dict.get(
-                pred_key) or y_true_dict.get(base_name) # Allow both keys
-            if y_true_target is not None and hasattr(
-                    y_true_target, 'numpy'):
-                y_true_target = y_true_target.numpy()
-
-        # Infer output dimension for this specific target
-        O_target = (output_dims.get(pred_key) if output_dims 
-                    else preds_np_target.shape[-1])
-        if quantiles and preds_np_target.ndim == 4: # B, H, Q, O
-             O_target= preds_np_target.shape[-1]
-        elif quantiles and preds_np_target.ndim == 3 and \
-             preds_np_target.shape[-1] % len(quantiles) == 0: # B, H, Q*O or B,H,Q if O=1
-             if preds_np_target.shape[-1] == len(quantiles): O_target =1
-             else: O_target = preds_np_target.shape[-1] // len(quantiles)
-
-        # --- 6a. Reshape and Add Predictions ---
-        pred_cols_target, pred_df_target = _format_target_predictions(
-            preds_np_target, num_samples, H_inferred, O_target, 
-            base_name, quantiles, verbose
+    if quantiles is not None:
+        df_part = _add_quantiles_to_df(
+            processed_preds, target_mapping, quantiles,
+            output_dims, num_samples, H_inferred, verbose, _logger
         )
-        all_data_dfs.append(pred_df_target)
+        all_data_dfs.append(df_part)
+    else:
+        df_part = _add_point_preds_to_df(
+            processed_preds, target_mapping, output_dims,
+            num_samples, H_inferred, verbose, _logger
+        )
+        all_data_dfs.append(df_part)
 
-        # --- 6b. Add Actuals ---
-        actual_cols_target = []
-        if y_true_target is not None:
-            # y_true shape (N, H, O_target)
-            if y_true_target.shape == (num_samples, H_inferred, O_target):
-                y_true_reshaped = y_true_target.reshape(
-                    num_samples * H_inferred, O_target)
-                for o_idx in range(O_target):
-                    col_name = f"{base_name}"
-                    if O_target > 1: col_name += f"_{o_idx}"
-                    col_name += "_actual"
-                    actual_cols_target.append(col_name)
-                all_data_dfs.append(pd.DataFrame(
-                    y_true_reshaped, columns=actual_cols_target))
-                vlog(f"    Added actuals for {base_name}: {actual_cols_target}",
-                     level=5, verbose=verbose, logger=_logger)
-            else:
-                vlog(f"    y_true shape for {base_name} ({y_true_target.shape}) "
-                     f"mismatched expected ({num_samples},"
-                     f"{H_inferred},{O_target}). Skipping actuals.",
-                     level=2, verbose=verbose, logger=_logger)
-        
-        # --- 6c. Inverse Scaling (applied per target) ---
-        if scaler_info and base_name in scaler_info:
-            s_info = scaler_info[base_name]
-            scaler = s_info.get('scaler')
-            all_feat = s_info.get('all_features') # List of names scaler was fit on
-            target_idx = s_info.get('idx')        # Index of this target in all_feat
+    if processed_actuals:
+        df_part = _add_actuals_to_df(
+            processed_actuals, target_mapping, output_dims,
+            num_samples, H_inferred, verbose, _logger
+        )
+        all_data_dfs.append(df_part)
 
-            if scaler and all_feat and target_idx is not None:
-                vlog(f"  Applying inverse transform for {base_name}...",
-                     level=4, verbose=verbose, logger=_logger)
-                # Create combined list of columns to transform for this target
-                cols_to_transform_for_target = pred_cols_target + actual_cols_target
-                
-                for col_to_inv in cols_to_transform_for_target:
-                    if col_to_inv in pd.concat(all_data_dfs, axis=1).columns: 
-                        # Check if column exists before access
-                        dummy_for_inv = np.zeros((len(sample_indices), len(all_feat)))
-                        dummy_for_inv[:, target_idx] = pd.concat(
-                            all_data_dfs, axis=1)[col_to_inv].values # Ensure it's a DataFrame
-                        
-                        inversed_col = scaler.inverse_transform(dummy_for_inv)[:, target_idx]
-                        
-                        # Update in the correct sub-dataframe (this is tricky)
-                        # Better to do this on the final merged df. Store names for now.
-                        # For now, let's assume we update after final_df is formed.
-                        # This part needs to be done on the final DataFrame.
-                        # Storing for later:
-                        if not hasattr(scaler_info[base_name], '_cols_to_inv_transform'):
-                            scaler_info[base_name]['_cols_to_inv_transform'] = []
-                        scaler_info[base_name]['_cols_to_inv_transform'].append(
-                            (col_to_inv, inversed_col)
-                        )
-            else:
-                vlog(f"  Scaler info incomplete for {base_name}."
-                     " Skipping inverse transform.",
-                     level=3, verbose=verbose, logger=_logger)
-        
-        if stop_check and stop_check():
-            raise InterruptedError("Target processing aborted.")
-            
-        # --- 6d. Coverage Score (applied per target) ---
-        if ( 
-                evaluate_coverage 
-                and quantiles 
-                and y_true_target is not None 
-                and len(quantiles) >= 2 
-                and O_target == 1
-            ):
-            try:
-                cov_savefile = None 
-                if savefile: 
-                    # take the path
-                    cov_savefile = os.path.join(
-                        os.path.dirname(savefile), 'diagnostics_results.json'
-                        )
-                compute_quantile_diagnostics (
-                    *all_data_dfs, 
-                    target_name= base_name, 
-                    quantiles= quantiles, 
-                    coverage_quantile_indices=coverage_quantile_indices, 
-                    savefile=cov_savefile, 
-                    name=name, 
-                    verbose=verbose, 
-                    logger =_logger,  
-                    )
-                # final_df.attrs[f'{base_name}_coverage'] = coverage
-            except Exception as e:
-                  vlog(f"Skipping coverage computation due to: {e}",
-                      level=2, verbose=verbose, logger=_logger
-                )
-            
-            if stop_check and stop_check():
-                raise InterruptedError("Metric calculus aborted.")
-    # --- 7. Concatenate all DataFrames ---
+    # # --- 6. Add Coordinates (inverted inside helper) ---
+    df_coord_cols = []
+    if include_coords and model_inputs:
+        df_part, df_coord_cols = _add_coords_to_df(
+            model_inputs=model_inputs,
+            coord_scaler=coord_scaler,
+            num_samples=num_samples,
+            H_inferred=H_inferred,
+            verbose=verbose,
+            _logger=_logger,
+            force_future_from=kwargs.get("forecast_start_year"),
+        )
+        all_data_dfs.append(df_part)
+
+    # --- 7. Add IDs (no inversion needed) ---
+    df_part = _add_ids_to_df(
+        ids_data_array, ids_cols, ids_cols_indices,
+        num_samples, H_inferred, verbose, _logger
+    )
+    all_data_dfs.append(df_part)
+    
+    if stop_check and stop_check():
+        raise InterruptedError("DataFrame population aborted.")
+
+    # --- 8. Concatenate all DataFrames ---
     final_df = pd.concat(all_data_dfs, axis=1)
 
-    # --- Re-apply Inverse Scaling (if stored) ---
-    if scaler_info:
-        for base_name in targets_to_process.values():
-            if ( 
-                    base_name in scaler_info 
-                    and '_cols_to_inv_transform' 
-                    in scaler_info[base_name]
-                ):
-                for col_name, inversed_values in scaler_info[
-                        base_name]['_cols_to_inv_transform']:
-                    if col_name in final_df:
-                        final_df[col_name] = inversed_values
-                vlog(f"  Final inverse transform applied for {base_name}.",
-                     level=4, verbose=verbose, logger=_logger)
+    # --- 10. Optional Masking ---
+    if apply_mask:
+        vlog("  Applying mask to prediction columns...",
+             level=4, verbose=verbose, logger=_logger)
+        if mask_values is None or mask_fill_value is None:
+            raise ValueError(
+                "When apply_mask=True, both mask_values and "
+                "mask_fill_value must be provided."
+            )
+        
+        # we assume you only ever want to mask against your first target:
+        first_base = list(target_mapping.values())[0]
+        ref_col    = f"{first_base}_actual"
+        if ref_col not in final_df.columns:
+            vlog(f"  [WARN] Masking reference column '{ref_col}' not in "
+                 "DataFrame. Skipping masking.",
+                 level=2, verbose=verbose, logger=_logger)
+        else:
+            # collect all the forecast columns you produced
+            mask_cols = [
+                c for c in final_df.columns if
+                any(c.startswith(f"{base}_q") for base in target_mapping.values()) or
+                any(c.startswith(f"{base}_pred") for base in target_mapping.values())
+            ]
+            
+            if not mask_cols:
+                vlog("  [WARN] No maskable forecast columns found in final_df. "
+                     "Skipping masking.",
+                     level=2, verbose=verbose, logger=_logger)
+            else:
+                try:
+                    # Use the imported mask_by_reference function
+                    final_df = mask_by_reference(
+                        data=final_df,
+                        ref_col=ref_col,
+                        values=mask_values,
+                        find_closest=False,
+                        fill_value=mask_fill_value,
+                        mask_columns=mask_cols,
+                        error="ignore",
+                        inplace=False
+                    )
+                    vlog(f"  Successfully applied mask to {len(mask_cols)} "
+                         f"columns based on '{ref_col}'.",
+                         level=4, verbose=verbose, logger=_logger)
+                except Exception as e:
+                    vlog(f"  [WARN] Failed to apply mask: {e}",
+                         level=2, verbose=verbose, logger=_logger)
 
+    # --- 9. Evaluate Coverage (now compares inverted vs. inverted) ---
+    if evaluate_coverage and quantiles and processed_actuals:
+        _evaluate_coverage(
+            df=final_df,
+            target_mapping=target_mapping,
+            q_indices=coverage_quantile_indices,
+            savefile=savefile,
+            name=name,
+            verbose=verbose,
+            _logger=_logger
+        )
+
+
+    if stop_check and stop_check():
+        raise InterruptedError("Metric/Masking aborted.")
 
     vlog("Model prediction formatting to DataFrame complete.",
          level=3, verbose=verbose, logger=_logger)
     
-    if stop_check and stop_check():
-        raise InterruptedError("Format prediction generation aborted.")
-    
     return final_df
+
 
 def _format_target_predictions(
     predictions_np: np.ndarray,
@@ -949,6 +698,1011 @@ def _format_target_predictions(
         
     return pred_cols_names, pred_df_part
 
+def _unpack_geoprior_outputs(
+    geoprior_outputs: Dict[str, Tensor],
+    output_dims: Dict[str, int],
+    quantiles: Optional[List[float]],
+    verbose: int = 0,
+    _logger: Any = None
+) -> Dict[str, Tensor]:
+    """
+    Unpacks the nested 'data_final' tensor from GeoPriorSubsNet
+    into a flat dictionary expected by the formatter.
+    """
+    if 'data_final' not in geoprior_outputs:
+        vlog("  [WARN] 'data_final' key not found in GeoPrior model output. "
+             "Assuming outputs are already flat.",
+             level=2, verbose=verbose, logger=_logger)
+        return geoprior_outputs  # Return as-is
+
+    data_final_tensor = geoprior_outputs['data_final']
+    
+    # Get the split index for subsidence
+    s_dim = output_dims.get('subs_pred')
+    if s_dim is None:
+        vlog("  [WARN] 'output_dims' did not contain 'subs_pred'. "
+             "Assuming subsidence output_dim = 1.",
+             level=2, verbose=verbose, logger=_logger)
+        s_dim = 1  # Default to 1 as a fallback
+
+    # Split the tensor based on whether quantiles are present
+    if quantiles is not None:
+        # Shape is (B, H, Q, O_total)
+        vlog(f"  Splitting 4D quantile tensor at final axis index {s_dim}.",
+             level=4, verbose=verbose, logger=_logger)
+        s_pred_tensor = data_final_tensor[..., :s_dim]
+        h_pred_tensor = data_final_tensor[..., s_dim:]
+    else:
+        # Shape is (B, H, O_total)
+        vlog(f"  Splitting 3D point-forecast tensor at final axis index {s_dim}.",
+             level=4, verbose=verbose, logger=_logger)
+        s_pred_tensor = data_final_tensor[..., :s_dim]
+        h_pred_tensor = data_final_tensor[..., s_dim:]
+
+    # Create the new flat dictionary
+    unpacked_outputs = {
+        'subs_pred': s_pred_tensor,
+        'gwl_pred': h_pred_tensor
+    }
+    
+    # Pass through any other keys that aren't the standard nested ones
+    for k, v in geoprior_outputs.items():
+        if k not in ['data_final', 'data_mean', 'phys_mean_raw']:
+            unpacked_outputs[k] = v
+            
+    return unpacked_outputs
+
+def _inverse_transform_array(
+    array: np.ndarray,
+    base_name: str,
+    scaler_info: Optional[Dict[str, Dict[str, Any]]],
+    verbose: int = 0,
+    _logger: Any = None
+) -> np.ndarray:
+    """
+    Helper to inverse-transform a single numpy array using scaler_info.
+    
+    This function finds the correct scaler and column index from
+    scaler_info and applies the inverse min-max scaling.
+    """
+    if scaler_info is None or base_name not in scaler_info:
+        # No scaler info for this target, return original array
+        vlog(f"    - No scaler_info found for '{base_name}'. "
+             "Returning original (scaled) array.",
+             level=4, verbose=verbose, logger=_logger)
+        return array
+
+    try:
+        info = scaler_info[base_name]
+        scaler = info['scaler']
+        col_index = info['idx']
+
+        # Get the specific min and scale for this column from the scaler
+        # scaler.min_ is the 'intercept'
+        # scaler.scale_ is the 'coefficient'
+        min_val = scaler.min_[col_index]
+        scale_val = scaler.scale_[col_index] 
+
+        # --- THIS IS THE FIX ---
+        # The inverse of (X * scale_) + min_ is (X - min_) / scale_
+        if scale_val == 0:
+            # Handle case where scale is zero (all original values were the same)
+            # The inverse is the original constant value, which we get from data_min_
+            try:
+                original_min = scaler.data_min_[col_index]
+            except AttributeError:
+                # Fallback if data_min_ is not available (should be on a fitted scaler)
+                original_min = 0 # This is a guess, but division by zero is worse
+                vlog(f"  [WARN] Scaler for '{base_name}' has scale_=0 but "
+                     "no 'data_min_' attribute. Inverse may be incorrect.",
+                     level=2, verbose=verbose, logger=_logger)
+            inverted_array = np.full_like(array, original_min)
+        else:
+            inverted_array = (array - min_val) / scale_val
+        
+        vlog(f"    - Applied inverse transform to '{base_name}' array "
+             f"(min_attr: {min_val:.4f}, scale_attr: {scale_val:.4f})",
+             level=5, verbose=verbose, logger=_logger)
+        
+        return inverted_array
+    
+    except AttributeError:
+        vlog(f"  [WARN] Scaler for '{base_name}' is missing 'min_' or 'scale_'"
+             " attributes. Returning original array.",
+             level=2, verbose=verbose, logger=_logger)
+        return array
+    except IndexError:
+        vlog(f"  [WARN] Column index '{col_index}' out of bounds for "
+             f"scaler of '{base_name}'. Returning original array.",
+             level=2, verbose=verbose, logger=_logger)
+        return array
+    except Exception as e:
+        vlog(f"  [WARN] Failed to inverse transform '{base_name}': {e}"
+             ". Returning original array.",
+             level=2, verbose=verbose, logger=_logger)
+        return array
+
+def _add_quantiles_to_df(
+    predictions: Dict[str, np.ndarray],
+    target_mapping: Dict[str, str],
+    quantiles: List[float],
+    output_dims: Dict[str, int],
+    num_samples: int,
+    H_inferred: int,
+    verbose: int = 0,
+    _logger: Any = None
+) -> pd.DataFrame:
+    """Formats INVERTED quantile predictions into a DataFrame."""
+    df_parts = []
+    for pred_key, base_name in target_mapping.items():
+        if pred_key not in predictions:
+            continue
+        
+        pred_array = predictions[pred_key] # Should be (B, H, Q, O)
+        
+        O_target = output_dims.get(pred_key)
+        if O_target is None:
+             O_target = pred_array.shape[-1]
+             vlog(f"  [WARN] output_dim for '{pred_key}' not specified. "
+                  f"Inferred {O_target} from array shape.",
+                  level=2, verbose=verbose, logger=_logger)
+        
+        if pred_array.shape != (num_samples, H_inferred, len(quantiles), O_target):
+            vlog(f"  [WARN] Quantile array for '{pred_key}' has unexpected shape "
+                 f"{pred_array.shape}. Expected {(num_samples, H_inferred, len(quantiles), O_target)}. "
+                 "Skipping.", level=2, verbose=verbose, logger=_logger)
+            continue
+
+        # Reshape: (B, H, Q, O) -> (B*H, Q*O)
+        reshaped_preds = pred_array.reshape(num_samples * H_inferred, -1)
+        
+        # Create column names
+        col_names = []
+        for o_idx in range(O_target):
+            for q in quantiles:
+                # Format quantile string (e.g., q05, q50, q95)
+                q_str = f"q{int(q*100):02d}"
+                if q_str == 'q50': 
+                    q_str = 'q50' # Standardize
+                elif q_str == 'q10':
+                    q_str = 'q10'
+                elif q_str == 'q90': 
+                    q_str = 'q90'
+                elif q_str == 'q05':
+                    q_str = 'q05'
+                elif q_str == 'q95':
+                    q_str = 'q95'
+                
+                col_name = f"{base_name}_{q_str}"
+                if O_target > 1:
+                    col_name += f"_{o_idx}"
+                col_names.append(col_name)
+        
+        if reshaped_preds.shape[1] != len(col_names):
+             vlog(f"  [WARN] Mismatch in quantile columns for '{base_name}'. "
+                  f"Expected {len(col_names)} columns, found {reshaped_preds.shape[1]}. "
+                  "Skipping.", level=2, verbose=verbose, logger=_logger)
+             continue
+
+        df_parts.append(pd.DataFrame(reshaped_preds, columns=col_names))
+        vlog(f"    - Added quantile columns for '{base_name}': {col_names}",
+             level=5, verbose=verbose, logger=_logger)
+             
+    return pd.concat(df_parts, axis=1) if df_parts else pd.DataFrame()
+
+def _add_point_preds_to_df(
+    predictions: Dict[str, np.ndarray],
+    target_mapping: Dict[str, str],
+    output_dims: Dict[str, int],
+    num_samples: int,
+    H_inferred: int,
+    verbose: int = 0,
+    _logger: Any = None
+) -> pd.DataFrame:
+    """Formats INVERTED point predictions into a DataFrame."""
+    df_parts = []
+    for pred_key, base_name in target_mapping.items():
+        if pred_key not in predictions:
+            continue
+        
+        pred_array = predictions[pred_key] # (B, H, O)
+        O_target = output_dims.get(pred_key)
+        if O_target is None:
+             O_target = pred_array.shape[-1]
+             vlog(f"  [WARN] output_dim for '{pred_key}' not specified. "
+                  f"Inferred {O_target} from array shape.",
+                  level=2, verbose=verbose, logger=_logger)
+        
+        if pred_array.shape != (num_samples, H_inferred, O_target):
+            vlog(f"  [WARN] Point pred array for '{pred_key}' has unexpected shape "
+                 f"{pred_array.shape}. Expected {(num_samples, H_inferred, O_target)}. "
+                 "Skipping.", level=2, verbose=verbose, logger=_logger)
+            continue
+        
+        reshaped_preds = pred_array.reshape(num_samples * H_inferred, O_target)
+        
+        col_names = []
+        for o_idx in range(O_target):
+            col_name = f"{base_name}_pred"
+            if O_target > 1:
+                col_name += f"_{o_idx}"
+            col_names.append(col_name)
+
+        df_parts.append(pd.DataFrame(reshaped_preds, columns=col_names))
+        vlog(f"    - Added point pred columns for '{base_name}': {col_names}",
+             level=5, verbose=verbose, logger=_logger)
+    
+    return pd.concat(df_parts, axis=1) if df_parts else pd.DataFrame()
+
+def _add_actuals_to_df(
+    y_true_dict: Dict[str, np.ndarray],
+    target_mapping: Dict[str, str],
+    output_dims: Dict[str, int],
+    num_samples: int,
+    H_inferred: int,
+    verbose: int = 0,
+    _logger: Any = None
+) -> pd.DataFrame:
+    """Formats INVERTED actuals into a DataFrame."""
+    df_parts = []
+    for pred_key, base_name in target_mapping.items():
+        if pred_key not in y_true_dict:
+            continue
+            
+        true_array = y_true_dict[pred_key] # (B, H, O)
+        O_target = output_dims.get(pred_key)
+        if O_target is None:
+             O_target = true_array.shape[-1]
+             vlog(f"  [WARN] output_dim for '{pred_key}' not specified. "
+                  f"Inferred {O_target} from array shape.",
+                  level=2, verbose=verbose, logger=_logger)
+        
+        if true_array.shape != (num_samples, H_inferred, O_target):
+            vlog(f"  [WARN] Actuals array for '{pred_key}' has unexpected shape "
+                 f"{true_array.shape}. Expected {(num_samples, H_inferred, O_target)}. "
+                 "Skipping.", level=2, verbose=verbose, logger=_logger)
+            continue
+
+        reshaped_true = true_array.reshape(num_samples * H_inferred, O_target)
+        
+        col_names = []
+        for o_idx in range(O_target):
+            col_name = f"{base_name}_actual"
+            if O_target > 1:
+                col_name += f"_{o_idx}"
+            col_names.append(col_name)
+        
+        df_parts.append(pd.DataFrame(reshaped_true, columns=col_names))
+        vlog(f"    - Added actuals columns for '{base_name}': {col_names}",
+             level=5, verbose=verbose, logger=_logger)
+    
+    return pd.concat(df_parts, axis=1) if df_parts else pd.DataFrame()
+
+def _add_coords_to_df(
+    model_inputs: Dict[str, "Tensor"],
+    coord_scaler: Any,
+    num_samples: int,
+    H_inferred: int,
+    verbose: int = 0,
+    _logger: Any = None,
+    force_future_from: Optional[float] = None,   
+) -> Tuple[pd.DataFrame, List[str]]:
+    """Formats and inverse-transforms coordinates."""
+    
+    coord_names = ['coord_t', 'coord_x', 'coord_y']
+    if 'coords' not in model_inputs or model_inputs['coords'] is None:
+        vlog("  'coords' not in model_inputs. Skipping coordinate columns.",
+             level=2, verbose=verbose, logger=_logger)
+        return pd.DataFrame(), []
+    
+    coords_arr = model_inputs['coords']
+    if hasattr(coords_arr, 'numpy'):
+        coords_arr = coords_arr.numpy()
+        
+    if coords_arr.shape != (num_samples, H_inferred, 3):
+        vlog(f"  'coords' shape mismatch ({coords_arr.shape}). Expected "
+             f"{(num_samples, H_inferred, 3)}. Skipping coordinate columns.",
+             level=2, verbose=verbose, logger=_logger)
+        return pd.DataFrame(), []
+
+    coords_reshaped = coords_arr.reshape(num_samples * H_inferred, 3)
+    
+    if coord_scaler is not None:
+        vlog("  Applying inverse transform to t,x,y coordinates...",
+             level=4, verbose=verbose, logger=_logger)
+        try:
+            coords_reshaped = coord_scaler.inverse_transform(coords_reshaped)
+        except Exception as e:
+            vlog(f"  [WARN] Could not inverse transform coordinates: {e}. "
+                 "Using normalized coordinates.",
+                 level=2, verbose=verbose, logger=_logger)
+
+    # ---  override time with forecast years, if requested ---
+    if force_future_from is not None:
+        # years_for_one_sample: e.g. [2023, 2024, 2025] for H_inferred=3
+        years = np.arange(
+            float(force_future_from),
+            float(force_future_from) + float(H_inferred),
+            dtype=coords_reshaped.dtype,
+        )
+        # Repeat for all samples and flatten to match (num_samples*H, )
+        years_tiled = np.tile(years, num_samples)
+        coords_reshaped[:, 0] = years_tiled
+        vlog(f"  Overriding coord_t with forecast years starting at "
+             f"{force_future_from} for horizon={H_inferred}.",
+             level=4, verbose=verbose, logger=_logger)
+
+    vlog(f"  Added coordinate columns: {coord_names}",
+         level=4, verbose=verbose, logger=_logger)
+    return pd.DataFrame(coords_reshaped, columns=coord_names), coord_names
+
+def _add_ids_to_df(
+    ids_data_array: Any,
+    ids_cols: Optional[List[str]],
+    ids_cols_indices: Optional[List[int]],
+    num_samples: int,
+    H_inferred: int,
+    verbose: int = 0,
+    _logger: Any = None
+) -> pd.DataFrame:
+    """Extracts and repeats static/ID columns."""
+    if ids_data_array is None:
+        vlog("  No `ids_data_array` provided, skipping static/ID columns.",
+             level=4, verbose=verbose, logger=_logger)
+        return pd.DataFrame()
+    
+    vlog("  Processing additional static/ID columns...",
+         level=4, verbose=verbose, logger=_logger)
+    
+    ids_np_array = None
+    ids_cols_to_use = []
+    
+    if isinstance(ids_data_array, pd.DataFrame):
+        ids_cols_to_use = list(ids_cols) if ids_cols else list(ids_data_array.columns)
+        try:
+            ids_np_array = ids_data_array[ids_cols_to_use].values
+        except KeyError as e:
+            vlog(f"  [WARN] Columns not in ids_data_array: {e}. Skipping IDs.",
+                 level=2, verbose=verbose, logger=_logger)
+            return pd.DataFrame()
+    
+    elif isinstance(ids_data_array, np.ndarray):
+        ids_np_array = ids_data_array
+        if ids_cols_indices:
+            ids_np_array = ids_np_array[:, ids_cols_indices]
+        
+        if ids_cols and len(ids_cols) == ids_np_array.shape[1]:
+            ids_cols_to_use = list(ids_cols)
+        else:
+            ids_cols_to_use = [f"id_{k}" for k in range(ids_np_array.shape[1])]
+    
+    elif isinstance(ids_data_array, Tensor): # Is a Tensor
+        ids_np_array = ids_data_array.numpy()
+        if ids_cols_indices:
+            ids_np_array = ids_np_array[:, ids_cols_indices]
+        if ids_cols and len(ids_cols) == ids_np_array.shape[1]:
+            ids_cols_to_use = list(ids_cols)
+        else:
+            ids_cols_to_use = [f"id_{k}" for k in range(ids_np_array.shape[1])]
+    else:
+        vlog(f"  [WARN] Unsupported type for `ids_data_array`: "
+             f"{type(ids_data_array)}. Skipping IDs.",
+             level=2, verbose=verbose, logger=_logger)
+        return pd.DataFrame()
+
+    # Now, repeat the data
+    if ids_np_array is not None and ids_np_array.shape[0] == num_samples:
+        # Use np.repeat to tile each sample H_inferred times
+        expanded_ids_data = np.repeat(ids_np_array, H_inferred, axis=0)
+        vlog(f"    - Added static/ID columns: {ids_cols_to_use}",
+             level=5, verbose=verbose, logger=_logger)
+        return pd.DataFrame(expanded_ids_data, columns=ids_cols_to_use)
+    else:
+        vlog(f"  [WARN] `ids_data_array` sample size"
+             f" ({ids_np_array.shape[0] if ids_np_array is not None else 'None'}) "
+             f"does not match predictions ({num_samples}). Skipping IDs.",
+             level=2, verbose=verbose, logger=_logger)
+        return pd.DataFrame()
+
+def _evaluate_coverage(
+    df: pd.DataFrame,
+    target_mapping: Dict[str, str],
+    q_indices: Tuple[int, int],
+    savefile: Optional[str] = None,
+    name: Optional[str] = None,
+    verbose: int = 0,
+    _logger: Any = None
+):
+    """Calculates and logs quantile coverage from an INVERTED DataFrame."""
+    vlog("  Evaluating forecast coverage...",
+         level=4, verbose=verbose, logger=_logger)
+         
+    for base_name in target_mapping.values():
+        actual_col = f"{base_name}_actual"
+        
+        # Find quantile columns
+        q_cols = sorted([c for c in df.columns if c.startswith(base_name) and "_q" in c])
+        if not q_cols or actual_col not in df.columns:
+            vlog(f"  Skipping coverage for '{base_name}': "
+                 "Missing actuals or quantile columns.",
+                 level=3, verbose=verbose, logger=_logger)
+            continue
+        
+        try:
+            q_low_col = q_cols[q_indices[0]]
+            q_high_col = q_cols[q_indices[1]]
+        except IndexError:
+            vlog(f"  [WARN] Coverage q_indices {q_indices} are out of bounds "
+                 f"for detected quantile columns: {q_cols}. Skipping coverage.",
+                 level=2, verbose=verbose, logger=_logger)
+            continue
+
+        q_low = df[q_low_col]
+        q_high = df[q_high_col]
+        actual = df[actual_col]
+        
+        is_covered = (actual >= q_low) & (actual <= q_high)
+        coverage_percent = is_covered.mean() * 100
+        
+        vlog(f"  Forecast Coverage ({base_name}, {q_low_col} to {q_high_col}): "
+             f"{coverage_percent:.2f}%",
+             level=1, verbose=verbose, logger=_logger)
+        
+        # Store in df attributes
+        df.attrs[f'{base_name}_coverage'] = coverage_percent
+
+        # Use compute_quantile_diagnostics
+        try:
+            cov_savefile = None
+            if savefile:
+                # If savefile has an extension, treat it as a file path.
+                # Example: ".../subs_eval.csv"
+                #   -> ".../subs_eval_diagnostics_results.json"
+                root, ext = os.path.splitext(savefile)
+                if ext:
+                    cov_savefile = f"{root}_diagnostics_results.json"
+                else:
+                    # No extension: treat `savefile` as a directory-like path
+                    # Example: "results/nansha_eval"
+                    #   -> "results/nansha_eval/diagnostics_results.json"
+                    cov_savefile = os.path.join(
+                        savefile, "diagnostics_results.json"
+                    )
+
+            compute_quantile_diagnostics(
+                df,
+                target_name=base_name,
+                quantiles=[float(c.split("_q")[-1]) / 100.0 for c in q_cols],
+                coverage_quantile_indices=q_indices,
+                savefile=cov_savefile,
+                name=name,
+                verbose=verbose,
+                logger=_logger,
+            )
+
+        except Exception as e:
+            vlog(f"  [WARN] Failed to compute quantile diagnostics: {e}",
+                 level=2, verbose=verbose, logger=_logger)
+            
+def _get_model_predictions(
+    pihalnet_outputs: Optional[Dict[str, Tensor]],
+    model: Optional[Model],
+    model_inputs: Optional[Dict[str, Tensor]],
+    verbose: int,
+    stop_check: Callable[[], bool],
+    _logger: Any,
+) -> Dict[str, Tensor]:
+    """
+    Obtain model outputs dict, running predict if needed.
+    """
+    if pihalnet_outputs is not None:
+        return pihalnet_outputs
+    if model is None or model_inputs is None:
+        raise ValueError(
+            "If 'pihalnet_outputs' is None, both 'model' and "
+            "'model_inputs' must be provided."
+        )
+    vlog("  Predictions not provided, generating from model...",
+         level=4, verbose=verbose, logger=_logger)
+    try:
+        outputs = model.predict(model_inputs, verbose=0)
+        if not isinstance(outputs, dict):
+            raise ValueError(
+                "Model output is not a dict as expected from PINN models"
+            )
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to generate predictions: {e}"
+        ) from e
+    vlog("  Model predictions generated.", level=5,
+                 verbose=verbose, logger=_logger)
+    
+    if stop_check and stop_check():
+        raise InterruptedError("Model prediction aborted.")
+    return outputs
+
+
+def _convert_outputs_to_numpy(
+    pihalnet_outputs: Dict[str, Any], 
+    verbose: int, _logger, 
+) -> Dict[str, np.ndarray]:
+    """
+    Ensure prediction tensors are NumPy arrays.
+    """
+    proc: Dict[str, np.ndarray] = {}
+    for key, val in pihalnet_outputs.items():
+        if key in ('subs_pred', 'gwl_pred'):
+            if hasattr(val, 'numpy'):
+                proc[key] = val.numpy()
+            elif isinstance(val, np.ndarray):
+                proc[key] = val
+            else:
+                try:
+                    proc[key] = np.array(val)
+                except Exception as e: 
+                    raise TypeError(
+                        f"Could not convert output '{key}' to NumPy. "
+                        f"Type: {type(val)}. Error: {e}"
+                    ) from e
+                    
+        elif key == 'pde_residual':
+            # PDE residual can be handled differently if needed
+            pass # Not typically added to this output DataFrame
+       
+    if not proc:
+        vlog("  No 'subs_pred' or 'gwl_pred'"
+             " found in outputs. Returning empty DF.",
+             level=1, verbose=verbose, logger=_logger)
+        return pd.DataFrame()
+        
+    return proc
+
+
+def _define_targets(
+    processed: Dict[str, np.ndarray],
+    include_gwl: bool,
+    target_mapping: Optional[Dict[str, str]] = None,
+    stop_check: Callable[[], bool]=None,
+) -> Dict[str, str]:
+    """
+    Map processed outputs to base target names.
+    """
+    if target_mapping is None:
+        target_mapping = {
+            'subs_pred': 'subsidence',
+            'gwl_pred': 'gwl'
+        }
+    targets: Dict[str, str] = {}
+    if 'subs_pred' in processed:
+        targets['subs_pred'] = target_mapping['subs_pred']
+    if include_gwl and 'gwl_pred' in processed:
+        targets['gwl_pred'] = target_mapping['gwl_pred']
+        
+    if stop_check and stop_check():
+        raise InterruptedError("Target confifuration aborted.")
+        
+    return targets
+
+
+def _infer_dimensions(
+    first_pred: np.ndarray,
+    forecast_horizon: Optional[int], 
+    verbose : int =0, 
+    _logger: Any = print, 
+) -> Tuple[int, int]:
+    """
+    Infer num_samples and horizon (H) from the array.
+    """
+    N = first_pred.shape[0]
+    H = forecast_horizon or first_pred.shape[1]
+    if N == 0 or H == 0:
+        raise ValueError("No samples or zero forecast horizon.")
+        
+    vlog(f"  Formatting for {N} samples,"
+         f" Horizon={H}.",
+         level=4, verbose=verbose, logger=_logger)
+
+    return N, H
+
+
+def _build_sample_df(
+    num_samples: int,
+    H: int
+) -> pd.DataFrame:
+    """
+    Build DataFrame of sample_idx and forecast_step.
+    """
+    idx = np.repeat(np.arange(num_samples), H)
+    steps = np.tile(np.arange(1, H+1), num_samples)
+    return pd.DataFrame({
+        'sample_idx': idx,
+        'forecast_step': steps
+    })
+
+
+def _add_coordinate_columns(
+    base_df: pd.DataFrame,
+    model_inputs: Optional[Dict[str, Any]],
+    coord_scaler: Any,
+    include_coords: bool,
+    stop_check: Callable[[], bool],
+    _logger: Any,
+    verbose: int
+) -> pd.DataFrame:
+    """
+    Extract and inverse-transform coords if requested.
+    """
+    if not include_coords:
+        return pd.DataFrame()
+    coords_arr = None
+    if model_inputs and 'coords' in model_inputs:
+        coords_arr = model_inputs['coords']
+        if hasattr(coords_arr, 'numpy'):
+            coords_arr = coords_arr.numpy()
+    if coords_arr is None:
+        return pd.DataFrame()
+    N = base_df['sample_idx'].nunique()
+    H = base_df['forecast_step'].max()
+    
+    if coords_arr.shape != (N, H, 3):
+        vlog("  'coords' shape mismatch or not found."
+                " Skipping coordinate columns.",
+                level=2, verbose=verbose, logger=_logger)
+        return pd.DataFrame()
+    
+    resh = coords_arr.reshape(N*H, 3)
+    if coord_scaler:
+        vlog("  Applying inverse transform to t,x,y coordinates...",
+              level=4, verbose=verbose, logger=_logger)
+        try:
+            resh = coord_scaler.inverse_transform(resh)
+        except Exception:
+            pass
+        
+    if stop_check and stop_check():
+        raise InterruptedError("Coordinates transformation aborted.")
+            
+    return pd.DataFrame(resh, columns=['coord_t','coord_x','coord_y'])
+
+
+def _add_id_columns(
+    base_df: pd.DataFrame,
+    ids_data_array: Any,
+    ids_cols: Optional[List[str]],
+    ids_cols_indices: Optional[List[int]],
+    stop_check: Callable[[], bool],
+    _logger: Any,
+    verbose: int
+) -> pd.DataFrame:
+    """
+    Process and repeat static ID columns per forecast step.
+
+    Converts DataFrame, Series, NumPy array, or Tensor to
+    NumPy, selects requested columns or indices, then uses
+    `sample_idx` from base_df to expand each ID row
+    across all forecast steps.
+    """
+    # Skip if no IDs provided
+    if ids_data_array is None:
+        vlog(
+            "  No `ids_data_array` provided, skipping ID columns.",
+            level=4, verbose=verbose, logger=_logger
+        )
+        return pd.DataFrame()
+
+    vlog(
+        "  Processing additional static/ID columns...",
+        level=4, verbose=verbose, logger=_logger
+    )
+
+    # Convert to NumPy array
+    try:
+        if isinstance(ids_data_array, pd.DataFrame):
+            arr = ids_data_array.values
+            col_names = ids_cols or list(ids_data_array.columns)
+        elif isinstance(ids_data_array, pd.Series):
+            arr = ids_data_array.to_frame().values
+            col_names = ids_cols or [ids_data_array.name or 'id_0']
+            if arr.ndim == 2 and len(col_names) != arr.shape[1]:
+                vlog(
+                    "    Series IDs length mismatch, using first col.",
+                    level=5, verbose=verbose, logger=_logger
+                )
+                col_names = col_names[:1]
+        elif hasattr(ids_data_array, 'numpy'):
+            arr = ids_data_array.numpy()
+            col_names = ids_cols or [f'id_{i}' for i in range(arr.shape[1])]
+        elif isinstance(ids_data_array, np.ndarray):
+            arr = ids_data_array
+            if ids_cols_indices is not None:
+                arr = arr[:, ids_cols_indices]
+            col_names = ids_cols or [f'id_{i}' for i in range(arr.shape[1])]
+        else:
+            _logger.warning(
+                f"Unsupported IDs type {type(ids_data_array)}."
+                " Skipping ID columns."
+            )
+            return pd.DataFrame()
+    except Exception as e:
+        _logger.warning(
+            f"Error converting IDs to array: {e}."
+            " Skipping ID columns."
+        )
+        return pd.DataFrame()
+
+    vlog(
+        f"    Converted IDs to NumPy with shape {arr.shape}",
+        level=5, verbose=verbose, logger=_logger
+    )
+    vlog(
+        f"    Selected ID column names: {col_names}",
+        level=5, verbose=verbose, logger=_logger
+    )
+
+    # Expand rows according to sample_idx
+    sample_indices = base_df['sample_idx'].values
+    if arr.shape[0] != sample_indices.max() + 1:
+        _logger.warning(
+            f"IDs rows ({arr.shape[0]}) != samples "
+            f"({sample_indices.max()+1}). Skipping."
+        )
+        return pd.DataFrame()
+
+    expanded = arr[sample_indices]
+    id_df = pd.DataFrame(expanded, columns=col_names)
+    vlog(
+        f"    Expanded ID DataFrame shape: {id_df.shape}",
+        level=5, verbose=verbose, logger=_logger
+    )
+
+    # User cancellation check
+    if stop_check and stop_check():
+        raise InterruptedError("ID columns processing aborted.")
+
+    return id_df
+
+    # # Logic to convert ids_data_array to 2D NumPy
+    # # and repeat according to base_df indices
+    # # ... (Detailed implementation)
+    # return pd.DataFrame()  # stub for brevity
+
+def _process_target_variable(
+    preds: np.ndarray,
+    pred_key: str,
+    base_name: str,
+    num_samples: int,
+    H: int,
+    quantiles: Optional[List[float]],
+    y_true_dict: Optional[Dict[str, Any]],
+    scaler_info: Optional[Dict[str, Any]],
+    verbose: int,
+    stop_check: Callable[[], bool],
+    _logger: Any
+) -> pd.DataFrame:
+    """
+    Format predictions, attach actuals, and prepare scaling.
+
+    - Calls _format_target_predictions for quantiles
+      or point forecasts.
+    - Reshapes and adds true values if provided.
+    - Records inverse-scaling actions to apply later.
+    """
+    # 1. Format predictions
+    cols_pred, df_pred = _format_target_predictions(
+        preds,
+        num_samples,
+        H,
+        O=(preds.shape[-1] if preds.ndim == 3 else 1),
+        base_target_name=base_name,
+        quantiles=quantiles,
+        verbose=verbose
+    )
+    dfs: List[pd.DataFrame] = [df_pred]
+
+    # 2. Add actual values
+    if y_true_dict:
+        y_true = y_true_dict.get(pred_key)
+        if y_true is None:
+            y_true = y_true_dict.get(base_name)
+        if hasattr(y_true, 'numpy'):
+            y_true = y_true.numpy()
+        if y_true is not None:
+            arr = y_true.reshape(num_samples * H, -1)
+            cols_act = []
+            for i in range(arr.shape[1]):
+                col = base_name
+                if arr.shape[1] > 1:
+                    col += f"_{i}"
+                cols_act.append(f"{col}_actual")
+            dfs.append(pd.DataFrame(arr, columns=cols_act))
+
+    # 3. Prepare inverse-scaling info
+    if scaler_info and base_name in scaler_info:
+        info = scaler_info[base_name]
+        to_transform = cols_pred + cols_act
+        info['_cols_to_inv'] = to_transform
+
+    if stop_check and stop_check():
+        raise InterruptedError(
+            "Target variable processing aborted."
+        )
+
+    return pd.concat(dfs, axis=1)
+
+def _apply_masking(
+    df: pd.DataFrame,
+    targets: Dict[str, str],
+    apply_mask: bool,
+    mask_values: Any,
+    mask_fill_value: float,
+    quantiles: Optional[List[float]]
+) -> pd.DataFrame:
+    """
+    Mask forecasts based on reference column values.
+    """
+    if not apply_mask:
+        return df
+    first_base = list(targets.values())[0]
+    ref = f"{first_base}_actual"
+    if ref not in df:
+        raise KeyError(f"Reference col '{ref}' missing")
+    cols = []
+    if quantiles:
+        for base in targets.values():
+            for q in quantiles:
+                cols.append(f"{base}_q{int(q*100)}")
+    else:
+        cols = [c for c in df if c.endswith("_pred")]
+    return mask_by_reference(
+        data=df,
+        ref_col=ref,
+        values=mask_values,
+        find_closest=False,
+        fill_value=mask_fill_value,
+        mask_columns=cols,
+        error="ignore",
+        inplace=False
+    )
+
+
+def _compute_coverage(
+    df: pd.DataFrame,
+    targets: Dict[str, str],
+    quantiles: List[float],
+    y_true_dict: Dict[str, Any],
+    coverage_quantile_indices: Tuple[int, int],
+    savefile: Optional[str],
+    name: Optional[str],
+    verbose: int,
+    _logger: Any
+) -> None:
+    """
+    Compute quantile diagnostics per target.
+    """
+    for base in targets.values():
+        try:
+            compute_quantile_diagnostics(
+                df,
+                target_name=base,
+                quantiles=quantiles,
+                coverage_quantile_indices=
+                    coverage_quantile_indices,
+                savefile=(os.path.join(
+                    os.path.dirname(savefile),
+                    'diagnostics_results.json'
+                ) if savefile else None),
+                name=name,
+                verbose=verbose,
+                logger=_logger
+            )
+        except Exception as e:
+            vlog(f"Skipping coverage due to {e}",
+                 level=2, verbose=verbose,
+                 logger=_logger)
+
+#XXX : TODO 
+# revise format outputs and apply
+#  mask by reference 
+def format_preds(
+    pihalnet_outputs: Optional[Dict[str, Tensor]] = None,
+    model: Optional[Model] = None,
+    model_inputs: Optional[Dict[str, Tensor]] = None,
+    y_true_dict: Optional[Dict[str, Any]] = None,
+    target_mapping: Optional[Dict[str, str]] = None,
+    include_gwl: bool = True,
+    include_coords: bool = True,
+    quantiles: Optional[List[float]] = None,
+    forecast_horizon: Optional[int] = None,
+    output_dims: Optional[Dict[str, int]] = None,
+    ids_data_array: Optional[Any] = None,
+    ids_cols: Optional[List[str]] = None,
+    ids_cols_indices: Optional[List[int]] = None,
+    scaler_info: Optional[Dict[str, Any]] = None,
+    coord_scaler: Optional[Any] = None,
+    evaluate_coverage: bool = False,
+    coverage_quantile_indices: Tuple[int, int] = (0, -1),
+    savefile: Optional[str] = None,
+    name: Optional[str] = None,
+    apply_mask: bool = False,
+    mask_values: Optional[Any] = None,
+    mask_fill_value: Optional[float] = None,
+    verbose: int = 0,
+    _logger: Any = None,
+    stop_check: Callable[[], bool] = None,
+    **kwargs
+) -> pd.DataFrame:
+    """
+    Main function orchestrating all helper steps.
+    """
+    vlog("Starting formatting", level=3,
+         verbose=verbose, logger=_logger)
+    # Step 1: obtain raw outputs
+    raw_out = _get_model_predictions(
+        pihalnet_outputs, model, model_inputs,
+        verbose, stop_check, _logger
+    )
+    # Step 2: convert to NumPy
+    proc = _convert_outputs_to_numpy(
+        raw_out, verbose, _logger)
+    
+    # Step 3: define targets
+    targets = _define_targets(
+        proc, include_gwl, target_mapping, 
+        stop_check,  
+    )
+    if not targets:
+        vlog("  No valid targets to process after"
+             " filtering. Returning empty DF.",
+             level=1, verbose=verbose, logger=_logger)
+        return pd.DataFrame()
+    
+    # Step 4: infer dims
+    num_samp, H = _infer_dimensions(
+        proc[next(iter(targets))], forecast_horizon, 
+        verbose , _logger, 
+    )
+    # Step 5: build base df
+    base_df = _build_sample_df(num_samp, H)
+    # Step 6: add coords
+    coords_df = _add_coordinate_columns(
+        base_df, model_inputs, coord_scaler,
+        include_coords, stop_check, _logger, verbose
+    )
+    # Step 7: add IDs
+    ids_df = _add_id_columns(
+        base_df, ids_data_array, ids_cols,
+        ids_cols_indices, stop_check, _logger,
+        verbose
+    )
+    # Step 8: process targets
+    dfs = []
+    for key, base in targets.items():
+        dfs.append(_process_target_variable(
+            proc[key], key, base,
+            num_samp, H, quantiles,
+            y_true_dict, scaler_info,
+            verbose, stop_check, _logger
+        ))
+    # Step 9: concat all
+    final_df = pd.concat([base_df, coords_df,
+                          ids_df] + dfs, axis=1)
+    # Step 10: masking
+    final_df = _apply_masking(
+        final_df, targets, apply_mask,
+        mask_values, mask_fill_value, quantiles
+    )
+    # Step 11: coverage
+    if evaluate_coverage and quantiles:
+        _compute_coverage(
+            final_df, targets, quantiles,
+            y_true_dict, coverage_quantile_indices,
+            savefile, name, verbose, _logger
+        )
+    vlog("Formatting complete", level=3,
+         verbose=verbose, logger=_logger)
+    return final_df
+
+
 @isdf 
 def prepare_pinn_data_sequences(
     df: pd.DataFrame,
@@ -959,6 +1713,7 @@ def prepare_pinn_data_sequences(
     static_cols: Optional[List[str]] = None,
     future_cols: Optional[List[str]] = None,
     spatial_cols: Optional[Tuple[str, str]]=None, 
+    h_field_col: Optional[str]=None,  
     lon_col: Optional[str]=None,
     lat_col: Optional[str]=None,
     group_id_cols: Optional[List[str]] = None,
@@ -969,8 +1724,13 @@ def prepare_pinn_data_sequences(
     datetime_format: Optional[str] = None,
     normalize_coords: bool = True, 
     cols_to_scale: Union[List[str], str, None] = None,
+    lock_physics_cols: bool = True,
+    protect_si_suffix: str = "__si",
     return_coord_scaler: bool =False, 
+    coord_scaler: Optional[MinMaxScaler] = None,
+    fit_coord_scaler: bool = True,
     mode: Optional[str] =None, 
+    model: Optional[str] =None,
     savefile: Optional[str] = None,
     progress_hook: Optional[Callable[[float], None]] = None,
     stop_check: Callable[[], bool] = None, 
@@ -981,257 +1741,18 @@ def prepare_pinn_data_sequences(
     Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]],
     Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray], Optional[MinMaxScaler]]
 ]:
-    """
-    Reshapes and prepares time-series data into sequences for PINN models.
-
-    This function transforms a Pandas DataFrame into structured NumPy arrays
-    suitable for training Physics-Informed Neural Networks like PIHALNet.
-    It creates sequences of dynamic features, future known features,
-    static features, target variables (subsidence and GWL), and importantly,
-    spatio-temporal coordinates corresponding to the forecast horizon.
-    
-    Parameters
-    ----------
-    df : :class:`pandas.DataFrame`
-        Tidy time‑series table in **long** format.  Each row must
-        correspond to *exactly one* time stamp and (optionally) one
-        spatial/entity identifier.  All feature and target columns listed
-        below must already exist in *df*.
-    time_col : str
-        Column holding the observation time.  May be numeric
-        (year‑fraction, ordinal day, seconds since epoch, …) or any
-        pandas‑recognised datetime dtype; non‑numeric values are converted
-        to a numeric “year + fraction‑of‑year” scale.
-    subsidence_col, gwl_col : str
-        Column names of the **target variables**: vertical land movement
-        (subsidence) and ground‑water level (GWL).  Values are sliced to
-        produce the horizon targets with shapes  
-        ``(N, forecast_horizon, output_✱_dim)``.
-    dynamic_cols : list[str]
-        Names of **past‑covariate** columns sampled over the look‑back
-        window of length :pydata:`time_steps`.  All columns are stacked in
-        the order supplied to form  
-        ``dynamic_features`` → shape  
-        ``(N, time_steps, len(dynamic_cols))``.
-    static_cols : list[str] or None, default None
-        Columns that are *constant within a group* (e.g. soil type,
-        aquifer class).  Only the first value in each group is stored,
-        resulting in ``static_features`` of shape  
-        ``(N, len(static_cols))``.  Pass *None* if the data set has no
-        static covariates.
-    future_cols : list[str] or None, default None
-        Known‑future covariates such as weather forecasts.  Their temporal
-        span depends on :pydata:`mode`:
-    
-        * ``'pihal_like'`` → length = ``forecast_horizon``  
-          (decoder only)
-        * ``'tft_like'`` → length = ``time_steps + forecast_horizon``  
-          (encoder + decoder)
-    
-        When *None* an empty ``future_features`` tensor is returned. 
-    spatial_cols : (str, str) or None, default None
-        Tuple ``(lon, lat)`` if longitude and latitude are already named
-        explicitly.  Overrides *lon_col* / *lat_col*.  Required unless the
-        spatial columns are supplied separately.
-    lon_col, lat_col : str or None, default None
-        Fallback column names for longitude and latitude when
-        *spatial_cols* is *None*.  Both must be provided together.
-    group_id_cols : list[str] or None, default None
-        Keys that identify independent trajectories (e.g.
-        ``['site_id']`` or ``['site', 'layer']``).  Each group is treated
-        as an isolated time‑series for rolling‑window extraction.  If
-        *None* the entire DataFrame is processed as one group.
-    time_steps : int, default 12
-        Length of the look‑back window :math:`T_\text{past}` supplied to
-        the encoder.  Must be ≥ 1.
-    forecast_horizon : int, default 3
-        Prediction length :math:`H`.  Determines the time dimension of the
-        decoder outputs and of ``coords``.
-    output_subsidence_dim, output_gwl_dim : int, default 1
-        Final dimension of each target tensor.  Use > 1 when predicting
-        several layers simultaneously.
-    datetime_format : str or None, default None
-        Custom parsing string forwarded to :pyfunc:`pandas.to_datetime`
-        when *time_col* is a string column.
-    normalize_coords : bool, default True
-        If True, normalizes the 't', 'x', 'y' coordinate values
-        (derived from `time_col`, `lon_col`, `lat_col`) to the [0, 1]
-        range based on the min/max within each group. This is often
-        beneficial for neural network training.
-    cols_to_scale : list of str or "auto" or None, default "auto"
-        - If a list of column names: scale exactly those columns.
-        - If "auto": select all numeric columns, then:
-          * Exclude `time_col`, `lon_col`, `lat_col` if `scale_coords=False`.
-          * Exclude any columns whose values are only \{0,1\} (assumed one-hot).
-        - If None: no extra columns are scaled.
-    return_coord_scaler : bool, default False
-        When enabled the function returns a three‑tuple
-        ``(inputs_dict, targets_dict, coord_scaler)`` where
-        *coord_scaler* is the fitted scaler instance or *None* when
-        scaling was disabled.  
-    mode : {'pihal_like', 'tft_like'} or None, default None  
-        Selects the temporal schema used to construct the *future_features*
-        window and consequently how the downstream model will consume it.
-    
-        * **'pihal_like'** – builds future tensors with length equal to the
-          forecast horizon :math:`H` only.  These tensors are intended for
-          models that feed known‑future covariates exclusively to the
-          decoder (PIHALNet convention).
-    
-        * **'tft_like'** – builds future tensors whose time dimension is
-          :math:`T_\text{past} + H`, i.e. the look‑back window
-          (*time_steps*) followed by the horizon.  This matches the
-          Temporal Fusion Transformer, where the encoder ingests the
-          overlapping first segment and the decoder receives the horizon
-          segment.
-    
-        * **None** – treated as ``'pihal_like'`` for backward
-          compatibility.
-    
-        The setting affects the allocated size of
-        ``future_features_arr`` and the slice indices used during rolling
-        window extraction; make sure it matches the *mode* expected by the
-        target model.
-    savefile : str or None, default None
-        Path to a ``.joblib`` file.  When provided, all produced arrays and
-        meta‑data are serialised for reproducibility and faster reloads.
-        
-    progress_hook : callable, optional
-        Function that receives a float in [0,1] each time a chunk
-        of work is finished.  When None (default) no progress is sent.
-        
-    verbose : int, default 0
-        Verbosity level for logging (0-10).
-        - 0: Silent.
-        - 1: Basic info.
-        - 2: More details on shapes and processing.
-        - 5: Per-group processing info.
-        - 7: Per-sequence sample data (use with caution for large data).
-    Returns
-    -------
-    Union[
-        Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]],
-        Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray], Optional[MinMaxScaler]]
-    ]
-        A tuple containing two dictionaries:
-        1. `inputs_dict`:
-           - 'coords': np.ndarray of shape `(N, H, 3)` for `[t, x, y]`
-             coordinates over the forecast horizon.
-           - 'static_features': np.ndarray of shape `(N, D_s)`.
-           - 'dynamic_features': np.ndarray of shape `(N, T_past, D_d)`.
-           - 'future_features': np.ndarray of shape `(N, H, D_f)`.
-        2. `targets_dict`:
-           - 'subsidence': np.ndarray of shape `(N, H, O_subs)`.
-           - 'gwl': np.ndarray of shape `(N, H, O_gwl)`.
-        Where N is the total number of sequences, H is `forecast_horizon`,
-        T_past is `time_steps`, D_s/d/f are feature dimensions, and
-        O_subs/gwl are output dimensions.
-        
-        
-        If `return_coord_scaler` is False (default):
-            A tuple containing two dictionaries: `inputs_dict` and `targets_dict`.
-        If `return_coord_scaler` is True:
-            A tuple containing three elements: `inputs_dict`, `targets_dict`,
-            and `coord_scaler`. `coord_scaler` is the `MinMaxScaler` instance
-            used if `normalize_coords` was True (and thus coordinates were
-            normalized), otherwise it's `None`.
-    Raises
-    ------
-    ValueError
-        If required columns are missing, or if data is insufficient
-        to create any sequences.
-    TypeError
-        If `df` is not a Pandas DataFrame.
-        
-    Notes
-    -----
-    * A sequence is generated only if a group contains at least  
-    
-      .. math::  
-         T_\text{past} + H
-    
-      consecutive observations without gaps.
-    * The function is **stateless**; call it each time the configuration
-      changes.
-    
-    Examples
-    --------
-    Generate rolling windows for two sites with a 6‑step look‑back
-    (:pydata:`time_steps=6`) and a 3‑step horizon
-    (:pydata:`forecast_horizon=3`).  
-    Future covariates are prepared *TFT‑style* (length = ``6 + 3``).
-    
-    >>> import numpy as np, pandas as pd
-    >>> from fusionlab.nn.utils import prepare_pinn_data_sequences
-    >>>
-    >>> rng = np.random.default_rng(42)
-    >>> dates = pd.date_range("2022‑01‑31", periods=18, freq="M")
-    >>>
-    >>> df = pd.DataFrame({
-    ...     "date":        np.tile(dates, 2),
-    ...     "site":        ["A"] * 18 + ["B"] * 18,
-    ...     "lon":         np.repeat([113.10, 113.25], 18),
-    ...     "lat":         np.repeat([22.60,  22.75], 18),
-    ...     "subs":        rng.normal(size=36),
-    ...     "gwl":         rng.normal(size=36),
-    ...     "rain":        rng.random(36),
-    ...     "evap":        rng.random(36),
-    ...     "forecast_rain": rng.random(36),
-    ...     "soil_type":   ["sand"] * 18 + ["clay"] * 18,     # static covariate
-    ... })
-    >>>
-    >>> inputs, targets = prepare_pinn_data_sequences(
-    ...     df,
-    ...     time_col="date",
-    ...     subsidence_col="subs",
-    ...     gwl_col="gwl",
-    ...     dynamic_cols=["rain", "evap"],
-    ...     static_cols=["soil_type"],
-    ...     future_cols=["forecast_rain"],
-    ...     spatial_cols=("lon", "lat"),
-    ...     group_id_cols=["site"],
-    ...     time_steps=6,
-    ...     forecast_horizon=3,
-    ...     mode="tft_like",
-    ...     verbose=0,
-    ... )
-    >>>
-    >>> # Inspect a few key tensors
-    >>> inputs["dynamic_features"].shape       # N × 6 × 2
-    (24, 6, 2)
-    >>> inputs["future_features"].shape        # N × (6+3) × 1
-    (24, 9, 1)
-    >>> targets["subsidence"].shape            # N × 3 × 1
-    (24, 3, 1)
-    >>> len(inputs["coords"]) == len(targets["gwl"])
-    True
-
-    See Also
-    --------
-    fusionlab.nn.utils.reshape_xtft_data  
-        Reshapes arrays for TFT‑style input pipelines.
-    fusionlab.nn.utils.create_sequences  
-        Generic sliding‑window generator used internally.
-    
-    """
     # -------------------------------------------------------------------------
-    # tiny helper – maps a 0‒1 fraction into an arbitrary range
-    _to_range = lambda f, lo, hi: lo + (hi - lo) * f          # noqa: E731
-    #                 ^fraction      ^global range
+    _to_range = lambda f, lo, hi: lo + (hi - lo) * f      # noqa: E731
     
-    # Entry log
     vlog("Starting PINN data sequence preparation...",
          verbose=verbose, level=1, logger=_logger)
-    
-    if verbose >= 1:
-        logger.info("Starting PINN data sequence preparation...")
+
     df_proc = df.copy()
 
     # --- 1. Validate Input Parameters and Columns ---
     if verbose >= 2:
         logger.debug("Validating input parameters and columns.")
 
-    # Validate essential columns
     vlog("Validating essential columns...",
          verbose=verbose, level=2, logger=_logger)
     
@@ -1241,13 +1762,39 @@ def prepare_pinn_data_sequences(
         lat_col= lat_col
     )
     essential_cols = [time_col, lon_col, lat_col, subsidence_col, gwl_col]
+    
+    # --- MODIFICATION 1: Conditional Validation ---
+    is_geoprior = str(model).lower().strip() in ('geoprior', 'geopriorsubsnet')
+    
+    if is_geoprior:
+        if h_field_col is None:
+            # Check for default names
+            if 'H_field' in df_proc.columns:
+                h_field_col = 'H_field'
+            elif 'soil_thickness' in df_proc.columns:
+                h_field_col = 'soil_thickness'
+            else:
+                raise ValueError(
+                    "`model` is 'geoprior' but `h_field_col` was not "
+                    "provided and default names 'H_field' or 'soil_thickness' "
+                    "were not found in the DataFrame."
+                )
+        
+        vlog(f"GeoPrior model detected. Using '{h_field_col}' as H_field.",
+             verbose=verbose, level=3, logger=_logger)
+        
+        essential_cols.append(h_field_col)
+        vlog(f"Validated '{h_field_col}' for GeoPriorSubsNet.",
+              verbose=verbose, level=3, logger=_logger)
+        
+    # --- End Modification 1 ---
+
+        
     exist_features(
         df_proc, features=essential_cols, 
         message="Essential column(s) missing."
-        )
+    )
     
-    # check datetime since we are refering to time series data 
-    # Check dt_col data type
     vlog("Validating time-series dataset...",
          verbose=verbose, level=2, logger=_logger)
     
@@ -1265,7 +1812,7 @@ def prepare_pinn_data_sequences(
     
     dynamic_cols = columns_manager(
         dynamic_cols, empty_as_none=False
-        )
+    )
     exist_features(
         df_proc, features=dynamic_cols, 
         name="Dynamic feature column(s)"
@@ -1300,42 +1847,8 @@ def prepare_pinn_data_sequences(
         forecast_horizon, "forecast_horizon", )
     
 
-    # ── Entry log 
-    vlog(
-        "⏳ Pre-flight: assessing sliding-window feasibility …",
-        verbose=verbose,
-        level=1,
-        logger=_logger,
-    )
-    
-    ok, _ = check_sequence_feasibility(
-        df_proc.copy(),
-        time_col=time_col,
-        group_id_cols=group_id_cols,
-        time_steps=time_steps,
-        forecast_horizon=forecast_horizon,
-        verbose=verbose,
-        error="raise",  # fail fast on impossibility,
-        logger= _logger, 
-    )
-    
-    vlog(
-        "✅ Feasibility check passed — generating sequences...",
-        verbose=verbose,
-        level=1,
-        logger=_logger,
-    )
-    
-    # Entry log
-    vlog("Starting PINN data sequence generation...",
-         verbose=verbose, level=1, logger=_logger)
-
-    # Convert time column to numerical representation
-    # (e.g., days since epoch, or normalized year)
-    # This is crucial for PINN as 't' is an input for differentiation.
     vlog("Converting time column to numeric values...",
          verbose=verbose, level=4, logger=_logger)
-    # Check if the provided time column is already numeric
     if pd.api.types.is_numeric_dtype(df_proc[time_col]):
         numerical_time_col = time_col
         if verbose >= 2:
@@ -1343,11 +1856,9 @@ def prepare_pinn_data_sequences(
                 f"Time column '{time_col}' is already numeric. Using it directly."
             )
     else:
-        # If not numeric, then perform the conversion
         try:
             df_proc[time_col] = pd.to_datetime(
                 df_proc[time_col], format=datetime_format)
-            # Convert to a numerical representation, e.g., year with fraction
             df_proc[f"{time_col}_numeric"] = (
                 df_proc[time_col].dt.year +
                 (df_proc[time_col].dt.dayofyear - 1) /
@@ -1367,23 +1878,64 @@ def prepare_pinn_data_sequences(
                 f"Ensure it's datetime-like or specify `datetime_format`."
                 f" Error: {e}"
             )
+    vlog(
+        "Pre-flight: assessing sliding-window feasibility ...",
+        verbose=verbose,
+        level=1,
+        logger=_logger,
+    )
+    
+    ok, _ = check_sequence_feasibility(
+        df_proc.copy(),
+        time_col=time_col,
+        group_id_cols=group_id_cols,
+        time_steps=time_steps,
+        forecast_horizon=forecast_horizon,
+        verbose=verbose,
+        error="raise",  # fail fast on impossibility,
+        logger= _logger, 
+    )
+    
+    vlog(
+        "Feasibility check passed — generating sequences...",
+        verbose=verbose,
+        level=1,
+        logger=_logger,
+    )
+    
+    vlog("Starting PINN data sequence generation...",
+         verbose=verbose, level=1, logger=_logger)
    
     mode = select_mode(mode, default='pihal_like')
     vlog(f"Operating in '{mode}' data preparation mode.",
          level=1, verbose=verbose, logger=_logger)
 
-    # Initialize coord_scaler
-    # --- Apply Global Coordinate Normalization (if enabled) ---
+    exclude_cols = []
+    if lock_physics_cols:
+        exclude_cols += [subsidence_col, gwl_col]
+        if h_field_col is not None:
+            exclude_cols.append(h_field_col)
+    
+        # Also exclude any "__si" columns automatically (safe for Stage-1 outputs)
+        if protect_si_suffix:
+            exclude_cols += [c for c in df_proc.columns if str(c).endswith(protect_si_suffix)]
+    
+    # IMPORTANT: do NOT shift time in normalization for PINN
     df_proc, coord_scaler, cols_scaler = normalize_for_pinn(
-        df=df_proc, 
-        time_col= numerical_time_col, 
-        coord_x=lon_col, 
-        coord_y=lat_col, 
-        scale_coords= normalize_coords, 
-        cols_to_scale =cols_to_scale, 
-        forecast_horizon= forecast_horizon, 
-        verbose =verbose, 
-        _logger = _logger, 
+        df=df_proc,
+        time_col=numerical_time_col,
+        coord_x=lon_col,
+        coord_y=lat_col,
+        scale_coords=normalize_coords,
+        cols_to_scale=cols_to_scale,
+        forecast_horizon=forecast_horizon,
+        shift_time_by_horizon=False,     
+        exclude_cols=exclude_cols,
+        protect_si_suffix=protect_si_suffix,
+        verbose=verbose,
+        _logger=_logger,
+        coord_scaler=coord_scaler,
+        fit_coord_scaler=fit_coord_scaler,
     )
 
     # --- 2. Group and Sort Data ---
@@ -1396,7 +1948,6 @@ def prepare_pinn_data_sequences(
             f" {group_id_cols or 'None (single group)'}."
         )
     
-    # Sort by group IDs (if any), then by time within each group
     sort_by_cols = [numerical_time_col]
     if group_id_cols:
         sort_by_cols = group_id_cols + sort_by_cols
@@ -1410,8 +1961,7 @@ def prepare_pinn_data_sequences(
                 f"Data grouped by {group_id_cols} into {len(group_keys)} groups."
             )
     else:
-        # Treat entire DataFrame as a single group
-        grouped_data = [(None, df_proc)] # List of one tuple (key, group_df)
+        grouped_data = [(None, df_proc)] 
         group_keys = [None]
         if verbose >= 1:
             logger.info("Processing entire DataFrame as a single group.")
@@ -1420,7 +1970,7 @@ def prepare_pinn_data_sequences(
     # --- 3. First Pass: Calculate Total Number of Sequences ---
     total_sequences = 0
     min_len_per_group = time_steps + forecast_horizon
-    valid_group_dfs = [] # Store dataframes of groups that are long enough
+    valid_group_dfs = [] 
 
     vlog("Counting valid sequences in groups...",
         verbose=verbose, level=4, logger=_logger)
@@ -1431,7 +1981,7 @@ def prepare_pinn_data_sequences(
             f" length per group: {min_len_per_group}."
         )
 
-    n_groups = len(group_keys) or 1          # avoid div/0 if no grouping
+    n_groups = len(group_keys) or 1
     for g_idx, group_key in enumerate(group_keys):
         group_df = grouped_data.get_group(group_key) if group_id_cols else df_proc
         
@@ -1439,12 +1989,11 @@ def prepare_pinn_data_sequences(
             raise InterruptedError("Sequence generation aborted.")
         
         key_str = group_key if group_key is not None else "<Full Dataset>"
-        # ── progress: 0 → 50 %
         if progress_hook is not None:
             progress_hook(_to_range((g_idx + 1) / n_groups, 0.0, 0.50))
                           
         if len(group_df) < min_len_per_group:
-            if verbose >= 5: # More detailed per-group logging
+            if verbose >= 5: 
                 logger.info(
                     f"Group '{key_str}' has {len(group_df)} points, less than "
                     f"min required ({min_len_per_group}). Skipping."
@@ -1486,13 +2035,10 @@ def prepare_pinn_data_sequences(
     vlog("Pre-allocating arrays...",
          verbose=verbose, level=2, logger=_logger)
     
-    # Feature dimensions
     num_dynamic_feats = len(dynamic_cols)
     num_static_feats = len(static_cols) if static_cols else 0
     num_future_feats = len(future_cols) if future_cols else 0
 
-    # Initialize arrays
-    # Coords for the forecast horizon: (N, H, 3) for [t, x, y]
     coords_horizon_arr = np.zeros(
         (total_sequences, forecast_horizon, 3), dtype=np.float32
     )
@@ -1503,18 +2049,14 @@ def prepare_pinn_data_sequences(
         (total_sequences, time_steps, num_dynamic_feats),
         dtype=np.float32
     )
-    # Determine the required length of the future features sequence
+    
     if mode == 'tft_like':
-        # For TFT style, we need future values for both the lookback
-        # and forecast periods.
         future_window_len = time_steps + forecast_horizon
         vlog(f"Allocating future features array for 'tft_like' mode "
              f"with time dimension: {future_window_len}",
              level=2, verbose=verbose, logger=_logger
             )
-    else: # 'pihal_like' mode
-        # For PIHALNet's encoder-decoder, we only need future values
-        # for the forecast horizon.
+    else: 
         future_window_len = forecast_horizon
     
     future_features_arr = np.zeros(
@@ -1529,6 +2071,17 @@ def prepare_pinn_data_sequences(
         (total_sequences, forecast_horizon, output_gwl_dim), 
         dtype=np.float32
     )
+    
+    # --- MODIFICATION 2: Conditional Allocation ---
+    H_field_arr = None # Initialize as None
+    if is_geoprior:
+        H_field_arr = np.zeros(
+            (total_sequences, forecast_horizon, 1), dtype=np.float32
+        )
+        vlog(f"Allocated 'H_field' array with shape {H_field_arr.shape}",
+             verbose=verbose, level=4, logger=_logger)
+    # --- End Modification 2 ---
+        
     vlog("Arrays shapes set.",
          verbose=verbose, level=5, logger=_logger)
     
@@ -1540,6 +2093,11 @@ def prepare_pinn_data_sequences(
         logger.debug(f"  Future Features: {future_features_arr.shape}")
         logger.debug(f"  Target Subsidence: {target_subsidence_arr.shape}")
         logger.debug(f"  Target GWL: {target_gwl_arr.shape}")
+        # --- MODIFICATION 2b: Conditional Logging ---
+        if H_field_arr is not None:
+            logger.debug(f"  H_field ({h_field_col}): {H_field_arr.shape}")
+            
+        # --- End Modification 2b ---
 
     # --- 5. Second Pass: Populate Arrays with Rolling Windows ---
     current_seq_idx = 0
@@ -1553,34 +2111,22 @@ def prepare_pinn_data_sequences(
                 for gdf in valid_group_dfs) or 1
     done_seq  = 0   
     
-    for group_df in valid_group_dfs: # Iterate over pre-filtered valid groups
+    for group_df in valid_group_dfs: 
         group_t_coords = group_df[numerical_time_col].values
         group_x_coords = group_df[lon_col].values
         group_y_coords = group_df[lat_col].values
 
-        # # Normalization parameters for coordinates (per group if grouped)
-        # t_min, t_max = group_t_coords.min(), group_t_coords.max()
-        # x_min, x_max = group_x_coords.min(), group_x_coords.max()
-        # y_min, y_max = group_y_coords.min(), group_y_coords.max()
-        
-        # Normalization parameters for coordinates (per group if grouped)
-        # These are now only for reference if normalize_coords was False,
-        # or for potential debugging. The actual normalization happens globally if enabled.
         t_min_group, t_max_group = group_t_coords.min(), group_t_coords.max() 
 
         if verbose >= 3:
             print()
             time_scale_info = f"{t_min_group:.4f}-{t_max_group:.4f}"
-            if normalize_coords and coord_scaler: # Check if scaler exists
-                # Attempt to show original scale for 't' if possible
-                # This requires careful handling as group_t_coords might be a slice
-                # For simplicity, we'll just note if it's normalized.
+            if normalize_coords and coord_scaler: 
                 time_scale_info += " (normalized)"
             else:
                 time_scale_info += " (original scale)"
             
             print_box(
-               # f"Group window: t {t_min}-{t_max}",
                 f"Group window t: {time_scale_info}",
                 width=_TW,
                 align='center',
@@ -1592,70 +2138,58 @@ def prepare_pinn_data_sequences(
 
         group_static_vals = None
         if static_cols and num_static_feats > 0:
-            # For static features, take the first row of the group
-            # (assuming they are constant within a group)
             group_static_vals = group_df.iloc[0][
                 static_cols].values.astype(np.float32)
+            
+        # --- MODIFICATION 3: Get static H_val for the group ---
+        group_H_val = None
+        if is_geoprior:
+            # Get the single static soil thickness value for this group
+            group_H_val = group_df.iloc[0][h_field_col]
+        # --- End Modification 3 ---
 
         num_seq_in_this_group = len(group_df) - min_len_per_group + 1
         for i in range(num_seq_in_this_group):
             
-            # ­­­ existing sequence logic …
             done_seq += 1
             if progress_hook is not None:
-                # from 50% to 100%
                 progress_hook(_to_range(done_seq / total_seq, 0.5, 1.00))
                 
             if stop_check and stop_check():
                 raise InterruptedError("Sequence generation aborted by user")
-            # --- Static Features ---
+                
             if static_cols and num_static_feats > 0:
                 static_features_arr[current_seq_idx] = group_static_vals
 
-            # --- Dynamic Features (lookback window) ---
             dynamic_start_idx = i
             dynamic_end_idx = i + time_steps
             dynamic_features_arr[current_seq_idx] = group_df.iloc[
                 dynamic_start_idx:dynamic_end_idx
             ][dynamic_cols].values.astype(np.float32)
 
-            # --- Future Features & Target Coordinates (forecast horizon) ---
             horizon_start_idx = i + time_steps
             horizon_end_idx = i + time_steps + forecast_horizon
  
             if future_cols and num_future_feats > 0:
-                if future_cols and num_future_feats > 0:
-                    if mode == 'tft_like':
-                        # For TFT mode, we need the full window:
-                        # from the start of the dynamic window to the end of the horizon.
-                        future_start_idx = i
-                        future_end_idx = i + time_steps + forecast_horizon
-                    else: # 'pihal_like' mode
-                        # For PIHAL mode, we only need the horizon window.
-                        future_start_idx = horizon_start_idx
-                        future_end_idx = horizon_end_idx
+                if mode == 'tft_like':
+                    future_start_idx = i
+                    future_end_idx = i + time_steps + forecast_horizon
+                else: # 'pihal_like' mode
+                    future_start_idx = horizon_start_idx
+                    future_end_idx = horizon_end_idx
              
                 future_features_arr[current_seq_idx] = group_df.iloc[
                     future_start_idx:future_end_idx
                 ][future_cols].values.astype(np.float32)
 
-            # Coordinates for the forecast horizon
             t_horizon = group_t_coords[horizon_start_idx:horizon_end_idx]
             x_horizon = group_x_coords[horizon_start_idx:horizon_end_idx]
             y_horizon = group_y_coords[horizon_start_idx:horizon_end_idx]
-
-            # if normalize_coords:
-            #     # Avoid division by zero if min == max 
-            #     # (e.g., single point in time/space for horizon)
-            #     t_horizon = (t_horizon - t_min) / (t_max - t_min + 1e-9)
-            #     x_horizon = (x_horizon - x_min) / (x_max - x_min + 1e-9)
-            #     y_horizon = (y_horizon - y_min) / (y_max - y_min + 1e-9)
             
             coords_horizon_arr[current_seq_idx, :, 0] = t_horizon
             coords_horizon_arr[current_seq_idx, :, 1] = x_horizon
             coords_horizon_arr[current_seq_idx, :, 2] = y_horizon
 
-            # --- Target Variables (forecast horizon) ---
             target_subsidence_arr[current_seq_idx] = group_df.iloc[
                 horizon_start_idx:horizon_end_idx
             ][subsidence_col].values.reshape(
@@ -1666,8 +2200,13 @@ def prepare_pinn_data_sequences(
             ][gwl_col].values.reshape(
                 forecast_horizon, output_gwl_dim).astype(np.float32)
 
-            
-            if verbose >= 7: # Very detailed trace
+            # --- MODIFICATION 4: Populate H_field array ---
+            if H_field_arr is not None:
+                # Tile the static H_val across the forecast horizon
+                H_field_arr[current_seq_idx, :, 0] = group_H_val
+            # --- End Modification 4 ---
+                
+            if verbose >= 7: 
                 logger.debug(f"  Sequence {current_seq_idx}:")
                 logger.debug("    Dynamic window:"
                              f" {dynamic_start_idx}-{dynamic_end_idx-1}")
@@ -1695,27 +2234,40 @@ def prepare_pinn_data_sequences(
          verbose=verbose, level=1, logger=_logger)
     
     inputs_dict = {
-        'coords': coords_horizon_arr, # Shape: (N, forecast_horizon, 3)
+        'coords': coords_horizon_arr, 
         'static_features': static_features_arr if num_static_feats > 0 else None,
-        # Shape: (N, time_steps, ...)
         'dynamic_features': dynamic_features_arr,
-        # Shape: (N, forecast_horizon, ...)
         'future_features': future_features_arr if num_future_feats > 0 else None,
     }
-    # Filter out None entries from inputs_dict if model call expects only present keys
+    
+    # --- MODIFICATION 5: Conditionally add H_field to inputs_dict ---
+    if H_field_arr is not None:
+        inputs_dict['H_field'] = H_field_arr
+    # --- End Modification 5 ---
+        
     inputs_dict = {k: v for k, v in inputs_dict.items() if v is not None}
-
 
     targets_dict = {
         'subsidence': target_subsidence_arr,
         'gwl': target_gwl_arr
     }
 
-    # --- Save to File (Optional) ---
     if savefile:
         vlog(f"\nPreparing to save sequence data to '{savefile}'...", 
              verbose=verbose, level=3, logger=_logger
              )
+        # --- v3.2: allow split between GWL dynamic driver and GWL prediction target ---
+        gwl_dyn_col = kws.get("gwl_dyn_col", None) or gwl_col
+        
+        if gwl_dyn_col not in dynamic_cols:
+            raise ValueError(
+                f"gwl_dyn_col={gwl_dyn_col!r} must be present in dynamic_cols.\n"
+                f"Got gwl_col(target)={gwl_col!r} and dynamic_cols={dynamic_cols}.\n"
+                "GeoPrior v3.2 expects: gwl_dyn_col=<depth__si>, gwl_col=<head__si>."
+            )
+        
+        gwl_dyn_index = int(dynamic_cols.index(gwl_dyn_col))
+        
         job_dict = {
             'static_data': static_features_arr,
             'dynamic_data': dynamic_features_arr,
@@ -1738,16 +2290,24 @@ def prepare_pinn_data_sequences(
             'coord_scaler': coord_scaler, 
             'normalize_coords_flag': normalize_coords, 
             'saved_coord_scaler_flag':coord_scaler is not None, 
+            # ---  Conditionally add to savefile ---
+            'model_type': model,
+            'h_field_col': h_field_col,
+            'H_field': H_field_arr if H_field_arr is not None else None,
+            
+            'gwl_col':gwl_col,                 # target column (head)
+            'gwl_dyn_col':gwl_dyn_col,         # dynamic driver column (depth)
+            'gwl_dyn_index':gwl_dyn_index,     # index of the driver in dynamic_cols
 
+  
         }
         try:
             job_dict.update(get_versions())
-        except NameError: # If get_versions is not defined/imported
+        except NameError: 
             vlog("\n  `get_versions` not found, version info not saved.", 
                  verbose=verbose, level =1, logger=_logger)
 
         try:
-            # save_job to be a wrapper around joblib.dump
             save_job(job_dict, savefile, append_versions=False)
       
             if verbose >= 1:
@@ -1778,13 +2338,14 @@ def prepare_pinn_data_sequences(
     
     return inputs_dict, targets_dict
 
+
 def process_pde_modes(
     pde_mode: Union[str, list, None], 
     enforce_consolidation: bool = False,
     pde_mode_config: Union[str, list, None] = None, 
     solo_return: bool=False, 
 ) -> list:
-    """
+    r"""
     Process and validate the `pde_mode` argument to determine the active PDE modes.
 
     This function handles `pde_mode` inputs and processes them according to
@@ -1839,9 +2400,9 @@ def process_pde_modes(
         raise TypeError("`pde_mode` must be a string, list of strings, or None.")
 
     # Handle special cases for "none" and "both"
-    if "none" in pde_modes_active:  # If 'none' is present, override others
+    if "none" in pde_modes_active or "off" in pde_modes_active:  # If 'none' is present, override others
         pde_modes_active = ['none']
-    if "both" in pde_modes_active:  # If 'both' is present, use both modes
+    if "both" in pde_modes_active or "on" in pde_modes_active:  # If 'both' is present, use both modes
         pde_modes_active = ['consolidation', 'gw_flow']
 
     # Enforce consolidation mode if specified
@@ -1856,8 +2417,11 @@ def process_pde_modes(
     # Ensure 'consolidation' is the only active mode if it was defaulted,
     # or if user explicitly selected only unsupported modes.
     if any(unsupported in pde_modes_active 
-           for unsupported in ['gw_flow', 'both', 'none']) \
-       and 'consolidation' not in pde_modes_active:
+           for unsupported in {
+                   'consolidation', 'gw_flow', 
+                   'both', 'none', 'on', 
+                   'off'}
+          ):
         # This case means decorator didn't force 'consolidation', so we do it here
         logger.info(
             f"Unsupported pde_mode '{pde_mode}' "
@@ -1873,7 +2437,7 @@ def process_pde_modes(
     return pde_modes_active
 
 def check_and_rename_keys(inputs, y): # ranem to check_input_keys 
-    """
+    r"""
     Helper function to check and rename keys in the inputs
     and target dictionaries.
 
@@ -1927,8 +2491,11 @@ def check_and_rename_keys(inputs, y): # ranem to check_input_keys
     
     return inputs, y
 
-def check_required_input_keys(inputs, y=None, message=None ):
-    """
+def _check_required_input_keys(
+        inputs, y=None, message=None, 
+        
+        ):
+    r"""
     Helper function to check and rename keys in the inputs
     and target dictionaries.
 
@@ -1994,11 +2561,138 @@ def check_required_input_keys(inputs, y=None, message=None ):
     
     return inputs, y
 
+
+
+def check_required_input_keys(
+    inputs: Optional[Dict[str, Any]],
+    y: Optional[Dict[str, Any]] = None,
+    message: Optional[str] = None,
+    model_name: Optional[str] = None,
+    do_rename: bool = True,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """
+    Validate presence of required keys in `inputs` and `y`.
+    Optionally canonicalize keys via reverse alias mapping.
+    
+    This function ensures that the necessary keys are present in both the 
+    `inputs` and `y` dictionaries. If the keys for 'subsidence' or 'gwl' 
+    are not found, it attempts to rename them from possible alternatives 
+    like 'subs_pred' or 'gwl_pred'.
+
+    Parameters
+    ----------
+    inputs : dict
+        A dictionary containing the input data. The keys 'coords' and 
+        'dynamic_features' are expected.
+        
+    y : dict
+        A dictionary containing the target values. The keys 'subsidence' 
+        and 'gwl' are expected, but they could also appear as 'subs_pred' 
+        or 'gwl_pred'.
+        
+    message : str, optional 
+       Message to raise error when inputs/y are not dictionnary. 
+       
+    Raises
+    ------
+    ValueError
+        If required keys are missing in `inputs` or `y`, or if renaming 
+        does not result in valid keys for 'subsidence' and 'gwl'.
+        
+    
+    """
+
+    # ---- inputs checks -------------------------------------------------
+    if inputs is not None:
+        if not isinstance(inputs, dict):
+            msg = message or (
+                "Inputs must be a dict with 'coords' and "
+                "'dynamic_features'. Got "
+                f"{type(inputs).__name__!r}."
+            )
+            raise TypeError(msg)
+
+        # Canonicalize GeoPrior-specific inputs (H field aliases)
+        if do_rename and model_name:
+            name = str(model_name).lower()
+            if name in ("geoprior", "geopriorsubsnet",
+                        "geopriorsubsnet"):
+                inputs = rename_dict_keys(
+                    inputs,
+                    {
+                        "H_field": (
+                            "H_field",
+                            "soil_thickness",
+                            "soil thickness",
+                            "h_field",
+                        )
+                    },
+                    order="reverse",
+                )
+
+        # Mandatory base inputs
+        if "coords" not in inputs or inputs.get("coords") is None:
+            raise ValueError("Input 'coords' is missing or None.")
+        if ("dynamic_features" not in inputs or
+                inputs.get("dynamic_features") is None):
+            raise ValueError(
+                "Input 'dynamic_features' is missing or None."
+            )
+
+        # GeoPrior requires H_field (after alias unification)
+        if model_name:
+            name = str(model_name).lower()
+            if name in ("geoprior", "geopriorsubsnet",
+                        "geopriorsubsnet"):
+                if "H_field" not in inputs or inputs.get("H_field") is None:
+                    raise ValueError(
+                        "GeoPrior requires 'H_field' in inputs "
+                        "(aliases accepted: 'soil_thickness', "
+                        "'soil thickness', 'h_field')."
+                    )
+
+    # ---- target checks -------------------------------------------------
+    if y is not None:
+        if not isinstance(y, dict):
+            msg = message or (
+                "Target `y` must be a dict containing "
+                "'subs_pred/subsidence' and 'gwl_pred/gwl'. Got "
+                f"{type(y).__name__!r}."
+            )
+            raise TypeError(msg)
+
+        # Canonicalize targets to subs_pred / gwl_pred
+        if do_rename:
+            y = rename_dict_keys(
+                y,
+                {
+                    "subs_pred": ("subs_pred", "subsidence"),
+                    "gwl_pred": ("gwl_pred", "gwl"),
+                },
+                order="reverse",
+            )
+
+        # Accept either canonical or legacy if not renaming
+        has_subs = ("subs_pred" in y) or ("subsidence" in y)
+        has_gwl = ("gwl_pred" in y) or ("gwl" in y)
+
+        if not has_subs:
+            raise ValueError(
+                "Target missing subsidence. Provide 'subs_pred' or "
+                "'subsidence'."
+            )
+        if not has_gwl:
+            raise ValueError(
+                "Target missing gwl. Provide 'gwl_pred' or 'gwl'."
+            )
+
+    return inputs, y
+       
 def _extract_txy_in(
     inputs: Union[Tensor, np.ndarray, Dict[str, Union[Tensor, np.ndarray]]],
     coord_slice_map: Optional[Dict[str, int]] = None, 
 ) -> Tuple[Tensor, Tensor, Tensor]:
-    """
+    r"""
     Extracts t, x, y tensors from `inputs`, which may be:
       - A single 3D tensor of shape (batch, time_steps, 3)
       - A dict containing a key 'coords' with such a tensor
@@ -2118,7 +2812,7 @@ def _get_coords(
     check_shape: bool = False,
     is_time_dependent: bool = True,
 ) -> Tensor:
-    """
+    r"""
     Extract the **coords** tensor from any input layout.
 
     Parameters
@@ -2218,7 +2912,7 @@ def extract_txy_in(
     _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
     **kws
 ) -> Tuple[Tensor, Tensor, Tensor]:
-    """
+    r"""
     Extracts t, x, y tensors from various input formats.
 
     This utility standardizes coordinate inputs, accepting a single
@@ -2363,7 +3057,7 @@ def extract_txy(
     _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
     **kws
 ) -> Tuple[Tensor, Tensor, Tensor]:
-    """
+    r"""
     Extracts t, x, y tensors from various input formats.
 
     This utility standardizes coordinate inputs, accepting a single
@@ -2516,7 +3210,7 @@ def plot_hydraulic_head(
     show_plot: bool = True,
     **contourf_kwargs: Any
 ) -> Tuple[plt.Axes, ScalarMappable]:
-    """Generate and plot a 2D contour map of a hydraulic head solution.
+    r"""Generate and plot a 2D contour map of a hydraulic head solution.
 
     This utility visualizes the output of a Physics-Informed Neural
     Network (PINN) that solves for the hydraulic head

@@ -14,9 +14,11 @@ import warnings
 import inspect
 import textwrap
 import logging
+import shutil
 from numbers import Real 
 from pathlib import Path
 from itertools import chain
+from collections.abc import Mapping
 import matplotlib.pyplot as plt
 from datetime import datetime
 from typing import ( 
@@ -28,6 +30,7 @@ from typing import (
 import numpy as np 
 import pandas as pd 
 
+PathLike = Union[str, os.PathLike]
 
 _SENTINEL = object()     
 
@@ -38,7 +41,8 @@ __all__ =[
     'exclude_duplicate_kwargs', 'reorder_columns',
     'find_id_column', 'check_group_column_validity', 
     'save_all_figures', 'rename_dict_keys', 
-    'normalize_time_column', 'select_mode'
+    'normalize_time_column', 'select_mode', 
+    'normalize_model_inputs', 'print_config_table'
  ]
 
 class ExistenceChecker:
@@ -203,6 +207,37 @@ class ExistenceChecker:
             raise OSError(f"Unable to create file {file_path}: {exc}") from exc
 
         return file_path
+
+def normalize_model_inputs(
+    *data: Union[pd.DataFrame, Mapping[str, pd.DataFrame], list, tuple]
+) -> Dict[str, pd.DataFrame]:
+    # If single argument
+    if len(data) == 1:
+        single = data[0]
+        # Case: dict-like mapping
+        if isinstance(single, Mapping):
+            return single  # assume Mapping[str, DataFrame]
+        # Case: list/tuple of DataFrames
+        if isinstance(single, (list, tuple)):
+            dfs = single
+            return {f"model_{i+1}": df for i, df in enumerate(dfs)}
+        # Case: single DataFrame
+        if isinstance(single, pd.DataFrame):
+            return {"model": single}
+        raise TypeError(
+            "Expected a DataFrame, a dict[str,DataFrame],"
+            " or a list/tuple of DataFrames"
+        )
+
+    # If multiple arguments, expect each to be a DataFrame
+    if all(isinstance(d, pd.DataFrame) for d in data):
+        return {f"model_{i+1}": df for i, df in enumerate(data)}
+
+    raise TypeError(
+        "When passing multiple arguments,"
+        " each must be a pandas DataFrame"
+    )
+
 
 def check_group_column_validity(
     df: pd.DataFrame,
@@ -932,7 +967,7 @@ def vlog(
     logger=None,
     **kws
 ):
-    """
+    r"""
     Log or naive messages with optional indentation and
     bracketed tags.
 
@@ -942,16 +977,16 @@ def vlog(
     it behaves differently depending on whether
     ``mode`` is ``'log'`` or ``'naive'``. When
     :math:`mode = 'log'`, the message is printed only if
-    :math:`\\text{verbose} \\geq \\text{level}`. Otherwise,
+    :math:`\text{verbose} \geq \text{level}`. Otherwise,
     for :math:`mode` in [``None``, ``'naive'``], the
     verbosity threshold leads to various bracketed
     prefixes (e.g. [INFO], [DEBUG], [TRACE]) unless the
     message already contains such a prefix.
 
     .. math::
-       \\text{indentation} = 2 \\times \\text{depth}
+       \text{indentation} = 2 \times \text{depth}
 
-    where :math:`\\text{depth}` is either manually
+    where :math:`\text{depth}` is either manually
     specified or auto-derived based on `<parameter inline>`
     `level` (1 = ERROR, 2 = WARNING, 3 = INFO, 4/5 =
     DEBUG, 6/7 = TRACE).
@@ -979,7 +1014,7 @@ def vlog(
     mode : str, optional
         Determines logging mode. If set to ``'log'``,
         prints messages only if
-        :math:`\\text{verbose} \\geq \\text{level}`.
+        :math:`\text{verbose} \geq \text{level}`.
         Otherwise (if ``None`` or ``'naive'``), it
         follows a custom logic driven by `<parameter
         inline> verbose`.
@@ -1075,7 +1110,7 @@ def vlog(
         if actual_verbose >= level:
             # Indent and prefix with the label from `level`.
             indent = " " * (depth * 2)
-            _emit(f"{indent}{verbosity_labels[level]} {message}")
+            _emit(rf"{indent}{verbosity_labels[level]} {message}")
         # Nothing else for mode='log' if verbosity is too low.
         return
 
@@ -1097,25 +1132,25 @@ def vlog(
         # If >=3 => prefix with [INFO] if vp is True and not already tagged
         if actual_verbose <=3:
             if vp and not already_tagged:
-                _emit(f"{indent}[INFO] {message}")
+                _emit(rf"{indent}[INFO] {message}")
             else:
-                _emit(f"{indent}{message}")
+                _emit(rf"{indent}{message}")
             return 
 
         # If 3 < verbose < 5 => prefix with [DEBUG] if vp is True and not already tagged
         if 3 < actual_verbose < 5:
             if vp and not already_tagged:
-                _emit(f"{indent}[DEBUG] {message}")
+                _emit(rf"{indent}[DEBUG] {message}")
             else:
-                _emit(f"{indent}{message}")
+                _emit(rf"{indent}{message}")
             return
 
         # If verbose >= 5 => prefix with [TRACE] if vp is True and not already tagged
         if actual_verbose >= 5:
             if vp and not already_tagged:
-                _emit(f"{indent}[TRACE] {message}")
+                _emit(rf"{indent}[TRACE] {message}")
             else:
-                _emit(f"{indent}{message}")
+                _emit(rf"{indent}{message}")
             return
 
 def get_actual_column_name(
@@ -2464,7 +2499,11 @@ def are_all_values_in_bounds(
     else:
         return True
 
-def rename_dict_keys(data, param_to_rename=None):
+def rename_dict_keys(
+       data: dict,
+       param_to_rename: Optional[dict] = None,
+       order: str = "forward",
+    ):
     """
     Renames keys in the `data` dictionary based on 
     the provided `param_to_rename` dictionary.
@@ -2488,7 +2527,19 @@ def rename_dict_keys(data, param_to_rename=None):
         represents an old key that may be found in `data`, and the corresponding 
         value is the new key. If `None`, no renaming is performed. If a key in 
         `data` matches an old key in `param_to_rename`, that key will be renamed.
-
+    order: str, {'forward', 'reverse'}: 
+        Order for renaming keys in a flat dict::
+            
+            forward (default):
+                param_to_rename = {old_key: new_key}
+    
+            reverse:
+              param_to_rename = {
+                canonical_key: alias or (alias1, alias2, ...)
+              }
+              The first alias found in `data` is moved under the
+              canonical key. If the canonical key already exists,
+              nothing is changed for that mapping.
     Returns
     -------
     dict
@@ -2541,14 +2592,52 @@ def rename_dict_keys(data, param_to_rename=None):
     if not isinstance(data, dict):
         raise ValueError(
             f"data must be a dictionary. Got {type(data).__name__!r}")
+    if order not in ("forward", "reverse"):
+        raise ValueError("order must be 'forward' or 'reverse'.")
         
     # Create a copy of data to avoid modifying the original
     updated_data = data.copy()
     
+    if order == "forward":
+        # Rename keys based on param_to_rename mapping
+        for old_key, new_key in param_to_rename.items():
+            if old_key == new_key:
+                continue
+            if old_key in updated_data:
+                # do not clobber an existing canonical value
+                if new_key in updated_data and new_key != old_key:
+                    # keep existing new_key; drop old_key
+                    updated_data.pop(old_key)
+                else:
+                    updated_data[new_key] = updated_data.pop(old_key)
+            return updated_data
+    
+    # reverse mode: canonical -> aliases
+    for canonical, aliases in param_to_rename.items():
+        # normalize aliases to tuple
+        if isinstance(aliases, (list, tuple)):
+            alias_iter = tuple(aliases)
+        elif isinstance(aliases, str):
+            alias_iter = (aliases,)
+        else:
+            raise ValueError(
+                "reverse mode requires alias str or sequence."
+            )
+
+        # if canonical already present, prefer it
+        if canonical in updated_data:
+            continue
+
+        # move first alias found → canonical
+        for a in alias_iter:
+            if a in updated_data:
+                updated_data[canonical] = updated_data.pop(a)
+                break
+            
     # Rename keys based on param_to_rename mapping
-    for old_key, new_key in param_to_rename.items():
-        if old_key in updated_data:
-            updated_data[new_key] = updated_data.pop(old_key)
+    # for old_key, new_key in param_to_rename.items():
+    #     if old_key in updated_data:
+    #         updated_data[new_key] = updated_data.pop(old_key)
     
     return updated_data
 
@@ -3496,3 +3585,434 @@ def split_train_test_by_time(
     train_df = working.loc[train_mask].copy()
     test_df  = working.loc[test_mask].copy()
     return train_df, test_df
+
+
+def getenv_stripped(
+    name: str,
+    default: Optional[str] = None,
+    allow_empty: bool = False
+ ) -> Optional[str]:
+    """
+    Read an environment variable and strip whitespace robustly.
+
+    Parameters
+    ----------
+    name : str
+        Environment variable name to read.
+    default : str or None, optional
+        Value returned when the environment variable is not set.
+    allow_empty : bool, default=False
+        If False, empty strings are treated as missing and `default`
+        is returned instead. If True, an empty string is returned
+        unchanged.
+
+    Returns
+    -------
+    out : str or None
+        The stripped string value, the empty string (if allowed), or
+        `default` when unset / empty.
+    """
+    val = os.getenv(name)
+    if val is None:
+        return default
+    val = val.strip()
+    if not val and not allow_empty:
+        return default
+    return val
+
+
+def default_results_dir(
+    start: Optional[PathLike] = None,
+    env_var: str = "RESULTS_DIR",
+    folder_name: str = "results",
+    create: bool = False
+) -> str:
+    """
+    Resolve the canonical 'results' directory with robust fallbacks.
+
+    Resolution order
+    ----------------
+    1. If the environment variable `env_var` is set, use it.
+    2. Else search upward from `start` (or `Path.cwd()`) for a folder
+       named `folder_name`.
+    3. Else return `Path.cwd() / folder_name`.
+
+    Parameters
+    ----------
+    start : path-like, optional
+        Starting path for the upward search. If None, uses the current
+        working directory.
+    env_var : str, default="RESULTS_DIR"
+        Environment variable that, when set, overrides any discovery.
+    folder_name : str, default="results"
+        Directory name to look for when walking upward.
+    create : bool, default=False
+        If True, create the directory when it does not exist.
+
+    Returns
+    -------
+    path_str : str
+        Absolute path to the resolved results directory.
+
+    Notes
+    -----
+    This helper is importable in Stage-1/2/3 scripts to keep path
+    resolution consistent across training/tuning/inference. It avoids
+    relying on `__file__` (which may be inside the package install
+    path) and instead uses `Path.cwd()` by default, which is what users
+    expect when launching scripts from various locations.
+
+    Examples
+    --------
+    >>> default_results_dir()
+    '.../your/project/results'
+
+    >>> default_results_dir(start='/work/exp/run42', create=True)
+    '.../your/project/results'
+    """
+    # 1) Environment variable takes precedence
+    env = os.getenv(env_var)
+    if env:
+        p = Path(env).expanduser().resolve()
+        if create:
+            p.mkdir(parents=True, exist_ok=True)
+        return str(p)
+
+    # 2) Search upward for `folder_name`
+    base = Path(start).resolve() if start else Path.cwd().resolve()
+    for parent in (base, *base.parents):
+        cand = parent / folder_name
+        if cand.exists():
+            return str(cand.resolve())
+
+    # 3) Fallback to cwd/folder_name
+    fallback = base / folder_name
+    if create:
+        fallback.mkdir(parents=True, exist_ok=True)
+    return str(fallback.resolve())
+
+def print_config_table(
+    sections: Union[Dict[str, Any], Sequence[Tuple[str, Dict[str, Any]]]],
+    title: Optional[str] = None,
+    table_width: Optional[int] = None,
+    sort_keys: bool = True,
+    key_col_fraction: float = 0.35,
+    max_value_length: int = 200,
+    log_fn=None,
+) -> str:
+    """
+    Pretty-print configuration or hyperparameters as a key/value table.
+
+    This helper is intended for CLI scripts (Stage-1, training, tuning)
+    so that the user can quickly inspect which parameters are actually
+    in effect.
+
+    Parameters
+    ----------
+    sections : dict or sequence of (str, dict)
+        If a single dict is passed, all key/value pairs are printed in
+        one block.
+
+        If a sequence is passed, it must contain ``(name, params)``
+        tuples, where ``name`` is a section label (e.g. ``"Physics"``)
+        and ``params`` is a dict mapping parameter names to values.
+
+    title : str, optional
+        Optional title displayed above the table (centered).
+
+    table_width : int, optional
+        Total width of the printed table.  If ``None``, the function
+        tries to use :func:`fusionlab.api.util.get_table_size`.  If that
+        fails, it falls back to the terminal width (via
+        :mod:`shutil.get_terminal_size`) or 80 characters.
+
+    sort_keys : bool, default=True
+        Whether to sort parameter names alphabetically within each
+        section.
+
+    key_col_fraction : float, default=0.35
+        Fraction of the table width allocated to the parameter-name
+        column.  The remainder is used for the value column.
+
+    max_value_length : int, default=200
+        Maximum number of characters kept from the stringified value.
+        Longer values are truncated with an ellipsis (``"..."``) before
+        being wrapped onto multiple lines.
+
+    log_fn : callable, optional
+        Function used to emit lines (defaults to :func:`print`).  This
+        allows capturing the table in logs if needed.
+
+    Returns
+    -------
+    str
+        The full rendered table as a single string.  It is always
+        printed via ``print_fn`` as a side effect.
+
+    Notes
+    -----
+    * Nested containers (lists, tuples, dicts) are rendered in a compact
+      one-line form and then wrapped to fill the value column.
+
+    * This function is intentionally lightweight and does not depend on
+      external tabulation libraries, so it can be safely used in
+      lightweight Stage-1 / Stage-2 scripts.
+    """
+
+    # 1) Resolve table width
+    if table_width is None:
+        # Fallback to terminal width or 80 columns
+        try:
+            table_width = shutil.get_terminal_size((80, 20)).columns
+        except Exception:  # pragma: no cover
+            table_width = 80
+
+    # Keep width within reasonable bounds
+    table_width = int(max(40, min(table_width, 140)))
+
+    # 2) Normalize `sections` into a sequence of (name, dict)
+    if isinstance(sections, dict):
+        sections_list: Sequence[Tuple[str, Dict[str, Any]]] = [
+            ("", sections)
+        ]
+    else:
+        norm_sections: List[Tuple[str, Dict[str, Any]]] = []
+        for idx, sec in enumerate(sections):
+            if isinstance(sec, dict):
+                norm_sections.append((f"Section {idx+1}", sec))
+            elif (
+                isinstance(sec, (tuple, list)) and len(sec) == 2
+                and isinstance(sec[1], dict)
+            ):
+                name, params = sec
+                norm_sections.append((str(name), params))
+            else:
+                raise TypeError(
+                    "sections must be a dict or a sequence of "
+                    "(name, dict) tuples."
+                )
+        sections_list = norm_sections
+
+    # 3) Determine column widths
+    all_keys: List[str] = []
+    for _, params in sections_list:
+        all_keys.extend(str(k) for k in params.keys())
+
+    if all_keys:
+        key_width = max(len(k) for k in all_keys) + 2
+        key_width = int(min(key_width, table_width * key_col_fraction))
+    else:
+        key_width = int(table_width * key_col_fraction)
+
+    key_width = max(8, key_width)
+    value_width = max(10, table_width - key_width - 3)  # "key : value"
+
+
+    # 4) Helpers for value formatting and wrapping
+    def _format_value(v: Any) -> str:
+        """Compact, human-readable representation for table."""
+        if isinstance(v, float):
+            s = f"{v:.6g}"
+        elif isinstance(v, (list, tuple, set)):
+            inner = ", ".join(repr(x) for x in v)
+            open_br, close_br = ("[", "]") if isinstance(v, list) else \
+                                ("(", ")") if isinstance(v, tuple) else \
+                                ("{", "}")
+            s = f"{open_br}{inner}{close_br}"
+        elif isinstance(v, dict):
+            inner = ", ".join(f"{k}={val!r}" for k, val in v.items())
+            s = "{" + inner + "}"
+        else:
+            s = repr(v)
+        if len(s) > max_value_length:
+            s = s[: max_value_length - 3] + "..."
+        return s
+
+    lines: List[str] = []
+    border = "-" * table_width
+
+    # 5) Build lines
+    lines.append(border)
+    if title:
+        t = str(title)[:table_width]
+        lines.append(t.center(table_width))
+        lines.append(border)
+
+    for sec_name, params in sections_list:
+        if not params:
+            continue
+
+        if sec_name:
+            lines.append(f"[{sec_name}]")
+
+        items = params.items()
+        if sort_keys:
+            items = sorted(items, key=lambda kv: str(kv[0]))
+
+        for key, value in items:
+            key_str = str(key)
+            val_str = _format_value(value)
+            wrapped = textwrap.wrap(val_str, width=value_width) or [""]
+
+            # First line with key
+            first = wrapped[0]
+            lines.append(
+                f"{key_str:<{key_width}} : {first}"
+            )
+            # Continuation lines for long values
+            for cont in wrapped[1:]:
+                lines.append(" " * (key_width + 3) + cont)
+
+        lines.append(border)
+
+    table_text = "\n".join(lines)
+
+    if log_fn is None:
+        log_fn = print  # pragma: no cover
+
+    log_fn(table_text)
+    return table_text
+
+def as_tuple(
+    obj: Any,
+    names: Sequence[str] | None = None,
+    *,
+    ctx: str = "value",
+    strict: bool = True,
+    allow_unwrap_singleton: bool = True,
+    max_unwrap_depth: int = 4,
+    missing_value: Any = None,
+) -> Tuple[Any, ...]:
+    """
+    Convert model I/O structures (dict/list/tuple/tensor-like) into a tuple.
+
+    This is designed for Keras multi-output training where `y_true` and
+    `y_pred` may be dictionaries keyed by output names, but Keras metrics
+    are more stable when fed a tuple/list ordered like `model.output_names`.
+
+    Parameters
+    ----------
+    obj : Any
+        The object to convert. Common cases:
+        - Mapping (e.g., {"subs_pred": t1, "gwl_pred": t2})
+        - list/tuple (e.g., [t1, t2])
+        - tensor-like scalar/single output (e.g., t1)
+        - nested single-key mapping wrapper
+          (e.g., {"data_final": {"subs_pred": t1, "gwl_pred": t2}})
+
+    names : sequence of str, optional
+        Expected output names (ordering source). Typically `self.output_names`.
+        If provided and `obj` is a mapping, values are extracted in this order.
+
+    ctx : str, default="value"
+        Context label used in error messages ("targets" / "y_pred", etc.).
+
+    strict : bool, default=True
+        If True, enforce:
+        - all `names` keys exist when `obj` is a mapping
+        - sequence length matches `len(names)` when `obj` is list/tuple
+        - multi-output requires structured input (not a single tensor-like)
+        If False, best-effort conversion is attempted and missing keys are
+        filled with `missing_value` (only for mapping + names).
+
+    allow_unwrap_singleton : bool, default=True
+        If True, unwrap nested single-key mapping layers when the key is not
+        in `names` (e.g., {"data_final": ...}) up to `max_unwrap_depth`.
+
+    max_unwrap_depth : int, default=4
+        Maximum unwrap depth when `allow_unwrap_singleton=True`.
+
+    missing_value : Any, default=None
+        Value used when `strict=False` and a key in `names` is missing.
+
+    Returns
+    -------
+    tuple
+        Tuple of outputs ordered to match `names` (if provided), otherwise
+        preserves list/tuple order or mapping insertion order.
+
+    Raises
+    ------
+    KeyError
+        If `obj` is a mapping, `names` is provided, and a required key is
+        missing (strict=True).
+
+    ValueError
+        If `obj` is a list/tuple and its length doesn't match `len(names)`
+        (strict=True).
+
+    TypeError
+        If `obj` is tensor-like (non-iterable, non-mapping) but multiple
+        outputs are expected (len(names) > 1) and strict=True.
+    """
+    # Normalize names early (avoid weird generators / None).
+    if names is not None:
+        names = tuple(str(n) for n in names)
+
+    # ------------------------------------------------------------
+    # 0) Optional unwrap: {"data_final": {...}} -> {...}
+    # ------------------------------------------------------------
+    if allow_unwrap_singleton:
+        depth = 0
+        cur = obj
+        while (
+            depth < int(max_unwrap_depth)
+            and isinstance(cur, Mapping)
+            and len(cur) == 1
+        ):
+            (k,) = cur.keys()
+            # Unwrap if this singleton key is clearly a wrapper (not an output).
+            if names is not None and str(k) in names:
+                break
+            cur = next(iter(cur.values()))
+            depth += 1
+        obj = cur
+
+    # ------------------------------------------------------------
+    # 1) Mapping case: extract by names (preferred for multi-output)
+    # ------------------------------------------------------------
+    if isinstance(obj, Mapping):
+        if names is None:
+            # Fall back to insertion order (Py3.7+ preserves insertion order).
+            return tuple(obj[k] for k in obj.keys())
+
+        missing = [n for n in names if n not in obj]
+        if missing and strict:
+            available = ", ".join(map(str, obj.keys()))
+            need = ", ".join(map(str, missing))
+            raise KeyError(
+                f"{ctx} is a mapping but missing required key(s): {need}. "
+                f"Available keys: {available}."
+            )
+
+        # If not strict, fill missing keys with missing_value.
+        return tuple(obj.get(n, missing_value) for n in names)
+
+    # ------------------------------------------------------------
+    # 2) Sequence case: validate length against names if provided
+    # ------------------------------------------------------------
+    if isinstance(obj, (tuple, list)):
+        tup = tuple(obj)
+        if names is not None and strict and len(tup) != len(names):
+            raise ValueError(
+                f"{ctx} has length {len(tup)} but expected {len(names)} "
+                f"to match output_names={list(names)}."
+            )
+        return tup
+
+    # ------------------------------------------------------------
+    # 3) Single (tensor-like / scalar) case
+    # ------------------------------------------------------------
+    if names is not None and len(names) > 1:
+        if strict:
+            raise TypeError(
+                f"{ctx} is not a mapping/sequence but multiple outputs are "
+                f"expected (len(output_names)={len(names)}). "
+                f"Provide a dict keyed by {list(names)} or a tuple/list of "
+                f"that length."
+            )
+        # Best-effort: replicate into a 1-tuple (caller may handle).
+        return (obj,)
+
+    return (obj,)
+

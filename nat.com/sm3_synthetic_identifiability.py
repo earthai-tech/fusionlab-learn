@@ -1,0 +1,2160 @@
+# -*- coding: utf-8 -*-
+# License: BSD-3-Clause
+# Author: LKouadio <etanoyau@gmail.com>
+
+"""SM3 synthetic identifiability (GeoPrior v3.2).
+
+Example:
+  python nat/com/sm3_synth_identifiability_v32.py \
+    --outdir results/sm3_synth \
+    --n-realizations 30 \
+    --n-years 20 \
+    --time-steps 5 \
+    --epochs 50 \
+    --noise-std 0.02 \
+    --load-type step \
+    --seed 123
+    
+What to run
+
+No profile at all (your current behavior):
+
+python sm3_synth_identifiability_v32.py \
+  --outdir results/sm3_synth \
+  --n-realizations 10 \
+  --ident-regime none
+
+
+Use model 'base' profile (conservative defaults):
+
+python sm3_synth_identifiability_v32.py \
+  --outdir results/sm3_synth \
+  --n-realizations 10 \
+  --ident-regime base
+
+Try a strong anchoring profile:
+
+python sm3_synth_identifiability_v32.py \
+  --outdir results/sm3_synth \
+  --n-realizations 10 \
+  --ident-regime anchored
+  
+$ python nat.com/sm3_synthetic_identifiability.py --n-realizations 10 --outdir results/sm3_synth_1d --identify both --nx 21 --Lx-m 5000 --K-spread-dex 0.6 --n-years 25 --time-steps 5 --forecast-horizon 3 --val-tail 5 --epochs 80 --ident-regime none
+
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+from dataclasses import dataclass
+from typing import Any, Dict, List, Tuple
+
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+
+from fusionlab.nn.losses import make_weighted_pinball
+from fusionlab.nn.pinn.geoprior.payloads import (
+    identifiability_diagnostics_from_payload,
+    load_physics_payload,
+    summarise_effective_params,
+)
+from fusionlab.nn.pinn.models import GeoPriorSubsNet
+from fusionlab.params import (
+    FixedGammaW,
+    FixedHRef,
+    LearnableKappa,
+    LearnableMV,
+)
+
+from fusionlab.nn.keras_metrics import (
+    Coverage80,
+    MAEQ50,
+    MSEQ50,
+    Sharpness80,
+)
+from fusionlab.nn._shapes import _as_BHQO
+from fusionlab.nn.callbacks import ( 
+    FrozenValQuantileMonitor, 
+    FrozenValQuantileLogger 
+)
+from fusionlab.nn.pinn.geoprior.identifiability import (
+    derive_K_from_tau_np, ident_audit_dict,
+)
+from fusionlab.utils.scale_metrics import resolve_noise_std
+
+SEC_PER_YEAR = 365.25 * 24.0 * 3600.0
+
+
+@dataclass(frozen=True)
+class LithoPrior:
+    name: str
+    K_prior: float
+    Ss_prior: float
+    Hmin: float
+    Hmax: float
+
+
+def litho_priors() -> List[LithoPrior]:
+    return [
+        LithoPrior(
+            "Fine",
+            K_prior=1e-8,
+            Ss_prior=5e-5,
+            Hmin=5.0,
+            Hmax=40.0,
+        ),
+        LithoPrior(
+            "Mixed",
+            K_prior=3e-7,
+            Ss_prior=2e-5,
+            Hmin=5.0,
+            Hmax=50.0,
+        ),
+        LithoPrior(
+            "Coarse",
+            K_prior=2e-6,
+            Ss_prior=8e-6,
+            Hmin=5.0,
+            Hmax=60.0,
+        ),
+        LithoPrior(
+            "Rock",
+            K_prior=1e-7,
+            Ss_prior=2e-6,
+            Hmin=3.0,
+            Hmax=30.0,
+        ),
+    ]
+
+
+def one_hot(i: int, n: int) -> np.ndarray:
+    v = np.zeros((n,), dtype=np.float32)
+    v[i] = 1.0
+    return v
+
+
+def build_load(
+    years: np.ndarray,
+    kind: str,
+    step_year: int,
+    amplitude: float,
+    ramp_years: int,
+) -> np.ndarray:
+    dh = np.zeros_like(years, dtype=float)
+
+    if kind == "step":
+        dh[step_year:] = amplitude
+        return dh
+
+    if kind != "ramp":
+        raise ValueError(
+            f"Unknown load type: {kind!r}"
+        )
+
+    for i in range(len(years)):
+        if i < step_year:
+            dh[i] = 0.0
+            continue
+
+        if i < step_year + ramp_years:
+            denom = max(1, ramp_years)
+            frac = (i - step_year + 1) / denom
+            dh[i] = amplitude * frac
+            continue
+
+        dh[i] = amplitude
+
+    return dh
+
+def apply_ident_scenario_to_payload(
+    payload: Dict[str, np.ndarray],
+    *,
+    scenario: str,
+    Ss_prior: float,
+    Hd_prior: float,
+    kappa_b: float,
+) -> Dict[str, np.ndarray]:
+    sc = str(scenario).strip().lower()
+
+    if sc in ("base", "none", ""):
+        return payload
+
+    ok = sc in ("tau_only_derive_k", "tau_only")
+    if not ok:
+        raise ValueError(
+            f"Unknown scenario: {scenario!r}"
+        )
+
+    out = dict(payload)
+
+    tau = np.asarray(out.get("tau"), dtype=float)
+    Ss0 = np.asarray(out.get("Ss"), dtype=float)
+    Hd0 = np.asarray(out.get("Hd"), dtype=float)
+
+    Ss = np.full_like(Ss0, float(Ss_prior))
+    Hd = np.full_like(Hd0, float(Hd_prior))
+
+    K = derive_K_from_tau_np(
+        tau_sec=tau,
+        Ss=Ss,
+        Hd=Hd,
+        kappa_b=float(kappa_b),
+    )
+
+    out["Ss"] = Ss
+    out["Hd"] = Hd
+    out["K"] = K
+
+    return out
+
+def settlement_from_tau(
+    years: np.ndarray,
+    dh: np.ndarray,
+    tau_years: float,
+    alpha: float,
+) -> np.ndarray:
+    """Simple settlement response with timescale tau."""
+    tau = max(float(tau_years), 1e-6)
+
+    # p is "pressure" proxy: drawdown is -dh.
+    p = -np.asarray(dh, dtype=float)
+
+    dp = np.zeros_like(p)
+    dp[0] = p[0]
+    dp[1:] = p[1:] - p[:-1]
+
+    s = np.zeros_like(p)
+    for t in range(len(years)):
+        acc = 0.0
+        for k in range(t + 1):
+            dt = float(years[t] - years[k])
+            if dt < 0.0:
+                continue
+            U = 1.0 - math.exp(-dt / tau)
+            acc += dp[k] * U
+        s[t] = alpha * acc
+    return s
+
+def solve_head_1d_fd(
+    years: np.ndarray,
+    h_left: np.ndarray,
+    *,
+    Lx_m: float,
+    nx: int,
+    K_mps: float,
+    Ss: float,
+    h_right: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Solve Ss dh/dt = K d2h/dx2 on [0,Lx] with Dirichlet BCs:
+      h(0,t)=h_left[t],  h(Lx,t)=h_right
+
+    Returns
+    -------
+    x_m : (nx,)
+    h   : (nx, nT)
+    """
+    years = np.asarray(years, float)
+    h_left = np.asarray(h_left, float)
+
+    nT = int(years.size)
+    nx = int(nx)
+
+    if nx < 3:
+        raise ValueError("nx must be >= 3.")
+
+    x_m = np.linspace(0.0, float(Lx_m), nx)
+    dx = float(x_m[1] - x_m[0])
+
+    if nT < 2:
+        raise ValueError("Need at least 2 time points.")
+
+    dt_year = float(years[1] - years[0])
+    dt = dt_year * float(SEC_PER_YEAR)
+
+    Ss = max(float(Ss), 1e-12)
+    K = max(float(K_mps), 1e-20)
+
+    # Stability coeff r = (K/Ss) dt / dx^2
+    r = (K / Ss) * dt / (dx * dx)
+
+    # Auto substeps to keep r_sub <= 0.45
+    n_sub = int(np.ceil(r / 0.45)) if r > 0.45 else 1
+    dt_sub = dt / float(n_sub)
+    r_sub = (K / Ss) * dt_sub / (dx * dx)
+
+    h = np.zeros((nx, nT), dtype=float)
+
+    # init: linear between BCs at t=0
+    for i in range(nx):
+        f = float(i) / float(nx - 1)
+        h[i, 0] = (1.0 - f) * h_left[0] + f * float(h_right)
+
+    for t in range(1, nT):
+        ht = h[:, t - 1].copy()
+
+        for _ in range(n_sub):
+            ht[0] = float(h_left[t])
+            ht[-1] = float(h_right)
+
+            hn = ht.copy()
+            hn[1:-1] = (
+                ht[1:-1]
+                + r_sub
+                * (ht[2:] - 2.0 * ht[1:-1] + ht[:-2])
+            )
+            ht = hn
+
+        ht[0] = float(h_left[t])
+        ht[-1] = float(h_right)
+        h[:, t] = ht
+
+    return x_m, h
+
+def make_windows_1d_domain(
+    *,
+    years: np.ndarray,
+    head_xt: np.ndarray,   # (nx,nT) head (m, up+)
+    subs_xt: np.ndarray,   # (nx,nT) cumulative subs (m)
+    x_m: np.ndarray,       # (nx,)
+    Lx_m: float,
+    static_vec: np.ndarray,
+    time_steps: int,
+    forecast_horizon: int,
+    H_field_value: float,
+    z_surf_static_index: int,
+) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], float, int]:
+    years = np.asarray(years, float)
+    head_xt = np.asarray(head_xt, float)
+    subs_xt = np.asarray(subs_xt, float)
+    x_m = np.asarray(x_m, float)
+
+    nx, nT = head_xt.shape
+    if subs_xt.shape != (nx, nT):
+        raise ValueError("subs_xt shape mismatch.")
+
+    T = int(time_steps)
+    H = int(forecast_horizon)
+
+    B = int(nT - T - H + 1)
+    if B <= 0:
+        raise ValueError("Not enough samples for horizon.")
+
+    # depth_bgs (down+), z_surf=0 -> depth = -head
+    depth_xt = (-head_xt).astype(np.float32)
+    subs_xt = subs_xt.astype(np.float32)
+
+    t0 = float(years[0])
+    t_rng = float(years[-1] - t0)
+    t_rng = max(t_rng, 1.0)
+
+    st = np.asarray(static_vec, np.float32)
+    z_surf = float(st[int(z_surf_static_index)])
+
+    x_norm = (x_m / max(float(Lx_m), 1e-12)).astype(np.float32)
+
+    N = int(B * nx)
+
+    X: dict[str, np.ndarray] = {}
+    X["static_features"] = np.repeat(st[None, :], N, axis=0)
+    X["dynamic_features"] = np.zeros((N, T, 2), np.float32)
+    X["future_features"] = np.zeros((N, H, 1), np.float32)
+    X["coords"] = np.zeros((N, H, 3), np.float32)
+    X["H_field"] = np.full((N, H, 1), float(H_field_value), np.float32)
+
+    y = {
+        "subs_pred": np.zeros((N, H, 1), np.float32),
+        "gwl_pred": np.zeros((N, H, 1), np.float32),
+    }
+
+    # time-major packing:
+    # sample index = i*nx + p  (i window, p pixel)
+    for i in range(B):
+        j = i + T
+
+        for p in range(nx):
+            sidx = i * nx + p
+
+            X["dynamic_features"][sidx, :, 0] = depth_xt[p, i:j]
+            X["dynamic_features"][sidx, :, 1] = subs_xt[p, i:j]
+
+            for h in range(H):
+                k = j + h
+
+                y["subs_pred"][sidx, h, 0] = subs_xt[p, k]
+
+                # head target (up+): z_surf - depth
+                y["gwl_pred"][sidx, h, 0] = z_surf - depth_xt[p, k]
+
+                # future-known: depth at target time
+                X["future_features"][sidx, h, 0] = depth_xt[p, k]
+
+                X["coords"][sidx, h, 0] = (years[k] - t0) / t_rng
+                X["coords"][sidx, h, 1] = x_norm[p]
+                X["coords"][sidx, h, 2] = 0.0
+
+    return X, y, t_rng, nx
+
+def make_windows(
+    years: np.ndarray,
+    dh: np.ndarray,
+    s_cum: np.ndarray,
+    static_vec: np.ndarray,
+    time_steps: int,
+    forecast_horizon: int,
+    H_field_value: float,
+    *,
+    z_surf_static_index: int,
+) -> tuple[
+    dict[str, np.ndarray],
+    dict[str, np.ndarray],
+    float,
+]:
+    years = np.asarray(years, float)
+    dh = np.asarray(dh, float)
+    s_cum = np.asarray(s_cum, float)
+
+    T = int(time_steps)
+    H = int(forecast_horizon)
+
+    B = int(len(years) - T - H + 1)
+    if B <= 0:
+        raise ValueError("Not enough samples for horizon.")
+
+    depth = (-dh).astype(np.float32)   # down+
+    subs = s_cum.astype(np.float32)    # cum subs
+
+    t0 = float(years[0])
+    t_rng = float(years[-1] - t0)
+    t_rng = max(t_rng, 1.0)
+
+    st = np.asarray(static_vec, np.float32)
+    z_surf = float(st[int(z_surf_static_index)])
+
+    X: dict[str, np.ndarray] = {}
+
+    X["static_features"] = np.repeat(
+        st[None, :], B, axis=0
+    ).astype(np.float32)
+
+    X["dynamic_features"] = np.zeros(
+        (B, T, 2), np.float32
+    )
+    X["future_features"] = np.zeros(
+        (B, H, 1), np.float32
+    )
+    X["coords"] = np.zeros(
+        (B, H, 3), np.float32
+    )
+    X["H_field"] = np.full(
+        (B, H, 1),
+        float(H_field_value),
+        np.float32,
+    )
+
+    y = {
+        "subs_pred": np.zeros((B, H, 1), np.float32),
+        "gwl_pred": np.zeros((B, H, 1), np.float32),
+    }
+
+    for i in range(B):
+        j = i + T
+
+        # history window [i, j)
+        X["dynamic_features"][i, :, 0] = depth[i:j]
+        X["dynamic_features"][i, :, 1] = subs[i:j]
+
+        # future targets at [j, j+H)
+        for h in range(H):
+            k = j + h
+
+            y["subs_pred"][i, h, 0] = subs[k]
+            y["gwl_pred"][i, h, 0] = z_surf - depth[k]
+
+            # future-known: depth at target time
+            X["future_features"][i, h, 0] = depth[k]
+
+            # coords per horizon step
+            X["coords"][i, h, 0] = (years[k] - t0) / t_rng
+            X["coords"][i, h, 1] = 0.0
+            X["coords"][i, h, 2] = 0.0
+
+    return X, y, t_rng
+
+def make_one_step_windows(
+    years: np.ndarray,
+    dh: np.ndarray,
+    s_cum: np.ndarray,
+    static_vec: np.ndarray,
+    time_steps: int,
+    H_field_value: float,
+    *,
+    z_surf_static_index: int,
+) -> tuple[
+    dict[str, np.ndarray],
+    dict[str, np.ndarray],
+    float,
+]:
+    """
+    Build sliding windows for 1-step horizon.
+
+    Physics expects SI-consistent tensors:
+
+    Dynamic channels
+    ----------------
+    - dynamic[...,0] = depth_bgs_m  (meters, down+)
+    - dynamic[...,1] = subs_cum_m   (meters)
+
+    Targets
+    -------
+    - y["subs_pred"] = s_cum at j
+    - y["gwl_pred"]  = head at j = z_surf - depth
+
+    Coords
+    ------
+    - coords[...,0] = normalized time in [0,1]
+    - coords[...,1] = x (0)
+    - coords[...,2] = y (0)
+    """
+    years = np.asarray(years, dtype=float)
+    dh = np.asarray(dh, dtype=float)
+    s_cum = np.asarray(s_cum, dtype=float)
+
+    T = int(time_steps)
+    H = 1
+    B = int(len(years) - T)
+
+    if B <= 0:
+        raise ValueError(
+            "Not enough samples for time_steps."
+        )
+
+    # Depth below ground surface, positive downward.
+    # Here dh is drawdown proxy (often negative),
+    # so depth = -dh makes depth positive.
+    depth = (-dh).astype(np.float32)
+    subs = s_cum.astype(np.float32)
+
+    t0 = float(years[0])
+    t_rng = float(years[-1] - t0)
+    t_rng = max(t_rng, 1.0)
+
+    X: dict[str, np.ndarray] = {}
+
+    # Static: repeated per window.
+    st = np.asarray(static_vec, np.float32)
+    X["static_features"] = np.repeat(
+        st[None, :],
+        B,
+        axis=0,
+    ).astype(np.float32)
+
+    # Dynamic: (B,T,2) depth + subs history.
+    X["dynamic_features"] = np.zeros(
+        (B, T, 2),
+        np.float32,
+    )
+
+    # Future: placeholder feature (kept for API).
+    X["future_features"] = np.zeros(
+        (B, H, 1),
+        np.float32,
+    )
+
+    # Coords: (B,H,3) => (t,x,y) normalized.
+    X["coords"] = np.zeros(
+        (B, H, 3),
+        np.float32,
+    )
+
+    # H_field: (B,H,1) constant effective thickness.
+    X["H_field"] = np.full(
+        (B, H, 1),
+        float(H_field_value),
+        np.float32,
+    )
+
+    y = {
+        "subs_pred": np.zeros((B, H, 1), np.float32),
+        "gwl_pred": np.zeros((B, H, 1), np.float32),
+    }
+
+    z_surf = float(st[int(z_surf_static_index)])
+
+    for i in range(B):
+        j = i + T
+
+        # History window.
+        X["dynamic_features"][i, :, 0] = depth[i:j]
+        X["dynamic_features"][i, :, 1] = subs[i:j]
+
+        # 1-step targets at time j.
+        y["subs_pred"][i, 0, 0] = subs[j]
+        y["gwl_pred"][i, 0, 0] = z_surf - depth[j]
+
+        # Normalized time coordinate.
+        X["coords"][i, 0, 0] = (years[j] - t0) / t_rng
+        X["coords"][i, 0, 1] = 0.0
+        X["coords"][i, 0, 2] = 0.0
+
+    return X, y, t_rng
+
+
+def tf_dataset(
+    X: Dict[str, np.ndarray],
+    y: Dict[str, np.ndarray],
+    *,
+    batch: int,
+    shuffle: bool,
+    seed: int,
+) -> tf.data.Dataset:
+    xb = {k: tf.convert_to_tensor(v) for k, v in X.items()}
+    yb = {k: tf.convert_to_tensor(v) for k, v in y.items()}
+
+    ds = tf.data.Dataset.from_tensor_slices((xb, yb))
+    if shuffle:
+        n = len(next(iter(X.values())))
+        ds = ds.shuffle(
+            buffer_size=n,
+            seed=int(seed),
+            reshuffle_each_iteration=True,
+        )
+    ds = ds.batch(int(batch))
+    return ds.prefetch(tf.data.AUTOTUNE)
+
+
+def split_tail(
+    X: Dict[str, np.ndarray],
+    y: Dict[str, np.ndarray],
+    val_tail: int,
+) -> Tuple[
+    Dict[str, np.ndarray],
+    Dict[str, np.ndarray],
+    Dict[str, np.ndarray],
+    Dict[str, np.ndarray],
+]:
+    B = len(next(iter(X.values())))
+    if not (0 < val_tail < B):
+        raise ValueError(
+            "val_tail must be in (0, B)."
+        )
+
+    cut = B - int(val_tail)
+
+    Xtr = {k: v[:cut] for k, v in X.items()}
+    ytr = {k: v[:cut] for k, v in y.items()}
+    Xva = {k: v[cut:] for k, v in X.items()}
+    yva = {k: v[cut:] for k, v in y.items()}
+
+    return Xtr, ytr, Xva, yva
+
+
+def _rms(x: np.ndarray) -> float:
+    a = np.asarray(x, dtype=float)
+    return float(np.sqrt(np.mean(a * a)))
+
+
+def _infer_payload_time_units(meta: Dict[str, Any]) -> str:
+    units = meta.get("units") or {}
+    tau_u = str(units.get("tau", "")).strip().lower()
+
+    if tau_u in {"s", "sec", "second", "seconds"}:
+        return "sec"
+
+    if tau_u in {"y", "yr", "year", "years"}:
+        return "year"
+
+    pu = str(meta.get("payload_time_units", ""))
+    pu = pu.strip().lower()
+
+    if pu.startswith("y"):
+        return "year"
+
+    if pu.startswith("s"):
+        return "sec"
+
+    return "sec"
+
+def convert_payload_time_units(
+    payload: Dict[str, np.ndarray],
+    *,
+    from_units: str,
+    to_units: str,
+    sec_per_year: float = SEC_PER_YEAR,
+) -> Dict[str, np.ndarray]:
+    fu = str(from_units).strip().lower()
+    tu = str(to_units).strip().lower()
+
+    fu = "sec" if fu.startswith("s") else "year"
+    tu = "sec" if tu.startswith("s") else "year"
+
+    out = dict(payload)
+    if fu == tu:
+        return out
+
+    spy = float(sec_per_year)
+
+    def _as(a):
+        return np.asarray(a, dtype=float)
+
+    if fu == "sec" and tu == "year":
+        for k in ("tau", "tau_prior", "tau_closure"):
+            if k in out:
+                out[k] = _as(out[k]) / spy
+        if "K" in out:
+            out["K"] = _as(out["K"]) * spy
+        if "cons_res_vals" in out:
+            out["cons_res_vals"] = (
+                _as(out["cons_res_vals"]) * spy
+            )
+
+    if fu == "year" and tu == "sec":
+        for k in ("tau", "tau_prior", "tau_closure"):
+            if k in out:
+                out[k] = _as(out[k]) * spy
+        if "K" in out:
+            out["K"] = _as(out["K"]) / spy
+        if "cons_res_vals" in out:
+            out["cons_res_vals"] = (
+                _as(out["cons_res_vals"]) / spy
+            )
+
+    return out
+
+def split_tail_timeblocks(
+    X: Dict[str, np.ndarray],
+    y: Dict[str, np.ndarray],
+    *,
+    val_tail: int,
+    nx: int,
+) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray],
+           Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+    N = int(len(next(iter(X.values()))))
+    nx = int(nx)
+
+    tail = int(val_tail) * nx
+    if not (0 < tail < N):
+        raise ValueError("val_tail*nx must be in (0, N).")
+
+    cut = N - tail
+    Xtr = {k: v[:cut] for k, v in X.items()}
+    ytr = {k: v[:cut] for k, v in y.items()}
+    Xva = {k: v[cut:] for k, v in X.items()}
+    yva = {k: v[cut:] for k, v in y.items()}
+    return Xtr, ytr, Xva, yva
+
+def _make_scaling_kwargs(
+    *,
+    t_range: float,
+    z_surf_static_index: int,
+    Lx_m: float = 1.0,
+    K_min: float = 1e-15,
+    K_max: float = 3e-10,
+    Ss_min: float = 1e-7,
+    Ss_max: float = 3e-4,
+    H_min: float = 3.0,
+    H_max: float = 80.0,
+    tau_min_year: float = 0.3,
+    tau_max_year: float = 10.0,
+    allow_subs_residual: bool = True,
+    subs_resid_policy: str = "always_on",
+    # -------------------------
+    # Bounds policy (key fix for identifiability)
+    # -------------------------
+    bounds_mode: str = "soft",
+    bounds_loss_kind: str = "both",
+    bounds_beta: float = 20.0,
+    bounds_guard: float = 5.0,
+    bounds_w: float = 1.0,
+    bounds_include_tau: bool = True,
+    bounds_tau_w: float = 1.0,
+) -> dict[str, Any]:
+    """
+    Scaling config for synthetic identifiability (SM3).
+
+    Contract used by the physics core
+    --------------------------------
+    - dynamic history is SI meters:
+        * depth_bgs_m (down+)
+        * subsidence_cum_m (cumulative, meters)
+    - targets are SI meters:
+        * subs_pred: cumulative subsidence (m)
+        * gwl_pred : head (up+), derived as z_surf - depth
+    - coords are normalized in [0, 1]
+      (physics derivatives are re-scaled via coord_ranges).
+
+    Why these bounds settings help identifiability
+    ---------------------------------------------
+    The identifiability ridge (e.g., K ~ Ss*Hd^2/tau) makes it easy for
+    the optimizer to drift into extreme (K,Ss,tau) values that still fit
+    data, especially when gradients are weak.
+
+    We therefore prefer:
+    - bounds_mode="soft": differentiable barrier gradients near/outside
+      bounds (better conditioning than hard projection / clipping).
+    - bounds_guard: prevents overflow when mapping raw logs to fields,
+      while still letting *raw log* violations be penalized.
+    - bounds_loss_kind="both": lets you log/debug residual vs barrier
+      separately, while training uses their sum (or chosen policy).
+    """
+    spy = float(SEC_PER_YEAR)
+
+    # --- Convert tau bounds to seconds (internal SI convention).
+    tau_min_sec = float(tau_min_year) * spy
+    tau_max_sec = float(tau_max_year) * spy
+
+    # --- Natural-log bounds (must match tf.math.log convention).
+    # We include both linear and log keys so either accessor style works.
+    logK_min = float(np.log(max(float(K_min), 1e-30)))
+    logK_max = float(np.log(max(float(K_max), 1e-30)))
+    logSs_min = float(np.log(max(float(Ss_min), 1e-30)))
+    logSs_max = float(np.log(max(float(Ss_max), 1e-30)))
+    logTau_min = float(np.log(max(float(tau_min_sec), 1e-30)))
+    logTau_max = float(np.log(max(float(tau_max_sec), 1e-30)))
+
+    # --- Bounds payload used by:
+    #   - compute_bounds_residual()  (residual maps)
+    #   - compose_physics_fields()   (barrier term, guarded mapping)
+    bounds = dict(
+        # Linear bounds (preferred source-of-truth).
+        K_min=float(K_min),
+        K_max=float(K_max),
+        Ss_min=float(Ss_min),
+        Ss_max=float(Ss_max),
+        tau_min=float(tau_min_sec),
+        tau_max=float(tau_max_sec),
+        H_min=float(H_min),
+        H_max=float(H_max),
+        # Log bounds (natural log).
+        logK_min=logK_min,
+        logK_max=logK_max,
+        logSs_min=logSs_min,
+        logSs_max=logSs_max,
+        logTau_min=logTau_min,
+        logTau_max=logTau_max,
+    )
+
+    sk: dict[str, Any] = dict(
+        # -------------------------
+        # Unit scaling: already SI meters.
+        # -------------------------
+        subs_scale_si=1.0,
+        subs_bias_si=0.0,
+        head_scale_si=1.0,
+        head_bias_si=0.0,
+        # -------------------------
+        # Time unit metadata.
+        # Stage-1/identifiability uses years; physics needs seconds.
+        # -------------------------
+        time_units="year",
+        seconds_per_time_unit=spy,
+        # -------------------------
+        # Coordinates are normalized in windows.
+        # coord_ranges are the *physical* spans used to rescale grads.
+        # -------------------------
+        coords_normalized=True,
+        coord_order=["t", "x", "y"],
+        coord_ranges=dict(
+            t=float(t_range),
+            x=float(Lx_m),
+            y=1.0,
+        ),
+        coords_in_degrees=False,
+        # -------------------------
+        # Dynamic layout (depth + subs history).
+        # -------------------------
+        gwl_dyn_index=0,
+        subs_dyn_index=1,
+        dynamic_feature_names=[
+            "GWL_depth_bgs_m",
+            "subsidence_cum_m",
+        ],
+        future_feature_names=[
+            "GWL_depth_future_bgs_m",
+        ],
+        static_feature_names=None,
+        # -------------------------
+        # Groundwater convention:
+        # dynamic provides depth_bgs (down+).
+        # targets/physics use head (up+).
+        # -------------------------
+        gwl_col="GWL_depth_bgs_m",
+        gwl_kind="depth_bgs",
+        gwl_sign="down_positive",
+        gwl_target_kind="head",
+        gwl_target_sign="up_positive",
+        # z_surf is carried in static vec; windows already build head.
+        z_surf_static_index=int(z_surf_static_index),
+        use_head_proxy=False,
+        # -------------------------
+        # Consolidation residual policy:
+        # allow a data residual around the physics mean if desired.
+        # -------------------------
+        allow_subs_residual=bool(allow_subs_residual),
+        subs_resid_policy=str(subs_resid_policy),
+        # -------------------------
+        # Bounds policy (THIS is the key change).
+        # -------------------------
+        bounds=bounds,
+        bounds_mode=str(bounds_mode).strip().lower(),
+        # How physics core combines: barrier vs residual vs both.
+        # Read in physics core via get_sk(..., "bounds_loss_kind", ...).
+        bounds_loss_kind=str(bounds_loss_kind).strip().lower(),
+        # Barrier sharpness (soft mode).
+        bounds_beta=float(bounds_beta),
+        # Numeric guard band for log->field mapping.
+        bounds_guard=float(bounds_guard),
+        # Relative weights inside bounds barrier term.
+        bounds_w=float(bounds_w),
+        bounds_include_tau=bool(bounds_include_tau),
+        bounds_tau_w=float(bounds_tau_w),
+    )
+        
+    return sk
+
+def make_pinball_with_crossing(
+    quantiles: list[float],
+    weights: dict[float, float],
+    *,
+    lambda_cross: float = 5.0,
+):
+    base = make_weighted_pinball(quantiles, weights)
+
+    def loss(y_true, y_pred):
+        l = base(y_true, y_pred)
+
+        # penalty: enforce q10 <= q50 <= q90
+        q = _as_BHQO(y_pred, n_q=len(quantiles))  # (B,H,Q,O)
+        q10 = q[:, :, 0, 0]
+        q50 = q[:, :, 1, 0]
+        q90 = q[:, :, 2, 0]
+
+        p = tf.nn.relu(q10 - q50) + tf.nn.relu(q50 - q90)
+        return l + float(lambda_cross) * tf.reduce_mean(p)
+
+    return loss
+
+def _as_ident_regime(s: str) -> str | None:
+    v = str(s).strip().lower()
+    if v in ("none", "off", ""):
+        return None
+    return v
+
+def train_one_pixel(
+    Xtr: Dict[str, np.ndarray],
+    ytr: Dict[str, np.ndarray],
+    Xva: Dict[str, np.ndarray],
+    yva: Dict[str, np.ndarray],
+    *,
+    outdir: str,
+    seed: int,
+    epochs: int,
+    batch: int,
+    lr: float,
+    kappa_b: float,
+    gamma_w: float,
+    hd_factor: float,
+    t_range_years: float,
+    forecast_horizon: int, 
+    n_lith: int,
+    z_surf_static_index: int, 
+    Lx_m: float =1.0, 
+    ident_regime: str | None,
+    # These bounds should match your synthetic generator.
+    K_min: float = 1e-15,
+    K_max: float = 3e-10,
+    Ss_min: float = 1e-7,
+    Ss_max: float = 3e-4,
+    H_min: float = 3.0,
+    H_max: float = 80.0,
+    tau_min_year: float = 0.3,
+    tau_max_year: float = 10.0,
+    lambda_offset: float = 0,
+    identify: str = "tau",
+) -> Tuple[GeoPriorSubsNet, tf.data.Dataset]:
+
+
+    tf.keras.utils.set_random_seed(int(seed))
+
+    s_dim = int(Xtr["static_features"].shape[-1])
+    d_dim = int(Xtr["dynamic_features"].shape[-1])
+    f_dim = int(Xtr["future_features"].shape[-1])
+
+    sk = _make_scaling_kwargs(
+        t_range=float(t_range_years),
+        z_surf_static_index=int(z_surf_static_index),
+        Lx_m=float(Lx_m),
+        subs_resid_policy="always_on",
+        # keep these consistent with your generator:
+        K_min=K_min,
+        K_max=K_max,
+        Ss_min=Ss_min,
+        Ss_max=Ss_max,
+        H_min=H_min,
+        H_max=H_max,
+        tau_min_year=tau_min_year,
+        tau_max_year=tau_max_year,
+        allow_subs_residual=True,
+    )
+        
+    if ident_regime is not None:
+        for k in (
+            "allow_subs_residual",
+            "subs_resid_policy",
+            "bounds_loss_kind",
+            "bounds_beta",
+            "bounds_guard",
+            "bounds_w",
+            "bounds_include_tau",
+            "bounds_tau_w",
+            "physics_warmup_steps",
+            "physics_ramp_steps",
+            "stop_grad_ref",
+            "drawdown_zero_at_origin",
+        ):
+            if k in sk:
+                sk[k] = None
+
+    H = int(forecast_horizon)
+    
+    mode = str(identify).strip().lower()
+    
+    coords = Xtr["coords"]
+    sx = float(np.nanstd(coords[..., 1]))
+    sy = float(np.nanstd(coords[..., 2]))
+    has_spatial = (sx > 1e-6) or (sy > 1e-6)
+    
+    pde_mode = "consolidation"
+    if mode == "both" and has_spatial:
+        pde_mode = "both"
+
+    model = GeoPriorSubsNet(
+        static_input_dim=s_dim,
+        dynamic_input_dim=d_dim,
+        future_input_dim=f_dim,
+        output_subsidence_dim=1,
+        output_gwl_dim=1,
+        forecast_horizon=H,
+        quantiles=[0.1, 0.5, 0.9],
+        embed_dim=32,
+        hidden_units=64,
+        lstm_units=64,
+        attention_units=32,
+        num_heads=2,
+        dropout_rate=0.10,
+        max_window_size=int(
+            Xtr["dynamic_features"].shape[1]
+        ),
+        attention_levels=["cross"],
+        mv=LearnableMV(initial_value=1e-7),
+        kappa=LearnableKappa(
+            initial_value=float(kappa_b),
+            trainable=False,
+        ),
+        gamma_w=FixedGammaW(value=float(gamma_w)),
+        h_ref=FixedHRef(value=0.0),
+        kappa_mode="kb",
+        use_effective_h=True,
+        hd_factor=float(hd_factor),
+
+        # keep False for "raw eps" clarity.
+        # you can turn True later once you
+        # export cons_res_scaled in payloads.
+        scale_pde_residuals=False,
+
+        pde_mode=pde_mode,
+        offset_mode="log10",
+        identifiability_regime=ident_regime,
+        # and pass lambda_offset=0.0 for multiplier=1
+        scaling_kwargs=sk,
+    )
+    # print("K bounds used:", 10**b["logK_min"], 10**b["logK_max"])
+    # print("tau bounds used:", 10**b["logTau_min"], 10**b["logTau_max"])
+
+
+    ds_tr = tf_dataset(
+        Xtr,
+        ytr,
+        batch=batch,
+        shuffle=True,
+        seed=seed,
+    )
+    ds_va = tf_dataset(
+        Xva,
+        yva,
+        batch=batch,
+        shuffle=False,
+        seed=seed,
+    )
+
+    for xb, _ in ds_tr.take(1):
+        _ = model(xb)
+        
+    def _set_trainable(block, flag: bool) -> None:
+        if block is None:
+            return
+        block.trainable = bool(flag)
+        for l in getattr(block, "layers", []):
+            l.trainable = bool(flag)
+
+    mode = str(identify).strip().lower()
+    
+    if mode == "tau":
+        _set_trainable(model.K_head, False)
+        _set_trainable(model.Ss_head, False)
+        _set_trainable(model.tau_head, True)
+    
+    elif mode == "k":
+        _set_trainable(model.tau_head, False)
+        _set_trainable(model.Ss_head, False)
+        _set_trainable(model.K_head, True)
+    
+    elif mode == "both":
+        _set_trainable(model.K_head, True)
+        _set_trainable(model.Ss_head, True)
+        _set_trainable(model.tau_head, True)
+    
+        if not has_spatial:
+            print(
+                "[warn] identify=both but no spatial "
+                "variation in coords; K cannot be "
+                "identified independently. Using "
+                "consolidation-only constraints."
+            )
+
+    QUANTILES = [0.1, 0.5, 0.9]
+    SUBS_WEIGHTS = {0.1: 3.0, 0.5: 1.0, 0.9: 3.0}
+
+    # loss_dict = {
+    #     "subs_pred": make_weighted_pinball(
+    #         QUANTILES, SUBS_WEIGHTS
+    #     ),
+    #     "gwl_pred": tf.keras.losses.MSE,
+    # }
+    loss_dict = {
+        "subs_pred": make_pinball_with_crossing(
+            QUANTILES,
+            SUBS_WEIGHTS,
+            lambda_cross=10.0,
+        ),
+        "gwl_pred": tf.keras.losses.MSE,
+    }
+
+    # # Metrics (meters).
+    metrics_arg = {
+        "subs_pred": [
+            MAEQ50(name="mae_q50"),
+            MSEQ50(name="mse_q50"),
+            Coverage80(name="coverage80"),
+            Sharpness80(name="sharpness80"),
+        ],
+        "gwl_pred": [
+            MAEQ50(name="mae_q50"),
+            MSEQ50(name="mse_q50"),
+        ],
+    }
+
+    lam_cons = 50.0
+    lam_gw = 0.0
+    lam_prior = 3.0
+    
+    if mode == "tau":
+        lam_prior = 0.0
+        lam_gw = 0.0
+    
+    elif mode == "k":
+        lam_prior = 50.0
+        lam_gw = 0.0
+    
+    elif mode == "both":
+        lam_prior = 5.0
+        lam_gw = 50.0 if has_spatial else 0.0
+    
+    physics_loss_weights = dict(
+        lambda_cons=lam_cons,
+        lambda_gw=lam_gw,
+        lambda_prior=lam_prior,
+        lambda_smooth=0.0,
+        lambda_bounds=10.0,
+        lambda_mv=0.0,
+        mv_lr_mult=1.0,
+        kappa_lr_mult=0.0,
+        lambda_offset=float(lambda_offset),
+        lambda_q=1.0,
+    )
+    
+    if ident_regime is not None:
+        physics_loss_weights = dict(
+            lambda_cons=None,
+            lambda_gw=None,
+            lambda_prior=None,
+            lambda_smooth=None,
+            lambda_bounds=None,
+            lambda_mv=None,
+            lambda_q=None,
+            lambda_offset=float(lambda_offset),
+            mv_lr_mult=1.0,
+            kappa_lr_mult=0.0,
+        )
+
+    loss_weights_dict = {"subs_pred": 1.0, "gwl_pred": 0.2}
+
+    out_names = (
+        list(getattr(model, "output_names", []))
+        or ["subs_pred", "gwl_pred"]
+    )
+
+    import keras
+    IS_KERAS2 = keras.__version__.startswith("2.")
+
+    if IS_KERAS2:
+        loss_arg = [loss_dict[k] for k in out_names]
+        lossw_arg = [
+            loss_weights_dict.get(k, 1.0) for k in out_names
+        ]
+        metrics_compile = [
+            metrics_arg.get(k, []) for k in out_names
+        ]
+    else:
+        loss_arg = loss_dict
+        lossw_arg = loss_weights_dict
+        metrics_compile = metrics_arg
+    
+    tau_vars = []
+    for v in model.trainable_variables:
+        nm = getattr(v, "path", v.name)
+        if "tau" in str(nm).lower():
+            tau_vars.append(str(nm))
+    
+    # print("Trainable tau vars:", tau_vars)
+    
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(
+            learning_rate=float(lr),
+            clipnorm=1.0,
+        ),
+        loss=loss_arg,
+        loss_weights=lossw_arg,
+        metrics=metrics_compile,
+        **physics_loss_weights,
+    )
+
+    os.makedirs(outdir, exist_ok=True)
+    ckpt = os.path.join(outdir, "best.keras")
+
+    cbs= [
+        tf.keras.callbacks.EarlyStopping(
+            "val_loss",
+            patience=10,
+            restore_best_weights=True,
+            verbose=1,
+        ),
+        tf.keras.callbacks.ModelCheckpoint(
+            ckpt,
+            "val_loss",
+            save_best_only=True,
+            verbose=1,
+        ),
+        FrozenValQuantileMonitor(
+            ds_va,
+            outputs=("subs_pred",),
+            quantiles=(0.1, 0.5, 0.9),
+            alpha=0.8,
+            prefix="[sm3-freeze]",
+        ),
+    ]
+    diag_cb = FrozenValQuantileLogger(
+        val_data=ds_va,
+        log_prefix="diag/",
+        also_print=True,
+    )
+
+    model.fit(
+        ds_tr,
+        validation_data=ds_va,
+        epochs=int(epochs),
+        verbose=1,
+        callbacks=cbs + [diag_cb],
+    )
+
+    audit = ident_audit_dict(model)
+    apath = os.path.join(outdir, "ident_audit.json")
+    with open(apath, "w", encoding="utf-8") as f:
+        json.dump(audit, f, indent=2)
+    
+    # -------------------------
+    # Post-fit diagnostic (one fixed val batch)
+    # -------------------------
+    for xb, yb in ds_va.take(1):
+        yp = model(xb, training=False)
+
+        y_true = yb["subs_pred"]  # (B,H,1)
+        y_pred = yp["subs_pred"]  # model-dependent shape
+
+        # Same metrics as training (apples-to-apples)
+        m_cov = Coverage80(name="coverage80")
+        m_mae = MAEQ50(name="mae_q50")
+        m_mse = MSEQ50(name="mse_q50")
+        m_shp = Sharpness80(name="sharpness80")
+
+        for m in (m_cov, m_mae, m_mse, m_shp):
+            m.update_state(y_true, y_pred)
+
+        print("postfit y_true:", y_true.shape)
+        print("postfit y_pred:", y_pred.shape)
+        print("coverage80(metric):", float(m_cov.result().numpy()))
+        print("MAE(q50)(metric):", float(m_mae.result().numpy()))
+        print("MSE(q50)(metric):", float(m_mse.result().numpy()))
+        print("sharpness80(metric):", float(m_shp.result().numpy()))
+
+        # Extra: quantile crossing + raw coverage diagnostics
+        try:
+            q = _as_BHQO(y_pred, n_q=3)  # (B,H,Q,O)
+            q10 = q[:, :, 0, 0]
+            q50 = q[:, :, 1, 0]
+            q90 = q[:, :, 2, 0]
+
+            yt = tf.squeeze(y_true, axis=-1)  # (B,H)
+
+            crossing = tf.reduce_mean(
+                tf.cast(q10 > q90, tf.float32)
+            )
+            cov_raw = tf.reduce_mean(
+                tf.cast((yt >= q10) & (yt <= q90), tf.float32)
+            )
+            lo = tf.minimum(q10, q90)
+            hi = tf.maximum(q10, q90)
+            cov_mm = tf.reduce_mean(
+                tf.cast((yt >= lo) & (yt <= hi), tf.float32)
+            )
+
+            print("crossing_rate(q10>q90):", float(crossing.numpy()))
+            print("coverage80(raw q10/q90):", float(cov_raw.numpy()))
+            print("coverage80(min/max):", float(cov_mm.numpy()))
+            print("MAE(q50) raw:", float(tf.reduce_mean(
+                tf.abs(yt - q50)
+            ).numpy()))
+        except Exception as e:
+            print("[postfit diag] _as_BHQO failed:", repr(e))
+
+        break
+
+    return model, ds_va
+
+
+def flatten_diag(diag: Dict[str, Any]) -> Dict[str, float]:
+    row: Dict[str, float] = {}
+
+    tau_rel = diag.get("tau_rel_error", {})
+    row["tau_rel_q50"] = float(tau_rel.get("q50", np.nan))
+    row["tau_rel_q90"] = float(tau_rel.get("q90", np.nan))
+    row["tau_rel_q95"] = float(tau_rel.get("q95", np.nan))
+
+    clo = diag.get("closure_log_resid", {})
+    row["closure_log_resid_mean"] = float(
+        clo.get("mean", np.nan)
+    )
+    row["closure_log_resid_q95"] = float(
+        clo.get("q95", np.nan)
+    )
+
+    offs = diag.get("offsets", {})
+    for block in ("vs_true", "vs_prior"):
+        blk = offs.get(block, {})
+        for key in ("delta_K", "delta_Ss", "delta_Hd"):
+            d = blk.get(key, {})
+            f1 = f"{block}_{key}_q50"
+            f2 = f"{block}_{key}_q95"
+            row[f1] = float(d.get("q50", np.nan))
+            row[f2] = float(d.get("q95", np.nan))
+
+    return row
+
+def run_one_realisation(
+    *,
+    r: int,
+    args: argparse.Namespace,
+    priors: List[LithoPrior],
+    years: np.ndarray,
+    outdir: str,
+) -> Dict[str, Any]:
+    """
+    Run a single synthetic realisation.
+
+    - Single pixel path: original SM3 generator.
+    - 1D multi-pixel path: only when nx>1 OR
+      identify="both" (K needs spatial signal).
+    """
+    n_lith = len(priors)
+
+    rng = np.random.default_rng(int(args.seed) + int(r))
+    run_dir = os.path.join(outdir, f"real_{r:03d}")
+    os.makedirs(run_dir, exist_ok=True)
+
+    lith_idx = int(rng.integers(0, n_lith))
+    lp = priors[lith_idx]
+
+    H_phys = float(rng.uniform(lp.Hmin, lp.Hmax))
+    H_eff = float(min(H_phys, args.thickness_cap))
+    Hd_prior = float(args.hd_factor * H_eff)
+
+    Ss_prior = float(lp.Ss_prior)
+
+    logtau_p = float(
+        rng.uniform(
+            np.log10(args.tau_min),
+            np.log10(args.tau_max),
+        )
+    )
+    tau_prior_year = float(10.0**logtau_p)
+    tau_prior_sec = tau_prior_year * SEC_PER_YEAR
+
+    numer = (Hd_prior**2) * Ss_prior
+    denom = (np.pi**2) * float(args.kappa_b) * tau_prior_sec
+    K_prior_mps = float(numer / denom)
+
+    mode = str(args.identify).strip().lower()
+
+    dlogSs = float(
+        rng.normal(0.0, float(args.Ss_spread_dex))
+    )
+    if mode in ("tau", "k"):
+        dlogSs = 0.0
+    Ss_true = float(Ss_prior * (10.0 ** dlogSs))
+
+    logtau_t = float(
+        logtau_p
+        + rng.normal(0.0, float(args.tau_spread_dex))
+    )
+    tau_true_year = float(10.0**logtau_t)
+    tau_true_year = float(
+        np.clip(tau_true_year, args.tau_min, args.tau_max)
+    )
+    tau_true_sec = tau_true_year * SEC_PER_YEAR
+
+    Hd_true = float(Hd_prior)
+
+    if mode == "both":
+        K_spread = float(
+            getattr(args, "K_spread_dex", 0.6)
+        )
+        dlogK = float(rng.normal(0.0, K_spread))
+        K_true_mps = float(
+            K_prior_mps * (10.0 ** dlogK)
+        )
+    else:
+        numer_t = (Hd_true**2) * Ss_true
+        denom_t = (
+            (np.pi**2)
+            * float(args.kappa_b)
+            * tau_true_sec
+        )
+        K_true_mps = float(numer_t / denom_t)
+
+    amp = float(rng.uniform(-15.0, -5.0))
+    step_hi = max(3, args.n_years // 3)
+    step_year = int(rng.integers(2, step_hi))
+    ramp_years = max(3, args.n_years // 4)
+
+    unit_scale = float(args.alpha)
+    alpha_eff = unit_scale * Ss_true * H_eff
+
+    is_capped = float(H_phys > args.thickness_cap)
+
+    z_surf = 0.0
+    static_vec = np.concatenate(
+        [
+            one_hot(lith_idx, n_lith),
+            np.array(
+                [H_eff, is_capped, z_surf],
+                np.float32,
+            ),
+        ],
+        axis=0,
+    ).astype(np.float32)
+
+    z_surf_static_index = int(static_vec.size - 1)
+
+    nx = int(getattr(args, "nx", 1))
+    Lx_m = float(getattr(args, "Lx_m", 1.0))
+    h_right = float(getattr(args, "h_right", 0.0))
+
+    # left boundary head signal (up+)
+    h_left_t = build_load(
+        years=years,
+        kind=args.load_type,
+        step_year=step_year,
+        amplitude=amp,
+        ramp_years=ramp_years,
+    )
+
+    noise_std = float("nan")
+    nx_eff = 1
+
+    if (nx > 1) or (mode == "both"):
+        if nx < 3:
+            raise ValueError(
+                "nx must be >=3 for 1D head solver."
+            )
+
+        x_m, head_xt = solve_head_1d_fd(
+            years=years,
+            h_left=h_left_t,
+            Lx_m=Lx_m,
+            nx=nx,
+            K_mps=K_true_mps,
+            Ss=Ss_true,
+            h_right=h_right,
+        )
+
+        subs_xt = np.zeros_like(head_xt, dtype=float)
+        noise_list: list[float] = []
+
+        for p in range(nx):
+            s_cum = settlement_from_tau(
+                years,
+                head_xt[p, :],
+                tau_true_year,
+                alpha=alpha_eff,
+            )
+
+            y_inc = np.zeros_like(s_cum)
+            y_inc[0] = s_cum[0]
+            y_inc[1:] = s_cum[1:] - s_cum[:-1]
+
+            ns = resolve_noise_std(
+                y_inc,
+                noise_std=args.noise_std,
+                noise_frac=getattr(
+                    args, "noise_frac", 0.10
+                ),
+                percentile=95.0,
+                min_std=0.0,
+            )
+            noise_list.append(float(ns))
+
+            y_inc = y_inc + rng.normal(
+                0.0,
+                float(ns),
+                size=y_inc.shape,
+            )
+            subs_xt[p, :] = np.cumsum(y_inc)
+
+        if noise_list:
+            noise_std = float(np.mean(noise_list))
+
+        X, y, t_range_years, nx_eff = make_windows_1d_domain(
+            years=years,
+            head_xt=head_xt,
+            subs_xt=subs_xt,
+            x_m=x_m,
+            Lx_m=Lx_m,
+            static_vec=static_vec,
+            time_steps=args.time_steps,
+            forecast_horizon=args.forecast_horizon,
+            H_field_value=H_eff,
+            z_surf_static_index=z_surf_static_index,
+        )
+
+        Xtr, ytr, Xva, yva = split_tail_timeblocks(
+            X,
+            y,
+            val_tail=int(args.val_tail),
+            nx=int(nx_eff),
+        )
+    else:
+        # -----------------------------
+        # Original single-pixel path
+        # -----------------------------
+        dh = h_left_t
+
+        s_cum = settlement_from_tau(
+            years,
+            dh,
+            tau_true_year,
+            alpha=alpha_eff,
+        )
+
+        y_inc = np.zeros_like(s_cum)
+        y_inc[0] = s_cum[0]
+        y_inc[1:] = s_cum[1:] - s_cum[:-1]
+
+        noise_std = resolve_noise_std(
+            y_inc,
+            noise_std=args.noise_std,
+            noise_frac=getattr(args, "noise_frac", 0.10),
+            percentile=95.0,
+            min_std=0.0,
+        )
+
+        y_inc = y_inc + rng.normal(
+            0.0,
+            float(noise_std),
+            size=y_inc.shape,
+        )
+        s_obs = np.cumsum(y_inc)
+
+        X, y, t_range_years = make_windows(
+            years=years,
+            dh=dh,
+            s_cum=s_obs,
+            static_vec=static_vec,
+            time_steps=args.time_steps,
+            forecast_horizon=args.forecast_horizon,
+            H_field_value=H_eff,
+            z_surf_static_index=z_surf_static_index,
+        )
+
+        Xtr, ytr, Xva, yva = split_tail(
+            X,
+            y,
+            args.val_tail,
+        )
+
+    ident_regime = _as_ident_regime(args.ident_regime)
+    model, ds_va = train_one_pixel(
+        Xtr,
+        ytr,
+        Xva,
+        yva,
+        outdir=run_dir,
+        seed=int(args.seed + r),
+        epochs=args.epochs,
+        batch=args.batch,
+        lr=args.lr,
+        kappa_b=args.kappa_b,
+        gamma_w=args.gamma_w,
+        hd_factor=args.hd_factor,
+        t_range_years=float(t_range_years),
+        forecast_horizon=int(args.forecast_horizon),
+        n_lith=n_lith,
+        z_surf_static_index=z_surf_static_index,
+        lambda_offset=float(args.lambda_offset),
+        identify=str(args.identify),
+        ident_regime=ident_regime,
+    )
+
+    npz_path = os.path.join(run_dir, "phys_payload_val.npz")
+
+    meta = {
+        "synthetic": True,
+        "realisation": int(r),
+        "report_time_units": "year",
+        "sec_per_year": float(SEC_PER_YEAR),
+        "kappa_b": float(args.kappa_b),
+        "tau_true_sec": float(tau_true_sec),
+        "tau_true_year": float(tau_true_year),
+        "K_true_mps": float(K_true_mps),
+        "Ss_true": float(Ss_true),
+        "Hd_true": float(Hd_true),
+        "tau_prior_sec": float(tau_prior_sec),
+        "tau_prior_year": float(tau_prior_year),
+        "K_prior_mps": float(K_prior_mps),
+        "Ss_prior": float(Ss_prior),
+        "Hd_prior": float(Hd_prior),
+        "H_eff": float(H_eff),
+        "H_phys": float(H_phys),
+        "load_type": str(args.load_type),
+        "amp_dh": float(amp),
+        "step_year": int(step_year),
+        "noise_std": float(noise_std),
+        "nx": int(nx_eff),
+        "Lx_m": float(Lx_m),
+        "h_right": float(h_right),
+        "payload_time_units": "sec",
+        "units": {
+            "tau": "s",
+            "K": "m/s",
+            "cons_res_vals": "m/s",
+        },
+    }
+
+    meta["z_surf_m"] = 0.0
+    meta["units"]["head"] = "m"
+    meta["identify"] = str(args.identify)
+    meta["scenario"] = str(args.scenario)
+    meta["ident_regime"] = ident_regime
+    meta["ident_audit_path"] = "ident_audit.json"
+
+    model.export_physics_payload(
+        ds_va,
+        save_path=npz_path,
+        format="npz",
+        overwrite=True,
+        metadata=meta,
+    )
+
+    payload, meta = load_physics_payload(npz_path)
+    
+    payload = apply_ident_scenario_to_payload(
+        payload,
+        scenario=str(args.scenario),
+        Ss_prior=float(meta["Ss_prior"]),
+        Hd_prior=float(meta["Hd_prior"]),
+        kappa_b=float(args.kappa_b),
+    )
+
+    eff = summarise_effective_params(payload)
+
+    tau_est_sec = float(eff["tau"])
+    K_est_mps = float(eff["K"])
+
+    tau_est_year = tau_est_sec / SEC_PER_YEAR
+    K_est_m_per_year = K_est_mps * SEC_PER_YEAR
+
+    eps_cons_raw_mps = _rms(payload["cons_res_vals"])
+    eps_cons_raw_m_per_year = eps_cons_raw_mps * SEC_PER_YEAR
+
+    eps_cons_scaled = float("nan")
+    if "cons_res_scaled" in payload:
+        eps_cons_scaled = _rms(payload["cons_res_scaled"])
+
+    diag = identifiability_diagnostics_from_payload(
+        payload,
+        tau_true=float(meta["tau_true_sec"]),
+        K_true=float(meta["K_true_mps"]),
+        Ss_true=float(meta["Ss_true"]),
+        Hd_true=float(meta["Hd_true"]),
+        K_prior=float(meta["K_prior_mps"]),
+        Ss_prior=float(meta["Ss_prior"]),
+        Hd_prior=float(meta["Hd_prior"]),
+    )
+
+    pm = meta.get("payload_metrics") or {}
+    eps_prior_rms = pm.get("eps_prior_rms", np.nan)
+    r2_logtau = pm.get("r2_logtau", np.nan)
+    clos_rms = pm.get("closure_consistency_rms", np.nan)
+
+    diag_path = os.path.join(
+        run_dir,
+        "sm3_identifiability_diag.json",
+    )
+    with open(diag_path, "w", encoding="utf-8") as f:
+        json.dump(diag, f, indent=2)
+
+    dlog10_tau_med = float(
+        np.log10(max(tau_est_sec, 1e-12))
+        - np.log10(max(meta["tau_true_sec"], 1e-12))
+    )
+
+    row: Dict[str, Any] = {
+        "realisation": int(r),
+        "lith_idx": int(lith_idx),
+        "tau_true_sec": float(meta["tau_true_sec"]),
+        "tau_prior_sec": float(meta["tau_prior_sec"]),
+        "tau_est_med_sec": float(tau_est_sec),
+        "tau_true_year": float(meta["tau_true_year"]),
+        "tau_prior_year": float(meta["tau_prior_year"]),
+        "tau_est_med_year": float(tau_est_year),
+        "K_true_mps": float(meta["K_true_mps"]),
+        "K_prior_mps": float(meta["K_prior_mps"]),
+        "K_est_med_mps": float(K_est_mps),
+        "K_est_med_m_per_year": float(K_est_m_per_year),
+        "Ss_true": float(meta["Ss_true"]),
+        "Ss_prior": float(meta["Ss_prior"]),
+        "Ss_est_med": float(eff["Ss"]),
+        "Hd_true": float(meta["Hd_true"]),
+        "Hd_prior": float(meta["Hd_prior"]),
+        "Hd_est_med": float(eff["Hd"]),
+        "eps_cons_raw_rms_mps": float(eps_cons_raw_mps),
+        "eps_cons_raw_rms_m_per_year": float(
+            eps_cons_raw_m_per_year
+        ),
+        "eps_cons_scaled_rms": float(eps_cons_scaled),
+        "eps_prior_rms": float(eps_prior_rms),
+        "r2_logtau": float(r2_logtau),
+        "closure_consistency_rms": float(clos_rms),
+        "dlog10_tau_med": float(dlog10_tau_med),
+        "kappa_b": float(args.kappa_b),
+        "nx": int(nx_eff),
+        "Lx_m": float(Lx_m),
+    }
+
+    row["identify"] = str(args.identify)
+    row["scenario"] = str(args.scenario)
+    row.update(flatten_diag(diag))
+
+    eps = 1e-12
+    PI2 = np.pi**2
+
+    tau_est = max(float(tau_est_sec), eps)
+    kappa = max(float(args.kappa_b), eps)
+
+    Ss_use = max(float(eff["Ss"]), eps)
+    Hd_use = max(float(eff["Hd"]), eps)
+
+    K_cl_mps = (Hd_use**2) * Ss_use / (PI2 * kappa * tau_est)
+    K_cl_m_per_year = K_cl_mps * SEC_PER_YEAR
+
+    k_k_tau = "K_from_tau_m_per_year"
+    k_logk_tau = "log10_K_from_tau_m_per_year"
+
+    row[k_k_tau] = float(K_cl_m_per_year)
+    row[k_logk_tau] = float(
+        np.log10(max(K_cl_m_per_year, eps))
+    )
+
+    offs = diag.get("offsets", {}).get("vs_true", {})
+
+    def _q50(name: str) -> float:
+        d = offs.get(name, {})
+        return float(d.get("q50", np.nan))
+
+    dK = _q50("delta_K")
+    dS = _q50("delta_Ss")
+    dH = _q50("delta_Hd")
+
+    row["dlogK_q50"] = float(dK)
+    row["dlogSs_q50"] = float(dS)
+    row["dlogHd_q50"] = float(dH)
+
+    row["ridge_resid_q50"] = float(
+        abs(dK - (dS + 2.0 * dH))
+    )
+
+    done_path = os.path.join(run_dir, "DONE.json")
+    with open(done_path, "w", encoding="utf-8") as f:
+        json.dump({"realisation": int(r), "done": True}, f)
+
+    return row
+
+def run_experiment(args: argparse.Namespace) -> pd.DataFrame:
+    """
+    Run SM3 synthetic identifiability experiment with resume support.
+
+    Resume logic
+    ------------
+    - Writes each completed realisation row immediately to
+      <outdir>/sm3_synth_runs.csv (append mode).
+    - Writes a per-realisation DONE.json marker in
+      <outdir>/real_<r:03d>/DONE.json.
+    - On restart, skips any realisation that is already present in the
+      CSV OR has DONE.json.
+
+    Manual control
+    --------------
+    args.start_realisation is 1-based:
+      --start-realisation 1   starts at r=0
+      --start-realisation 49  starts at r=48
+    Completed runs are still skipped even if start_realisation is set.
+    """
+
+    os.makedirs(args.outdir, exist_ok=True)
+
+    priors = litho_priors()
+    years = np.arange(int(args.n_years), dtype=float)
+
+    runs_csv = os.path.join(args.outdir, "sm3_synth_runs.csv")
+
+    # -----------------------------
+    # Load existing progress (if any)
+    # -----------------------------
+    done: set[int] = set()
+    rows: List[Dict[str, Any]] = []
+
+    if os.path.exists(runs_csv):
+        try:
+            df_prev = pd.read_csv(runs_csv)
+        except Exception:
+            df_prev = None
+
+        if df_prev is not None and not df_prev.empty:
+            if "realisation" in df_prev.columns:
+                done = set(df_prev["realisation"].astype(int).tolist())
+            rows = df_prev.to_dict("records")
+
+    def _append_row_csv(path: str, row: Dict[str, Any]) -> None:
+        df1 = pd.DataFrame([row])
+        header = not os.path.exists(path)
+        df1.to_csv(path, mode="a", header=header, index=False)
+
+    # -----------------------------
+    # Determine start index (1-based arg)
+    # -----------------------------
+    start_idx = 0
+    if hasattr(args, "start_realisation") and args.start_realisation is not None:
+        sr = int(args.start_realisation)
+        if sr < 1:
+            raise ValueError("--start-realisation must be >= 1.")
+        start_idx = sr - 1
+
+    nR = int(args.n_realizations)
+
+    # -----------------------------
+    # Main loop (resume-aware)
+    # -----------------------------
+    for r in range(start_idx, nR):
+        run_dir = os.path.join(args.outdir, f"real_{r:03d}")
+        done_marker = os.path.join(run_dir, "DONE.json")
+
+        # Skip if completed (marker OR row already in CSV)
+        if os.path.exists(done_marker) or (r in done):
+            print(f"[resume] skip realisation {r+1:03d}/{nR:03d}")
+            continue
+
+        print("=" * 62)
+        print(f"Realisation {r+1:03d}/{nR:03d}")
+        print("=" * 62)
+
+        row = run_one_realisation(
+            r=r,
+            args=args,
+            priors=priors,
+            years=years,
+            outdir=args.outdir,
+        )
+
+        rows.append(row)
+        _append_row_csv(runs_csv, row)
+
+        # keep in-memory done updated too (helps if you ever loop back)
+        done.add(int(r))
+
+    # -----------------------------
+    # Build final DF from all rows we have
+    # Prefer reading the CSV as the source of truth if it exists.
+    # -----------------------------
+    if os.path.exists(runs_csv):
+        df = pd.read_csv(runs_csv)
+    else:
+        df = pd.DataFrame(rows)
+
+    # -----------------------------
+    # Quick scalar diagnostic (as before)
+    # -----------------------------
+    if (
+        "tau_est_med_sec" in df.columns
+        and "tau_true_sec" in df.columns
+        and len(df) > 0
+    ):
+        x = np.log10(df.tau_est_med_sec.to_numpy(dtype=float))
+        y = np.log10(df.tau_true_sec.to_numpy(dtype=float))
+        m = np.isfinite(x) & np.isfinite(y)
+
+        if m.sum() >= 2:
+            r2 = float(np.corrcoef(x[m], y[m])[0, 1] ** 2)
+        else:
+            r2 = float("nan")
+
+        print(
+            "r2 = np.corrcoef(np.log10(df.tau_est_med_sec), "
+            "np.log10(df.tau_true_sec))[0,1]**2"
+        )
+        print("r2 (computed manually):", r2)
+
+    # -----------------------------
+    # Write/update summary CSV
+    # -----------------------------
+    metrics = []
+    for c in df.columns:
+        if c in ("realisation", "lith_idx"):
+            continue
+        if not np.issubdtype(df[c].dtype, np.number):
+            continue
+        metrics.append(c)
+
+    summ_rows: List[Dict[str, Any]] = []
+    for c in metrics:
+        arr = df[c].to_numpy(dtype=float)
+        arr = arr[np.isfinite(arr)]
+        if arr.size:
+            mean = float(np.mean(arr))
+            std = float(np.std(arr))
+            p05 = float(np.quantile(arr, 0.05))
+            p50 = float(np.quantile(arr, 0.50))
+            p95 = float(np.quantile(arr, 0.95))
+        else:
+            mean = float("nan")
+            std = float("nan")
+            p05 = float("nan")
+            p50 = float("nan")
+            p95 = float("nan")
+
+        summ_rows.append(
+            dict(
+                metric=c,
+                mean=mean,
+                std=std,
+                p05=p05,
+                p50=p50,
+                p95=p95,
+            )
+        )
+
+    df_sum = pd.DataFrame(summ_rows)
+    sum_csv = os.path.join(args.outdir, "sm3_synth_summary.csv")
+    df_sum.to_csv(sum_csv, index=False)
+
+    print("[OK] wrote:", runs_csv)
+    print("[OK] wrote:", sum_csv)
+
+    return df
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+
+    ap.add_argument("--outdir", required=True)
+
+    ap.add_argument("--n-realizations", type=int, default=30)
+    ap.add_argument("--n-years", type=int, default=20)
+    ap.add_argument("--time-steps", type=int, default=5)
+    
+    ap.add_argument(
+        "--forecast-horizon",
+        type=int,
+        default=3,
+    )
+    
+    ap.add_argument("--lambda-offset", type=float, default=0.0)
+
+    ap.add_argument("--val-tail", type=int, default=5)
+    ap.add_argument("--seed", type=int, default=123)
+
+    ap.add_argument("--epochs", type=int, default=50)
+    ap.add_argument("--batch", type=int, default=16)
+    ap.add_argument("--lr", type=float, default=1e-3)
+
+    ap.add_argument("--noise-std", type=float, default=None)
+    ap.add_argument("--noise-frac", type=float, default=0.10)
+
+    ap.add_argument(
+        "--load-type",
+        choices=("step", "ramp"),
+        default="step",
+    )
+    ap.add_argument("--alpha", type=float, default=1.0)
+    ap.add_argument("--hd-factor", type=float, default=0.6)
+    ap.add_argument(
+        "--thickness-cap",
+        type=float,
+        default=30.0,
+    )
+    ap.add_argument("--kappa-b", type=float, default=1.0)
+    ap.add_argument("--gamma-w", type=float, default=9810.0)
+
+    ap.add_argument("--tau-min", type=float, default=0.3)
+    ap.add_argument("--tau-max", type=float, default=10.0)
+
+    ap.add_argument(
+        "--tau-spread-dex",
+        type=float,
+        default=0.3,
+    )
+    ap.add_argument(
+        "--Ss-spread-dex",
+        type=float,
+        default=0.4,
+    )
+    ap.add_argument(
+        "--start-realisation",
+        type=int,
+        default=1,
+        help="1-based realisation index to start from (resume-safe).",
+    )
+    ap.add_argument(
+        "--identify",
+        choices=("tau", "k", "both"),
+        default="tau",
+        help=(
+            "Which parameter(s) to identify. "
+            "tau: learn tau offset only. "
+            "K: learn K via closure (tau offset fixed). "
+            "both: learn tau+K (needs spatial data)."
+        ),
+    )
+    ap.add_argument(
+        "--nx",
+        type=int,
+        default=1,
+        help="Number of x pixels for 1D domain.",
+    )
+    ap.add_argument(
+        "--Lx-m",
+        dest="Lx_m",
+        type=float,
+        default=1_000.0,
+        help="Domain length in meters.",
+    )
+    ap.add_argument(
+        "--h-right",
+        dest="h_right",
+        type=float,
+        default=0.0,
+        help="Right boundary head (meters).",
+    )
+    ap.add_argument(
+        "--K-spread-dex",
+        dest="K_spread_dex",
+        type=float,
+        default=0.6,
+        help="Extra K spread when identify=both.",
+    )
+    
+    ap.add_argument(
+        "--scenario",
+        choices=("base", "tau_only_derive_k"),
+        default="base",
+        help=(
+            "Identifiability scenario. "
+            "base: use payload as-is. "
+            "tau_only_derive_k: "
+            "freeze Ss/Hd to priors and "
+            "derive K from tau via closure."
+        ),
+    )
+    ap.add_argument(
+        "--ident-regime",
+        choices=(
+            "none",
+            "base",
+            "anchored",
+            "closure_locked",
+            "data_relaxed",
+        ),
+        default="none",
+        help=(
+            "GeoPrior identifiability profile. "
+            "'none' disables profile merge/locks."
+        ),
+    )
+
+    args = ap.parse_args()
+
+    ok = args.tau_min > 0.0 and args.tau_max > args.tau_min
+    if not ok:
+        raise ValueError(
+            "--tau-min must be >0 and <tau-max."
+        )
+    
+    B = (
+        int(args.n_years)
+        - int(args.time_steps)
+        - int(args.forecast_horizon)
+        + 1
+    )
+    if not (0 < int(args.val_tail) < B):
+        raise ValueError("--val-tail must be in (0, B).")
+        
+    if str(args.identify).lower() == "both":
+        if int(args.nx) < 3:
+            raise ValueError("--identify both needs --nx >= 3.")
+
+    _ = run_experiment(args)
+
+
+if __name__ == "__main__":
+    main()
+    
+# python sm3_synth_identifiability_v32.py \
+#   --outdir results/sm3_synth \
+#   --n-realizations 10 \
+#   --scenario base
+# python sm3_synth_identifiability_v32.py \
+#   --outdir results/sm3_synth \
+#   --n-realizations 10 \
+#   --scenario tau_only_derive_k

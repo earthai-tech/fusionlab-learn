@@ -420,8 +420,8 @@ class PIHALNet(BaseAttentive):
         
         See Also
         --------
-        fusionlab.nn.pinn.PIHALNet.run_halnet_core :
-            Feature‑extraction backbone called internally.
+        fusionlab.nn.pinn.PiHALNet.run_halnet_core :
+            Legacy Feature‑extraction backbone called internally.
         fusionlab.nn.pinn.PIHALNet.split_outputs :
             Helper that separates subsidence and GWL channels.
         """

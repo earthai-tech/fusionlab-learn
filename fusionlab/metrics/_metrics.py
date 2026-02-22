@@ -12,10 +12,10 @@ from typing import  Sequence, Optional, Literal, Union
 import warnings
 import numpy as np 
 
-from sklearn.utils.validation import check_array, check_consistent_length 
+from sklearn.utils.validation import check_consistent_length 
 
 from ..api.types import MultioutputLiteral, NanPolicyLiteral
-from ..compat.sklearn import StrOptions, validate_params
+from ..compat.sklearn import StrOptions, validate_params, check_array
 from ..utils.generic_utils import are_all_values_in_bounds 
 
 __all__ = [

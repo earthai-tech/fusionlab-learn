@@ -45,7 +45,8 @@ from ..core.checks import (
 from ..core.diagnose_q import ( 
     check_forecast_mode, 
     validate_quantiles, 
-    validate_consistency_q
+    validate_consistency_q, 
+    resolve_quantiles 
 )
 from ..core.handlers import TypeEnforcer, columns_manager 
 from ..core.io import is_data_readable 
@@ -68,7 +69,6 @@ from ..utils.generic_utils import (
 )
 from ..utils.io_utils import save_job
 from ..utils.sys_utils import BatchDataFrameBuilder, build_large_df 
-
 from ..utils.validator import ( 
     validate_sequences, 
     check_consistent_length, 
@@ -87,6 +87,7 @@ Tensor =KERAS_DEPS.Tensor
 Model =KERAS_DEPS.Model
 Dataset =KERAS_DEPS.Dataset 
 History =KERAS_DEPS.History 
+Variable =KERAS_DEPS.Variable 
 
 tf_convert_to_tensor =KERAS_DEPS.convert_to_tensor
 
@@ -134,8 +135,136 @@ __all__ = [
     "prepare_model_inputs" , 
     "extract_batches_from_dataset", 
     "format_predictions", 
-    "export_keras_losses"
+    "export_keras_losses", 
+    "get_tensor_from", 
    ]
+
+
+def get_tensor_from(
+    inputs: Dict[str, Any], 
+    *tensor_names: str,
+    default: Optional[Any] = None,
+    check_type: bool = True,
+    auto_convert: bool = True
+) -> Optional[Tensor]:
+    r"""
+    Safely retrieves the first available tensor from a dictionary
+    using a list of possible keys.
+
+    This utility is crucial for handling model inputs within a TensorFlow
+    graph (e.g., in `train_step`). It avoids the ambiguous boolean 
+    evaluation of Tensors (e.g., `tensor_a or tensor_b`), which
+    causes runtime errors, by explicitly checking for `is not None`.
+
+    Parameters
+    ----------
+    inputs : dict
+        The dictionary to search, typically the model's input dictionary
+        (e.g., the `inputs` provided to `call` or `train_step`).
+        
+    *tensor_names : str
+        One or more string keys to check for in the `inputs` dictionary,
+        in order of priority.
+        
+    default : Any, optional
+        A default value to return if no keys are found or if no found
+        value is a valid tensor. Defaults to None.
+        
+    check_type : bool, default True
+        If True, only returns a value if it is (or can be converted to)
+        a Tensor or Variable. If False, returns the first non-None 
+        value regardless of its type.
+        
+    auto_convert : bool, default True
+        If True and `check_type` is True, this function will attempt
+        to convert a found non-Tensor value (like a NumPy array or
+        a list) into a TensorFlow tensor using `tf.convert_to_tensor`.
+
+    Returns
+    -------
+    Optional[tf.Tensor]
+        The first found `tf.Tensor` or `tf.Variable` associated with
+        one of the `tensor_names`. If `auto_convert` is True, this
+        can also be a newly converted tensor. Returns `default` (typically
+        None) if no valid tensor is found.
+        
+    Raises
+    ------
+    TypeError
+        If `inputs` is not a dictionary.
+        
+    Examples
+    --------
+    >>> import tensorflow as tf
+    >>> inputs_dict = {
+    ...     'some_other_key': [1, 2, 3],
+    ...     'soil_thickness': tf.constant([20., 21.], dtype=tf.float32)
+    ... }
+    >>>
+    >>> # Correctly finds 'soil_thickness'
+    >>> get_tensor_from(inputs_dict, 'H_field', 'soil_thickness')
+    <tf.Tensor: shape=(2,), dtype=float32, numpy=array([20., 21.], ...)>
+    >>>
+    >>> # Returns None safely if nothing is found
+    >>> get_tensor_from(inputs_dict, 'missing_key', 'another_key')
+    None
+    >>>
+    >>> # Demonstrating auto_convert
+    >>> inputs_dict_np = {'H_field': np.array([10., 11.])}
+    >>> get_tensor_from(inputs_dict_np, 'H_field', auto_convert=True)
+    <tf.Tensor: shape=(2,), dtype=float32, numpy=array([10., 11.], ...)>
+    """
+    if not isinstance(inputs, dict):
+        raise TypeError(
+            f"`inputs` must be a dictionary, but got {type(inputs).__name__}")
+
+    if not tensor_names:
+        return default
+
+    for name in tensor_names:
+        if not isinstance(name, str):
+            warnings.warn(f"Key name {name} is not a string. Skipping.")
+            continue
+            
+        value = inputs.get(name)
+
+        if value is not None:
+            # Found a non-None value.
+            
+            if not check_type:
+                return value # Return whatever was found
+
+            # check_type is True
+            if isinstance(value, (Tensor, Variable)):
+                return value # It's a tensor, we are done.
+            
+            if auto_convert:
+                try:
+                    # Attempt to convert numpy arrays, lists, scalars, etc.
+                    tensor_value = tf_convert_to_tensor(value, dtype=tf_float32)
+                    return tensor_value
+                except (ValueError, TypeError) as e:
+                    warnings.warn(
+                        f"Key '{name}' found but value could not be"
+                        f" converted to a Tensor: {e}. Skipping."
+                    )
+                    continue # Try the next name
+            
+            if not KERAS_BACKEND and check_type:
+                 # If no backend, we can't be as strict.
+                 # Let's assume if it's not None, it's what they want.
+                 return value
+                 
+            # If we are here, check_type=True, auto_convert=False,
+            # and it's not a Tensor.
+            warnings.warn(
+                f"Key '{name}' found but its value is not a Tensor/Variable"
+                f" (it's {type(value).__name__}). Skipping."
+            )
+            
+    # Loop finished, nothing found.
+    return default
+
 
 def export_keras_losses(
     history: History,
@@ -144,7 +273,7 @@ def export_keras_losses(
     verbose: int = 0,
     formats: Tuple[str, ...] = ("json", "csv"),
 ) -> dict:
-    """
+    r"""
     Export loss(es) (and any other metric) from a Keras History object.
 
     Parameters
@@ -239,7 +368,7 @@ def extract_batches_from_dataset(
     agg: bool = False, 
     errors: str = 'warn'
 ) -> Union[List[Tuple[Any, ...]], Optional[Tuple[Any, ...]]]:
-    """
+    r"""
     Extracts a specified number of batches from a tf.data.Dataset.
     Optionally aggregates the extracted batches.
 
@@ -529,7 +658,7 @@ def format_predictions(
     **kwargs: Any
 ) -> pd.DataFrame:
 
-    """Formats model predictions into a structured pandas DataFrame.
+    r"""Formats model predictions into a structured pandas DataFrame.
 
     This utility function takes raw model predictions (either directly
     as an array/tensor or generated by a provided model and its inputs)
@@ -1054,6 +1183,16 @@ def format_predictions(
     # --- 8. Inverse Transform (if scaler provided) ---
     # Now apply inverse transform on the DataFrame columns
     if scaler is not None:
+        # Try to inverse transform all prediction and actual columns
+        # This assumes they were all scaled together, which might be wrong.
+        cols_to_inv = pred_cols_names + actual_cols_names
+        
+        # Also include spatial columns if they were passed
+        if spatial_cols:
+            for sc in spatial_cols:
+                if sc in final_df.columns:
+                    cols_to_inv.append(sc)
+                    
         if scaler_feature_names is None or target_idx_in_scaler is None:
             warnings.warn(
                 "Scaler provided, but `scaler_feature_names` or "
@@ -1112,6 +1251,17 @@ def format_predictions(
                     dummy[:, target_idx_in_scaler] = final_df[actual_col_name]
                     final_df[actual_col_name] = scaler.inverse_transform(
                         dummy)[:, target_idx_in_scaler]
+                    
+            # now spatials:
+            for sc in spatial_cols or []:
+                if sc in final_df:
+                    idx = scaler_feature_names.index(sc)
+                    dummy = np.zeros(dummy_array_shape)
+                    dummy[:, idx] = final_df[sc]
+                    final_df[sc] = scaler.inverse_transform(dummy)[:, idx]
+                    vlog(f"    Inverted spatial column {sc}", level=5,
+                         verbose=verbose, logger=_logger)
+                    
             vlog("    Inverse transformation applied.", level=5, 
                  verbose=verbose, logger=_logger)
 
@@ -1184,7 +1334,7 @@ def prepare_model_inputs(
     verbose: int = 0,
     **kwargs 
 ) -> List[Optional[Tensor]]:
-    """Prepares a list of input tensors for a model's call method.
+    r"""Prepares a list of input tensors for a model's call method.
 
     This function standardizes the creation of the input list
     `[static, dynamic, future]` expected by many models in
@@ -1972,7 +2122,7 @@ def split_static_dynamic(
     static_reshape_shape: Optional[Tuple[int, ...]] = None,
     dynamic_reshape_shape: Optional[Tuple[int, ...]] = None
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """
+    r"""
     Split sequences into static and dynamic inputs for the model.
 
     The `split_static_dynamic` function divides input sequences into static and 
@@ -2122,7 +2272,7 @@ def create_sequences(
     forecast_horizon: Optional[int] = None,
     verbose: int = 3,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """
+    r"""
     Create input sequences and corresponding targets for time series
     forecasting.
 
@@ -2394,7 +2544,7 @@ def compute_forecast_horizon(
     error='raise',
     verbose=1
 ):
-    """
+    r"""
     Compute the forecast horizon for time series forecasting models.
 
     This function calculates the number of future time steps (`forecast_horizon`)
@@ -2882,7 +3032,7 @@ def prepare_spatial_future_data(
     List[float],
     List[float]
 ]:
-    """
+    r"""
     Prepare future static and dynamic inputs for making predictions.
 
     This function prepares the necessary static and dynamic inputs required for
@@ -3480,7 +3630,7 @@ def set_default_params(
     scales: Union[str, List[int], None] = None,
     multi_scale_agg: Union[str, None] = None
 ) -> Tuple[List[float], List[int], bool]:
-    """
+    r"""
     Sets and validates default values for quantiles, scales, and
     return_sequences parameters.
 
@@ -3567,8 +3717,10 @@ def set_default_params(
     # Set default quantiles if 'auto'
     if quantiles == 'auto':
         quantiles = [0.1, 0.5, 0.9]
+
     elif quantiles is not None:
-        if not isinstance(quantiles, list):
+        quantiles = resolve_quantiles(quantiles)
+        if not isinstance(quantiles, (list, tuple)):
             raise ValueError(
                 "'quantiles' must be a list of floats or"
                f" 'auto', but got type {type(quantiles).__name__}.")
@@ -3580,6 +3732,7 @@ def set_default_params(
                 f"Each quantile must be a float between 0 and 1 (exclusive). "
                 f"Invalid quantiles: {invalid_quantiles}"
             )
+        quantiles = list(quantiles) # for consistency 
     else:
         # quantiles remains None
         pass
@@ -3587,7 +3740,7 @@ def set_default_params(
     # Set default scales if 'auto' or None
     if scales is None or scales == 'auto':
         scales = [1]
-    elif isinstance(scales, list):
+    elif isinstance(scales, (list,tuple)):
         # Validate each scale
         invalid_scales = [s for s in scales if not isinstance(s, int) or s <= 0]
         if invalid_scales:
@@ -3642,7 +3795,7 @@ def reshape_xtft_data(
     verbose: int = 1, 
     **kw
 ) -> Tuple[Optional[np.ndarray], np.ndarray, Optional[np.ndarray], np.ndarray]:
-    """Reshapes time series data into rolling sequences for models like
+    r"""Reshapes time series data into rolling sequences for models like
     Temporal Fusion Transformer (TFT) and Extreme Temporal Fusion
     Transformer (XTFT).
 
@@ -3980,7 +4133,7 @@ def reshape_xtft_data_in(
     forecast_horizons= None,
     verbose= 3
 ):
-    """
+    r"""
     Reshape data for sequence models (XTFT/TFT) by generating rolling 
     sequences.
     
@@ -4408,7 +4561,7 @@ def generate_forecast(
     verbose=3, 
     **kw
 ):
-    """
+    r"""
     Generate forecast using the XTFT model.
     
     This function uses a pre-trained Keras model to forecast future 
@@ -5290,7 +5443,7 @@ def forecast_single_step(
     verbose=3, 
     **kws
 ):
-    """
+    r"""
     Generate a single-step forecast using the XTFT model.
     
     This function generates a forecast for a single future time step
@@ -5645,7 +5798,7 @@ def forecast_multi_step(
     verbose=3, 
     **kws
     ):
-    """
+    r"""
     Generate a multi-step forecast using the XTFT model.
     
     This function generates forecasts for multiple future time steps 
@@ -6578,7 +6731,7 @@ def generate_forecast_with(
 
 
 def squeeze_last_dim_if(tensors, output_dims):
-    """
+    r"""
     Squeeze the last dimension of tensor(s) if it equals 1 based on `output_dims`.
 
     `output_dims` can be:
@@ -6805,7 +6958,7 @@ def make_dict_to_tuple_fn(
     [Dict[str, Tensor], Union[Tensor, Dict[str, Tensor], None]],
     Tuple[Tuple[Tensor, ...], Union[Tensor, Dict[str, Tensor], None]],
 ]:
-    """
+    r"""
     Create a `tf.data.Dataset.map` function that converts a *feature
     dictionary* into a **positional tuple** expected by a sub-classed
     Keras model.
@@ -7010,7 +7163,7 @@ References
        Python". Proceedings of the 9th Python in Science Conference.
 """
 
-generate_forecast_with.__doc__="""\
+generate_forecast_with.__doc__=r"""\
 Generate forecasts using a pre-trained XTFT model based on the forecast
 horizon.
 

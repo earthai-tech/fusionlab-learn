@@ -16,6 +16,7 @@ import warnings
 import sys
 import functools
 import subprocess
+import inspect
 
 from .._fusionlog import fusionlog
 from ..api.types import _T, Any, Callable, List, Optional, Union
@@ -823,47 +824,77 @@ def ensure_pkg(
     ...         extractor_function = lambda image: hog(image, **kwargs)
     ...     return extractor_function
     """
-    def decorator(func: _T) -> _T:
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            # Determine if this is a method or a function based on the first argument
-            bound_method = hasattr(args[0], func.__name__) if args else False # 
+    # def decorator(func: _T) -> _T:
+    #     @functools.wraps(func)
+    #     def wrapper(*args, **kwargs):
+    #         # Determine if this is a method or a function based on the first argument
+    #         bound_method = hasattr(args[0], func.__name__) if args else False # 
             
-            # If partial_check is True, check condition before performing actions
-            if not partial_check or  _should_check_condition(
-                    condition, *args, **kwargs):
-                try:
-                    # Attempt to import the package, handling installation 
-                    # if necessary and permitted
-                    import_optional_dependency(
-                        name, extra=extra, errors=error, 
-                        min_version=min_version, 
-                        exception=exception
-                    )
-                except (ModuleNotFoundError, ImportError):
-                    if auto_install:
-                        # Install the package if auto-install is enabled
-                        install_package(
-                            name, dist_name=dist_name, 
-                            infer_dist_name=infer_dist_name, 
-                            extra=extra, 
-                            version=min_version, 
-                            use_conda=use_conda, 
-                            verbose=verbose
-                        )
-                    elif exception is not None:
-                        raise exception
-                    else:
-                        raise
+    #         # If partial_check is True, check condition before performing actions
+    #         if not partial_check or  _should_check_condition(
+    #                 condition, *args, **kwargs):
+    #             try:
+    #                 # Attempt to import the package, handling installation 
+    #                 # if necessary and permitted
+    #                 import_optional_dependency(
+    #                     name, extra=extra, errors=error, 
+    #                     min_version=min_version, 
+    #                     exception=exception
+    #                 )
+    #             except (ModuleNotFoundError, ImportError):
+    #                 if auto_install:
+    #                     # Install the package if auto-install is enabled
+    #                     install_package(
+    #                         name, dist_name=dist_name, 
+    #                         infer_dist_name=infer_dist_name, 
+    #                         extra=extra, 
+    #                         version=min_version, 
+    #                         use_conda=use_conda, 
+    #                         verbose=verbose
+    #                     )
+    #                 elif exception is not None:
+    #                     raise exception
+    #                 else:
+    #                     raise
                     
-            # If the function is a bound method, call it with 'self' or 'cls'
-            if bound_method:
-                return func(args[0], *args[1:], **kwargs)
-            else:
-                return func(*args, **kwargs) # 
+    #         # If the function is a bound method, call it with 'self' or 'cls'
+    #         if bound_method:
+    #             return func(args[0], *args[1:], **kwargs)
+    #         else:
+    #             return func(*args, **kwargs) # 
         
-        return wrapper
+    #     return wrapper
     
+    # return decorator
+
+    def decorator(func):
+        is_method_def = (
+            "." in func.__qualname__ and "<locals>" not in func.__qualname__
+        )
+
+        if is_method_def:
+            @functools.wraps(func)
+            def wrapper(self, *args, **kwargs):
+                # --- your existing dependency check block ---
+                if not partial_check or _should_check_condition(condition, self, *args, **kwargs):
+                    import_optional_dependency(
+                        name, extra=extra, errors=error,
+                        min_version=min_version, exception=exception
+                    )
+                return func(self, *args, **kwargs)
+        else:
+            @functools.wraps(func)
+            def wrapper(*args, **kwargs):
+                if not partial_check or _should_check_condition(condition, *args, **kwargs):
+                    import_optional_dependency(
+                        name, extra=extra, errors=error,
+                        min_version=min_version, exception=exception
+                    )
+                return func(*args, **kwargs)
+
+        # keep inspect.signature() nice (sklearn/etc.)
+        wrapper.__signature__ = inspect.signature(func)
+        return wrapper
     return decorator
 
 def _should_check_condition(condition: Any, *args, **kwargs) -> bool:

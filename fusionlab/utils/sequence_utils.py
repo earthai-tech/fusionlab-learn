@@ -2,6 +2,9 @@
 # License: BSD-3-Clause
 # Author: LKouadio <etanoyau@gmail.com>
 
+from  __future__ import annotations 
+
+import os
 import logging 
 import warnings 
 from typing import ( 
@@ -11,21 +14,839 @@ from typing import (
     Dict, 
     Union, 
     Callable, 
-    Literal 
+    Literal, 
+    Any
 )
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 import pandas as pd
 
 from sklearn.preprocessing import MinMaxScaler
+from ..core.checks import ( 
+    exist_features, 
+    check_datetime, 
+)
 
 from ..decorators import isdf 
 from .generic_utils import vlog
+from fusionlab._optdeps import HAS_TQDM, with_progress 
+ 
 
 __all__ = [
     'check_sequence_feasibility', 'get_sequence_counts',
-    'generate_pinn_sequences', 'generate_ts_sequences'
+    'generate_pinn_sequences', 'generate_ts_sequences', 
+    'build_future_sequences_npz'
  ]
+
+@isdf
+def build_future_sequences_npz(
+    df_scaled: pd.DataFrame,
+    *,
+    time_col: str,
+    time_col_num: str | None,
+    lon_col: str,
+    lat_col: str,
+    time_steps: int,
+    train_end_time: object | None = None,
+    forecast_start_time: object | None = None,
+    forecast_horizon: int | None = None,
+    subs_col: str | None = None,
+    gwl_col: str | None = None,
+    h_field_col: str | None = None,
+    static_features: list[str] | None = None,
+    dynamic_features: list[str] | None = None,
+    future_features: list[str] | None = None,
+    group_id_cols: list[str] | None = None,
+    mode: str | None = None,
+    model_name: str | None = None,
+    artifacts_dir: str | None = None,
+    prefix: str = "future",
+    future_mode: str ="auto", 
+    normalize_coords: bool = False,
+    coord_scaler: Any | None = None,
+    verbose: int = 1,
+    logger=None,
+    stop_check: Callable[[], bool] = None, 
+    progress_hook: Optional[Callable[[float], None]] = None,
+    **kws,  
+) -> dict:
+    """
+    Build history–future sequences and save them as compressed NPZ files.
+
+    This helper constructs, for each spatial group, a sliding window of
+    `time_steps` "history" points followed by a multi–step forecast
+    horizon and exports the resulting NumPy arrays to disk.  It is
+    time-agnostic: the `time_col` can be numeric (e.g. year, index),
+    year-like floats, datetimes, or strings, as long as equality on
+    that column is meaningful.
+
+    If `train_end_time`, `forecast_start_time`, or `forecast_horizon`
+    are not provided, they are inferred from the sorted unique values
+    in ``df_scaled[time_col]``:
+
+    * ``train_end_time``: by default the second-to-last unique time,
+      leaving at least one future step.
+    * ``forecast_start_time``: by default the first time strictly
+      after ``train_end_time``.
+    * ``forecast_horizon``: by default one time step ahead, clipped to
+      the number of available future points.
+
+    For each valid group, the function builds:
+
+    * **History dynamic features**: shape
+      ``(time_steps, n_dynamic)``.
+    * **Future features**:
+      - If ``mode`` starts with ``"tft"`` (e.g. ``"tft_like"``),
+        history and future rows are concatenated, giving shape
+        ``(time_steps + H, n_future)``.
+      - Otherwise, only the forecast horizon is used, giving shape
+        ``(H, n_future)``.
+    * **Static features**: one vector per group,
+      shape ``(n_static,)``.
+    * **Coordinates** over the horizon: shape ``(H, 3)`` where the
+      three columns are ``[time_num, lon, lat]``.
+    * **H_field** over the horizon: shape ``(H, 1)``.
+    * **Targets** (if present) over the horizon for subsidence and
+      groundwater level: shapes ``(H, 1)`` each.
+
+    All per-group arrays are stacked along a new batch dimension and
+    written as two NPZ files:
+
+    * ``<prefix>_inputs.npz``: coordinates, dynamic, static, future
+      features and H field.
+    * ``<prefix>_targets.npz``: subsidence and groundwater targets.
+
+    Parameters
+    ----------
+    df_scaled : pandas.DataFrame
+        Pre-processed (typically scaled) dataframe containing all
+        required columns: time, spatial coordinates, static/dynamic/
+        future features and optional targets.
+    time_col : str
+        Name of the column encoding the temporal index (e.g.
+        ``"year"``, ``"date"``, ``"t_index"``).  May be numeric,
+        datetime, or string.
+    time_col_num : str or None
+        Optional numeric time column used as a tie-breaker when
+        multiple rows share the same ``time_col`` value.  If provided
+        and present in a group, the last row sorted by this column is
+        selected for that time.
+    lon_col : str
+        Name of the longitude (or x-coordinate) column.
+    lat_col : str
+        Name of the latitude (or y-coordinate) column.
+    time_steps : int
+        Length of the history window (number of time steps in the
+        past). Must be strictly positive.
+    train_end_time : object, optional
+        Effective end of the training period.  If ``None``, it is
+        inferred as the second-to-last unique value in
+        ``df_scaled[time_col]`` (after sorting).
+    forecast_start_time : object, optional
+        First time step of the forecast horizon.  If ``None``, it is
+        inferred as the first unique time strictly greater than
+        ``train_end_time``.
+    forecast_horizon : int, optional
+        Number of future time steps to include.  If ``None``, a
+        default horizon of ``1`` is used and clipped to the maximum
+        number of available future time points.
+    subs_col : str, optional
+        Name of the subsidence target column.  If ``None`` or missing
+        from a group, subsidence targets are filled with ``NaN``.
+    gwl_col : str, optional
+        Name of the groundwater-level target column.  If ``None`` or
+        missing from a group, groundwater targets are filled with
+        ``NaN``.
+    h_field_col : str, optional
+        Name of the hydraulic-head field column used as an additional
+        horizon-level input (``H_field``).  If ``None`` or missing,
+        a zero field is used.
+    static_features : list of str, optional
+        Names of static (time-invariant) feature columns.  Any names
+        not present in the dataframe are silently ignored.
+    dynamic_features : list of str, optional
+        Names of dynamic (history) feature columns used to build the
+        ``(time_steps, n_dynamic)`` sequence.  Missing columns are
+        ignored.
+    future_features : list of str, optional
+        Names of future covariate columns used to build the
+        history+future or future-only sequence, depending on
+        ``mode``.  Missing columns are ignored.
+    group_id_cols : list of str, optional
+        Columns used to define spatial (or logical) groups, typically
+        something like ``["lon", "lat"]`` or a station identifier.
+        If ``None`` or empty, the entire dataframe is treated as a
+        single global group.
+    mode : str, optional
+        Controls how future features are constructed.  If the
+        lower-cased value starts with ``"tft"`` (e.g. ``"tft_like"``),
+        future features are built on top of both history and future
+        rows.  Otherwise, only the forecast horizon rows are used.
+    model_name : str, optional
+        Optional model identifier used only in logging messages.
+    artifacts_dir : str, optional
+        Directory where NPZ files are written.  If ``None`` or empty,
+        the current working directory is used.
+    prefix : str, default="future"
+        Prefix for the output NPZ filenames:
+        ``"<prefix>_inputs.npz"`` and ``"<prefix>_targets.npz"``.
+    future_mode : {'auto', 'pure-inference', 'pure-data-driven'}, \
+default 'auto'
+        Strategy used to construct the future (forecast) portion of
+        the sequences.
+
+        - ``'pure-data-driven'``:
+          Use only time points that actually exist in ``df_scaled``
+          strictly after the history window. All future time indices
+          must be present in the data; otherwise a ``ValueError`` is
+          raised. This corresponds to the original, strictly
+          data-driven behaviour.
+
+        - ``'pure-inference'``:
+          Always synthesize future time points from the last history
+          time, using the median positive time step (or ``1.0`` as a
+          fallback). Future inputs are built by re-using the last
+          available history row (for ``future_features``, ``H_field``,
+          etc.), and future targets (e.g. subsidence, GWL) are filled
+          with ``NaN`` since the true future is unknown. This mode
+          does not require any rows beyond ``train_end_time``.
+
+        - ``'auto'``:
+          Try data-driven mode first. If there are enough actual
+          future time points after ``train_end_time`` to cover the
+          requested ``forecast_horizon``, behave like
+          ``'pure-data-driven'``. If not, automatically fall back to
+          the synthetic ``'pure-inference'`` behaviour described
+          above and emit an informational log message via ``vlog``.
+
+    verbose : int, default=1
+        Verbosity level forwarded to :func:`fusionlab.utils.vlog`.  A
+        value ``>= 3`` provides detailed progress logs (temporal
+        inference, per-group status, dropped groups, etc.).
+    logger : logging.Logger or callable, optional
+        Optional logger or logging function used by
+        :func:`fusionlab.utils.vlog`.  If ``None``, messages are
+        printed to standard output.
+    **kws
+        Reserved for future extensions.  Currently ignored.
+
+    Returns
+    -------
+    dict
+        A small dictionary with the absolute paths to the written NPZ
+        files:
+
+        ``{"future_inputs_npz": <path>, "future_targets_npz": <path>}``.
+
+    Raises
+    ------
+    ValueError
+        If there are not enough history points before
+        ``train_end_time`` to satisfy ``time_steps``, if no future
+        points are available after ``forecast_start_time``, or if all
+        groups are dropped due to incomplete history/horizon windows.
+
+    Notes
+    -----
+    Groups that do not contain all required history and future times
+    are silently dropped, but the number of dropped groups is reported
+    via :func:`fusionlab.utils.vlog` when ``verbose > 0``.
+
+    Examples
+    --------
+    >>> from fusionlab.nn.pinn.sequences import (
+    ...     build_future_sequences_npz,
+    ... )
+    >>> result = build_future_sequences_npz(
+    ...     df_scaled=df_scaled,
+    ...     time_col="year",
+    ...     time_col_num="t_index",
+    ...     lon_col="lon",
+    ...     lat_col="lat",
+    ...     time_steps=5,
+    ...     # Let the function infer times/horizon:
+    ...     train_end_time=None,
+    ...     forecast_start_time=None,
+    ...     forecast_horizon=None,
+    ...     subs_col="subsidence",
+    ...     gwl_col="gwl",
+    ...     h_field_col="H_field",
+    ...     static_features=["lithology_class"],
+    ...     dynamic_features=["rainfall_mm", "GWL_depth_bgs_z"],
+    ...     future_features=["normalized_urban_load_proxy"],
+    ...     group_id_cols=["lon", "lat"],
+    ...     mode="tft_like",
+    ...     model_name="GeoPriorSubsNet",
+    ...     artifacts_dir="results/zhongshan/future_npz",
+    ...     prefix="zhongshan_future",
+    ...     verbose=2,
+    ... )
+    >>> result["future_inputs_npz"]
+    'results/zhongshan/future_npz/zhongshan_future_inputs.npz'
+    >>> result["future_targets_npz"]
+    'results/zhongshan/future_npz/zhongshan_future_targets.npz'
+    """
+    def _p(frac: float) -> None:
+        if progress_hook is not None:
+            # clamp, avoid crashing
+            try:
+                f = max(0.0, min(1.0, float(frac)))
+                progress_hook(f)
+            except Exception:
+                pass
+
+    _p(0.0)  # start
+    
+    # ------------------------------------------------------------------
+    # Small helpers
+    # ------------------------------------------------------------------
+    def _save_npz(path: str, arrays: dict) -> str:
+        np.savez_compressed(path, **arrays)
+        return path
+
+    def _to_time_index(series: pd.Series) -> np.ndarray:
+        """Convert a time column to a numeric index (year-like)."""
+        if pd.api.types.is_datetime64_any_dtype(series):
+            return series.dt.year.to_numpy(dtype=float)
+        try:
+            return pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
+        except Exception:
+            vals, _ = pd.factorize(series)
+            return vals.astype(float)
+
+    future_mode_norm = (future_mode or "auto").lower()
+    if future_mode_norm not in ("auto", "pure-inference", "pure-data-driven"):
+        raise ValueError(
+            "build_future_sequences_npz: 'future_mode' must be one of "
+            "{'auto', 'pure-inference', 'pure-data-driven'}; "
+            f"got {future_mode!r}."
+        )
+
+    if artifacts_dir is None or not str(artifacts_dir).strip():
+        artifacts_dir = os.getcwd()
+
+    normalize_coords = bool(normalize_coords)
+    if normalize_coords:
+        if coord_scaler is None or not hasattr(coord_scaler, "transform"):
+            raise ValueError(
+                "build_future_sequences_npz: normalize_coords=True requires a "
+                "fitted `coord_scaler` (same one used in Stage-1)."
+            )
+
+    # ------------------------------------------------------------------
+    # Step 1: infer temporal configuration (history + future windows)
+    # ------------------------------------------------------------------
+
+    exist_features(
+        df_scaled, features=time_col, 
+        message="Time col{time_col} column is missing."
+    )
+    
+    vlog("Validating time-series dataset...", 
+         level=1, verbose=verbose)
+    
+    check_datetime(
+        df_scaled,
+        dt_cols= time_col, 
+        ops="check_only",
+        consider_dt_as="numeric",
+        accept_dt=True, 
+        allow_int=True, 
+    )
+    
+    t_series = df_scaled[time_col]
+    t_idx_all = _to_time_index(t_series)
+    mask_finite = np.isfinite(t_idx_all)
+    if not mask_finite.any():
+        raise ValueError(
+            "build_future_sequences_npz: time column contains no finite "
+            "values after conversion."
+        )
+
+    unique_times = np.unique(t_idx_all[mask_finite])
+    unique_times.sort()
+
+    T = int(time_steps)
+    if T <= 0:
+        raise ValueError(
+            "build_future_sequences_npz: 'time_steps' must be > 0; "
+            f"got {time_steps!r}."
+        )
+
+    # Resolve train_end_time
+    if train_end_time is None:
+        train_end_idx = float(unique_times.max())
+    else:
+        try:
+            train_end_idx = float(train_end_time)
+        except Exception as e:
+            raise ValueError(
+                "build_future_sequences_npz: could not convert "
+                f"train_end_time={train_end_time!r} to numeric index."
+            ) from e
+
+    # History times: last T distinct times <= train_end_idx
+    hist_candidates = unique_times[unique_times <= train_end_idx]
+    if hist_candidates.size < T:
+        raise ValueError(
+            "build_future_sequences_npz: not enough past time points "
+            f"<= train_end_time to build history of length {T}. "
+            f"Available={hist_candidates.size}."
+        )
+    hist_times = hist_candidates[-T:]
+    last_hist = hist_times[-1]
+
+    # Step (for synthetic future): median positive diff or 1.0
+    if hist_times.size >= 2:
+        diffs = np.diff(hist_times)
+        step = float(np.median(diffs[diffs > 0])) if np.any(diffs > 0) else 1.0
+    else:
+        step = 1.0
+
+    # All future times *in data* (strictly after last_hist)
+    data_future_all = unique_times[unique_times > last_hist]
+
+    # Horizon H
+    if forecast_horizon is None:
+        H = int(data_future_all.size) if data_future_all.size > 0 else 1
+    else:
+        H = int(forecast_horizon)
+    if H <= 0:
+        raise ValueError(
+            "build_future_sequences_npz: 'forecast_horizon' must be > 0; "
+            f"got {forecast_horizon!r}."
+        )
+
+    # Resolve forecast_start_time index
+    if forecast_start_time is None:
+        if data_future_all.size > 0:
+            f_start_idx = float(data_future_all[0])
+        else:
+            f_start_idx = float(last_hist + step)
+    else:
+        try:
+            f_start_idx = float(forecast_start_time)
+        except Exception as e:
+            raise ValueError(
+                "build_future_sequences_npz: could not convert "
+                f"forecast_start_time={forecast_start_time!r} to numeric index."
+            ) from e
+
+    # Candidate data-driven future times (>= f_start_idx, after last_hist)
+    data_future_needed = data_future_all[data_future_all >= f_start_idx][:H]
+    has_enough_future_data = data_future_needed.size == H
+    
+    _p(0.1)
+    
+    # Decide effective mode + future times
+    using_synthetic_future = False
+    if future_mode_norm == "pure-data-driven":
+        if not has_enough_future_data:
+            raise ValueError(
+                "build_future_sequences_npz: pure-data-driven mode "
+                f"requested but only {data_future_needed.size} future "
+                f"time point(s) found starting from {f_start_idx}; "
+                f"need {H}."
+            )
+        fut_times = data_future_needed
+        eff_future_mode = "pure-data-driven"
+
+    elif future_mode_norm == "pure-inference":
+        using_synthetic_future = True
+        eff_future_mode = "pure-inference"
+        start = max(float(last_hist), float(f_start_idx))
+        fut_times = np.array(
+            [start + step * (i + 1) for i in range(H)],
+            dtype=float,
+        )
+
+    else:  # auto
+        if has_enough_future_data:
+            fut_times = data_future_needed
+            eff_future_mode = "pure-data-driven"
+        else:
+            using_synthetic_future = True
+            eff_future_mode = "pure-inference"
+            start = max(float(last_hist), float(f_start_idx))
+            fut_times = np.array(
+                [start + step * (i + 1) for i in range(H)],
+                dtype=float,
+            )
+
+    # Window actually needed in df_scaled
+    if using_synthetic_future:
+        all_times_needed = hist_times
+    else:
+        all_times_needed = np.concatenate([hist_times, fut_times])
+
+    if verbose:
+        vlog(
+            "[Future] Step 1/3: temporal config resolved.\n"
+            f"  hist_times       = {hist_times.tolist()}\n"
+            f"  fut_times        = {fut_times.tolist()}\n"
+            f"  history length   = {T}\n"
+            f"  horizon length   = {H}\n"
+            f"  effective mode   = {eff_future_mode}\n"
+            f"  train_end_time   = {train_end_time!r}\n"
+            f"  forecast_start   = {forecast_start_time!r}",
+            verbose=verbose,
+            level=1,
+            logger=logger,
+        )
+        if using_synthetic_future:
+            vlog(
+                "[Future] No usable future time points after train_end_time; "
+                "falling back to synthetic 'pure-inference' horizon "
+                "(targets will be NaN).",
+                verbose=verbose,
+                level=2,
+                logger=logger,
+            )
+
+    # ------------------------------------------------------------------
+    # Step 2: subset df_scaled to the required window
+    # ------------------------------------------------------------------
+    mask_window = np.isin(t_idx_all, all_times_needed)
+    df_win = df_scaled.loc[mask_window].copy()
+    if df_win.empty:
+        raise ValueError(
+            "build_future_sequences_npz: no rows in df_scaled for the "
+            f"required time window {all_times_needed.tolist()}."
+        )
+
+    # Normalize lists
+    static_features = list(static_features) if static_features is not None else []
+    dynamic_features = list(dynamic_features) if dynamic_features is not None else []
+    future_features = list(future_features) if future_features is not None else []
+    group_id_cols = list(group_id_cols) if group_id_cols is not None else []
+
+    static_cols = [c for c in static_features if c in df_win.columns]
+    dyn_cols = [c for c in dynamic_features if c in df_win.columns]
+    fut_cols = [c for c in future_features if c in df_win.columns]
+
+    mode_norm = (mode or "").lower()
+    is_tft_like = mode_norm.startswith("tft")
+
+    if verbose:
+        vlog(
+            "[Future] Step 2/3: feature and grouping config.\n"
+            f"  static_cols   = {static_cols}\n"
+            f"  dyn_cols      = {dyn_cols}\n"
+            f"  fut_cols      = {fut_cols}\n"
+            f"  group_id_cols = {group_id_cols or ['<global>']}\n"
+            f"  mode          = {mode_norm or 'None'}",
+            verbose=verbose,
+            level=1,
+            logger=logger,
+        )
+
+    # ------------------------------------------------------------------
+    # Step 3: per-group construction
+    # ------------------------------------------------------------------
+
+    def _rows_for_times(
+          required: np.ndarray, 
+          g_df: pd.DataFrame
+        ) -> list | None:
+        """Pick one row per required time from a group."""
+        g_time_idx = _to_time_index(g_df[time_col])
+        order = np.argsort(g_time_idx)
+        g_sorted = g_df.iloc[order].reset_index(drop=True)
+        g_time_sorted = g_time_idx[order]
+
+        rows: list[pd.Series] = []
+        for t_req in required:
+            m = (g_time_sorted == t_req)
+            if not np.any(m):
+                return None
+            sub = g_sorted.loc[m]
+            if time_col_num is not None and time_col_num in sub.columns:
+                sub = sub.sort_values(time_col_num)
+            rows.append(sub.iloc[-1])
+        return rows
+
+    def _build_synthetic_future_rows(
+        hist_rows: list[pd.Series],
+        fut_times_arr: np.ndarray,
+    ) -> list[pd.Series]:
+        """Replicate last history row and overwrite time columns."""
+        if not hist_rows:
+            return []
+        last_row = hist_rows[-1]
+        out = []
+        for t_val in fut_times_arr:
+            row = last_row.copy()
+            row[time_col] = t_val
+            if time_col_num is not None and time_col_num in row.index:
+                try:
+                    row[time_col_num] = float(t_val)
+                except Exception:
+                    # keep original numeric coord
+                    pass
+            out.append(row)
+        return out
+
+    coords_list, dyn_list, fut_list = [], [], []
+    static_list, H_list = [], []
+    subs_target_list, gwl_target_list = [], []
+    
+    if group_id_cols:
+        grouped = df_win.groupby(group_id_cols)
+        n_groups = grouped.ngroups
+        group_iter = grouped
+    else:
+        n_groups = 1
+        group_iter = [(None, df_win)]
+
+    # Progress logging frequency for non-tqdm fallback
+    log_every = max(1, n_groups // 10)
+
+    # Small adapter so tqdm output goes into your logger instead of terminal
+    def _log_progress_line(msg: str) -> None:
+        # Use vlog so it respects verbose + user logger
+        vlog(
+            msg,
+            verbose=verbose,
+            level=2,
+            logger=logger,
+        )
+
+    # Optionally wrap with tqdm, but redirect its ASCII bar to the log
+    use_tqdm = HAS_TQDM and verbose >= 1 and n_groups > 1
+    if use_tqdm:
+        iter_groups = with_progress(
+            group_iter,
+            total=n_groups,
+            desc=f"[Future] groups ({model_name or ''})".strip(),
+            leave=False,
+            ascii=True,
+            log_fn=_log_progress_line,  
+            mininterval=1.0,             # optional: don't spam too often
+        )
+    else:
+        iter_groups = group_iter
+
+    dropped_groups = 0
+    
+    for gi, (gid, g) in enumerate(iter_groups, start=1):
+        
+        # after finishing this group:
+        _p(0.1 + 0.8 * (gi + 1) / n_groups)
+        
+        if stop_check and stop_check():
+            raise InterruptedError("Sequence generation aborted.")
+        # If tqdm is present, keep vlog quieter; if not, use your previous pattern
+        if not use_tqdm:
+            if verbose and (gi == 1 or gi % log_every == 0 or gi == n_groups):
+                vlog(
+                    f"[Future] Processing group {gi}/{n_groups} gid={gid!r}",
+                    verbose=verbose,
+                    level=2,
+                    logger=logger,
+                )
+            else:
+                vlog(
+                    f"[Future] Proc.subset group {gi}/{n_groups} gid={gid!r}",
+                    verbose=verbose,
+                    level=6,
+                    logger=logger,
+                )
+        # 1) History rows (must exist in data)
+        hist_rows = _rows_for_times(hist_times, g)
+        if hist_rows is None:
+            dropped_groups += 1
+            if verbose >= 2:
+                vlog(
+                    f"[Future] Dropping group {gid!r}: incomplete history "
+                    f"for times={hist_times.tolist()}.",
+                    verbose=verbose,
+                    level=2,
+                    logger=logger,
+                )
+            continue
+
+        # 2) Future rows: data-driven or synthetic
+        if using_synthetic_future:
+            fut_rows = _build_synthetic_future_rows(hist_rows, fut_times)
+        else:
+            fut_rows = _rows_for_times(fut_times, g)
+            if fut_rows is None:
+                dropped_groups += 1
+                if verbose >= 2:
+                    vlog(
+                        f"[Future] Dropping group {gid!r}: incomplete future "
+                        f"for times={fut_times.tolist()} in data-driven mode.",
+                        verbose=verbose,
+                        level=2,
+                        logger=logger,
+                    )
+                continue
+
+        # Dynamic features: history only
+        if dyn_cols:
+            dyn_seq = np.stack(
+                [row[dyn_cols].to_numpy(dtype=np.float32) for row in hist_rows],
+                axis=0,
+            )
+        else:
+            dyn_seq = np.zeros((len(hist_rows), 0), dtype=np.float32)
+
+        # Future features
+        if fut_cols:
+            if is_tft_like:
+                rows_for_future = hist_rows + fut_rows
+            else:
+                rows_for_future = fut_rows
+            fut_seq = np.stack(
+                [row[fut_cols].to_numpy(dtype=np.float32) for row in rows_for_future],
+                axis=0,
+            )
+        else:
+            T_fut = len(hist_rows) + len(fut_rows) if is_tft_like else len(fut_rows)
+            fut_seq = np.zeros((T_fut, 0), dtype=np.float32)
+
+        # Coords for horizon (t, lon, lat)
+        t_vals = []
+        for row in fut_rows:
+            if time_col_num is not None and time_col_num in row.index:
+                t_vals.append(row[time_col_num])
+            else:
+                t_vals.append(row[time_col])
+        t_vals = np.array(t_vals, dtype=np.float32)
+        lon_vals = np.array([row[lon_col] for row in fut_rows], dtype=np.float32)
+        lat_vals = np.array([row[lat_col] for row in fut_rows], dtype=np.float32)
+        coords = np.stack([t_vals, lon_vals, lat_vals], axis=-1)
+
+        # H_field over horizon
+        if h_field_col is not None and h_field_col in g.columns:
+            h_vals = np.array(
+                [row[h_field_col] for row in fut_rows],
+                dtype=np.float32,
+            )
+        else:
+            h_vals = np.zeros(len(fut_rows), dtype=np.float32)
+        H_seq = h_vals.reshape(-1, 1)
+
+        # Static features (one vector per group)
+        if static_cols:
+            static_vec = hist_rows[0][static_cols].to_numpy(dtype=np.float32)
+        else:
+            static_vec = np.zeros(0, dtype=np.float32)
+
+        # Targets over horizon
+        if using_synthetic_future:
+            subs_vals = np.full(len(fut_rows), np.nan, dtype=np.float32)
+            gwl_vals = np.full(len(fut_rows), np.nan, dtype=np.float32)
+        else:
+            if subs_col is not None and subs_col in g.columns:
+                subs_vals = np.array(
+                    [row[subs_col] for row in fut_rows],
+                    dtype=np.float32,
+                )
+            else:
+                subs_vals = np.full(len(fut_rows), np.nan, dtype=np.float32)
+
+            if gwl_col is not None and gwl_col in g.columns:
+                gwl_vals = np.array(
+                    [row[gwl_col] for row in fut_rows],
+                    dtype=np.float32,
+                )
+            else:
+                gwl_vals = np.full(len(fut_rows), np.nan, dtype=np.float32)
+
+        subs_seq = subs_vals.reshape(-1, 1)
+        gwl_seq = gwl_vals.reshape(-1, 1)
+
+        coords_list.append(coords)
+        dyn_list.append(dyn_seq)
+        fut_list.append(fut_seq)
+        static_list.append(static_vec)
+        H_list.append(H_seq)
+        subs_target_list.append(subs_seq)
+        gwl_target_list.append(gwl_seq)
+
+    if not coords_list:
+        raise ValueError(
+            "build_future_sequences_npz: no valid groups with complete "
+            "history window (and future, if required)."
+        )
+
+    if dropped_groups and verbose:
+        vlog(
+            f"[Future] Dropped {dropped_groups} group(s) due to incomplete "
+            "history/future windows.",
+            verbose=verbose,
+            level=1,
+            logger=logger,
+        )
+
+    # ------------------------------------------------------------------
+    # Stack and save
+    # ------------------------------------------------------------------
+    coords_arr = np.stack(coords_list, axis=0)
+    dyn_arr = np.stack(dyn_list, axis=0)
+    fut_arr = np.stack(fut_list, axis=0)
+    static_arr = np.stack(static_list, axis=0)
+    H_arr = np.stack(H_list, axis=0)
+    subs_targets_arr = np.stack(subs_target_list, axis=0)
+    gwl_targets_arr = np.stack(gwl_target_list, axis=0)
+
+    # --------------------------------------------------------------
+    # Normalize coords exactly like Stage-1 (if requested)
+    # coords_arr shape: (N, H, 3) with order [t, x, y]
+    # --------------------------------------------------------------
+    if normalize_coords:
+        coords_flat = coords_arr.reshape(-1, 3).astype(np.float32, copy=False)
+        if not np.isfinite(coords_flat).all():
+            raise ValueError(
+                "build_future_sequences_npz: coords contain non-finite values; "
+                "cannot apply coord_scaler.transform()."
+            )
+        coords_flat = coord_scaler.transform(coords_flat)
+        coords_arr = coords_flat.reshape(coords_arr.shape).astype(np.float32, copy=False)
+    else:
+        coords_arr = coords_arr.astype(np.float32, copy=False)
+
+    future_inputs_np = {
+        "coords": coords_arr,
+        "dynamic_features": dyn_arr,
+        "static_features": static_arr,
+        "future_features": fut_arr,
+        "H_field": H_arr,
+    }
+    future_targets_np = {
+        "subsidence": subs_targets_arr,
+        "gwl": gwl_targets_arr,
+    }
+
+    os.makedirs(artifacts_dir, exist_ok=True)
+    future_inputs_npz = os.path.join(artifacts_dir, f"{prefix}_inputs.npz")
+    future_targets_npz = os.path.join(artifacts_dir, f"{prefix}_targets.npz")
+
+    _save_npz(future_inputs_npz, future_inputs_np)
+    _save_npz(future_targets_npz, future_targets_np)
+
+    if verbose:
+        vlog(
+            "[Future] Step 3/3: NPZs saved.\n"
+            f"  inputs : {future_inputs_npz}\n"
+            f"  targets: {future_targets_npz}\n"
+            f"  mode   : {eff_future_mode}"
+            + (" (synthetic future targets=NaN)"
+               if using_synthetic_future else ""),
+            verbose=verbose,
+            level=1,
+            logger=logger,
+        )
+    # After saving NPZs:
+    _p(1.0)
+    
+    return {
+        f"{prefix}_inputs_npz": future_inputs_npz,
+        f"{prefix}_targets_npz": future_targets_npz,
+    }
+
+
 
 @isdf 
 def check_sequence_feasibility(
@@ -196,13 +1017,14 @@ def check_sequence_feasibility(
         longest = int(sizes.max()) if not sizes.empty else 0
         msg = (
             "No group is long enough to create any sequence.\n"
-            f"Each trajectory needs ≥ {min_len} consecutive records "
+            f"Each trajectory needs >= {min_len} consecutive records "
             f"(time_steps={time_steps}, horizon={forecast_horizon}), "
             f"but the longest has only {longest}.\n"
-            "→ Reduce `time_steps` / `forecast_horizon`, "
+            "-> Reduce `time_steps` / `forecast_horizon`, "
             "or supply more data."
         )
-        _v("❌ " + msg.splitlines()[0], lvl=1)
+        # _v("❌ " + msg.splitlines()[0], lvl=1)
+        _v("" + msg.splitlines()[0], lvl=1)
 
         if error == "raise":
             raise SequenceGeneratorError(msg)
@@ -210,7 +1032,8 @@ def check_sequence_feasibility(
             warnings.warn(msg, UserWarning, stacklevel=2)
         return False, counts
 
-    _v(f"✅ Feasible: {total_sequences} sequences possible.", lvl=1)
+    # _v(rf"✅ Feasible: {total_sequences} sequences possible.", lvl=1)
+    _v(f" Feasible: {total_sequences} sequences possible.", lvl=1)
     return True, counts
 
 def _sequence_counts_fast(
@@ -252,6 +1075,7 @@ def _sequence_counts_loop(
     sizes = pd.Series(sizes_dict)
     return total_sequences, counts, sizes
 
+@isdf
 def get_sequence_counts(
     df: pd.DataFrame,
     *,
@@ -284,7 +1108,8 @@ def get_sequence_counts(
         try:
             import pyarrow  # noqa: F401
         except ImportError:  # ⇢ graceful fallback
-            _v("⚠️  pyarrow not installed — reverting to 'vectorized'.", lvl=1)
+            # _v("⚠  pyarrow not installed — reverting to 'vectorized'.", lvl=1)
+            _v("  pyarrow not installed — reverting to 'vectorized'.", lvl=1)
             engine = "vectorized"
 
     if engine == "pyarrow":
@@ -315,7 +1140,7 @@ def get_sequence_counts(
             size_str = sizes[g_key]
             _v(
                 f"Group {g_key if g_key is not None else '<whole>'}: "
-                f"{size_str} pts → {n_seq} seq.",
+                f"{size_str} pts -> {n_seq} seq.",
                 lvl=2,
             )
 

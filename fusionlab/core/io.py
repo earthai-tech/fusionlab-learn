@@ -839,6 +839,8 @@ def read_data(
     delimiter: Optional[str] = None, 
     columns: Optional[List[str]] = None,
     npz_objkey: Optional[str] = None, 
+    logger: Optional[Callable[[str], None]] = None,
+    progress_hook: Optional[Callable[[float, str], None]] = None,
     verbose: bool = False, 
     **read_kws
 ) -> DataFrame:
@@ -900,7 +902,17 @@ def read_data(
         file contains multiple arrays, `npz_objkey` specifies which array 
         to load. Defaults to `'arr_0'` if not provided. This parameter is 
         essential when dealing with `.npz` files that store multiple datasets.
+    logger : callable, optional
+        Optional logger ``f(msg: str) -> None`` used for status messages.
+        If not provided, messages are printed to stdout when ``verbose``
+        is True. If both ``verbose=False`` and ``logger is None``, no
+        log messages are emitted.
     
+    progress_hook : callable, optional
+        Optional callback ``f(fraction: float, message: str) -> None``
+        used to report progress in the range [0, 1]. Designed for GUI
+        progress bars. If not provided, no progress updates are emitted.
+
     verbose : bool, default=False
         If `True`, outputs additional messages to inform the user about 
         the data reading and sanitization processes. Useful for debugging 
@@ -989,18 +1001,51 @@ def read_data(
     .. [3] Pandas Development Team. (2023). *pandas documentation*. 
            https://pandas.pydata.org/pandas-docs/stable/
     """
+    # --------------------------------------------------------------
+    # Logging & progress helpers
+    # --------------------------------------------------------------
+    def _log(msg: str) -> None:
+        """Internal logger that respects verbose + custom logger."""
+        if logger is not None:
+            try:
+                logger(msg)
+            except Exception:
+                # Never crash on logger failure
+                pass
+        elif verbose:
+            print(msg, flush=True)
+
+    def _progress(frac: float, msg: str) -> None:
+        """Internal progress reporter mapped to [0, 1]."""
+        if progress_hook is None:
+            return
+        try:
+            f_val = max(0.0, min(1.0, float(frac)))
+        except Exception:
+            f_val = 0.0
+        try:
+            progress_hook(f_val, msg)
+        except Exception:
+            # Never crash on GUI callback failure
+            pass
+
+    _progress(0.0, "Initialising data reader…")
  
     def min_sanitizer(d: DataFrame) -> DataFrame:
         """Apply a minimum sanitization to the data `d`."""
-        return to_numeric_dtypes(
-            d, sanitize_columns=True, 
-            drop_nan_columns=True, 
-            reset_index=reset_index, 
-            verbose=verbose, 
-            fill_pattern='_', 
-            drop_index=True
+        _progress(0.9, "Sanitizing dataset…")
+        out = to_numeric_dtypes(
+            d,
+            sanitize_columns=True,
+            drop_nan_columns=True,
+            reset_index=reset_index,
+            verbose=verbose,
+            fill_pattern="_",
+            drop_index=True,
         )
-    
+        _progress(1.0, "Dataset loaded and sanitized.")
+        return out
+
     def _check_readable_file(f_path: str) -> str:
         """Validate the file path or URL and return the cleaned file path."""
         msg = (
@@ -1018,14 +1063,18 @@ def read_data(
         return f_path
     
     # Handle specific file extensions before using Pandas parsers
+    _progress(0.05, "Inspecting input type…")
+    # Handle specific file extensions before using Pandas parsers
     if isinstance(f, str) and os.path.splitext(f)[1].lower() in (
             '.txt', '.npy', '.npz'):
+        _log(f"Loading special file type: {os.path.splitext(f)[1].lower()}")
         f = save_or_load(
             f, 
             task='load', 
             comments=comments, 
             delimiter=delimiter
         )
+        _progress(0.4, "Converted binary/text input to DataFrame.")
         # If the file is a .npz archive, extract the specified object
         if isinstance(f, np.lib.npyio.NpzFile):
             npz_objkey = npz_objkey or "arr_0"
@@ -1079,55 +1128,122 @@ def read_data(
         
         return f 
     
-    # Initialize the PandasDataHandlers to get available parsers
+    # --------------------------------------------------------------
+    # Dispatch to Pandas parsers
+    # --------------------------------------------------------------
     data_handlers = PandasDataHandlers()
     parsers = data_handlers.parsers
-    
+
     # Validate the file path or URL
     f = _check_readable_file(f)
-    
+    _progress(0.1, "Validating data source…")
+
     # Extract the file extension
     _, ex = os.path.splitext(f)
-    
+    ex = ex.lower()
+
     # Check if the file extension is supported
-    if ex.lower() not in parsers:
-        supported = ', '.join(parsers.keys())
+    if ex not in parsers:
+        supported = ", ".join(parsers.keys())
         raise TypeError(
             f"Unsupported file extension '{ex}'. Supported"
             f" extensions are: {supported}."
         )
-    
-    # Retrieve the appropriate Pandas parser function
-    parser_func = parsers[ex.lower()]
-    
-    # Filter the read_kws to include only valid kwargs for the parser function
+
+    parser_func = parsers[ex]
     valid_read_kws = _get_valid_kwargs(parser_func, read_kws)
-    
-    # Warn the user if there are any invalid kwargs
+
     if len(valid_read_kws) < len(read_kws):
         invalid_keys = set(read_kws.keys()) - set(valid_read_kws.keys())
         warnings.warn(
             f"Ignoring invalid keyword arguments for {parser_func.__name__}: "
             f"{', '.join(invalid_keys)}"
         )
-    
-    try:
-        # Attempt to parse the file using the filtered kwargs
-        f = parser_func(f, **valid_read_kws)
-    except FileNotFoundError:
-        raise FileNotFoundError(
-            f"No such file in directory: {os.path.basename(f)!r}"
-        )
-    except Exception as e:
-        # Catch all other exceptions and raise a custom error with details
-        raise FileHandlingError(
-            f"Cannot parse the file: {os.path.basename(f)!r}. Error: {str(e)}"
-        )
-    
+
+    # Small helper for counting lines (for local files)
+    def _count_lines(path: str) -> int:
+        try:
+            with open(path, "rb") as fh:
+                return sum(1 for _ in fh)
+        except Exception:
+            return 0
+
+    # ---- Special branch: CSV/TXT + progress_hook → chunked read ----
+    if ex in (".csv", ".txt") and progress_hook is not None:
+        _log(f"Reading {ex} file with chunked progress…")
+        _progress(0.15, "Analysing file size for progress…")
+
+        n_lines = _count_lines(str(f))
+        # Rough estimate of data rows (minus one header line if present)
+        header = valid_read_kws.get("header", "infer")
+        if header in ("infer", 0):
+            n_rows_total = max(n_lines - 1, 1)
+        else:
+            n_rows_total = max(n_lines, 1)
+
+        chunk_size = int(valid_read_kws.pop("chunksize", 200_000))
+
+        try:
+            # TextFileReader yielding DataFrame chunks
+            reader = parser_func(
+                f,
+                chunksize=chunk_size,
+                **valid_read_kws,
+            )
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                f"No such file in directory: {os.path.basename(f)!r}"
+            )
+        except Exception as e:
+            raise FileHandlingError(
+                f"Cannot parse the file: {os.path.basename(f)!r}. "
+                f"Error: {str(e)}"
+            )
+
+        chunks = []
+        rows_seen = 0
+        _progress(0.25, "Streaming dataset chunks…")
+
+        for chunk in reader:
+            chunks.append(chunk)
+            rows_seen += len(chunk)
+            if n_rows_total > 0:
+                frac_rows = min(rows_seen / n_rows_total, 1.0)
+            else:
+                frac_rows = 1.0
+            # Map row coverage into [0.25, 0.85]
+            frac = 0.25 + 0.60 * frac_rows
+            _progress(frac, f"Loading dataset… {rows_seen:,} / {n_rows_total:,} rows")
+
+        if chunks:
+            f = pd.concat(chunks, ignore_index=True)
+        else:
+            f = pd.DataFrame()
+
+        _log(f"Finished reading {rows_seen} rows from {os.path.basename(str(f))}")
+        _progress(0.88, "Dataset fully loaded into memory.")
+    else:
+        # ---- Default branch: single-shot Pandas read_* ----
+        _log(f"Reading file with {parser_func.__name__}…")
+        _progress(0.3, "Reading dataset with Pandas…")
+        try:
+            f = parser_func(f, **valid_read_kws)
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                f"No such file in directory: {os.path.basename(f)!r}"
+            )
+        except Exception as e:
+            raise FileHandlingError(
+                f"Cannot parse the file: {os.path.basename(f)!r}. Error: {str(e)}"
+            )
+        _progress(0.8, "Dataset loaded, finalising…")
+
     # Apply sanitization if requested
     if sanitize:
         f = min_sanitizer(f)
-    
+    else:
+        _progress(1.0, "Dataset loaded.")
+
     return f
 
 

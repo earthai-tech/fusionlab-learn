@@ -9,10 +9,10 @@ from pathlib import Path
     
 from fusionlab.registry  import _locate_manifest 
 from fusionlab.utils.deps_utils import get_versions 
-from fusionlab.tools.app.config import SubsConfig 
-from fusionlab.tools.app.processing import DataProcessor, SequenceGenerator 
-from fusionlab.tools.app.modeling import ModelTrainer  
-from fusionlab.tools.app.inference import PredictionPipeline 
+from fusionlab.tools.app.transflow.config import SubsConfig 
+from fusionlab.tools.app.transflow.processing import DataProcessor, SequenceGenerator 
+from fusionlab.tools.app.transflow.modeling import ModelTrainer  
+from fusionlab.tools.app.transflow.inference import PredictionPipeline 
 
 print("\n=== 1) TRAINING WORKFLOW =========================================")
 # 0. scratch directory – every test run is self-contained 

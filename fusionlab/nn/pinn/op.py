@@ -6,6 +6,7 @@
 Physics-Informed Neural Network (PINN) Operations
 and Helpers.
 """
+from __future__ import annotations 
 import os
 import datetime
 
@@ -13,12 +14,16 @@ from typing import Dict, List, Optional, Tuple, Union, Callable
 from typing import Mapping, Sequence
 import collections.abc as cabc
 
+import numpy as np
 import pandas as pd
 
 from ..._fusionlog import fusionlog, OncePerMessageFilter 
 from ...utils.deps_utils import ensure_pkg 
 from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message 
+from ...compat.tf import optional_tf_function 
+
 from .utils import extract_txy_in 
+from .._utils import get_tensor_from 
 
 Model = KERAS_DEPS.Model
 Variable =KERAS_DEPS.Variable 
@@ -31,10 +36,265 @@ tf_name_scope = KERAS_DEPS.name_scope
 tf_float32 =KERAS_DEPS.float32 
 tf_constant = KERAS_DEPS.constant 
 tf_exp =KERAS_DEPS.exp 
+tf_cast = KERAS_DEPS.cast 
+tf_stop_gradient = KERAS_DEPS.stop_gradient 
+tf_reduce_mean = KERAS_DEPS.reduce_mean
+tf_abs = KERAS_DEPS.abs 
+tf_softplus = KERAS_DEPS.softplus 
+tf_zeros_like = KERAS_DEPS.zeros_like 
+tf_reshape =KERAS_DEPS.reshape 
+tf_shape = KERAS_DEPS.shape 
+tf_maximum = KERAS_DEPS.maximum 
+tf_reduce_max = KERAS_DEPS.reduce_max 
+tf_cast = KERAS_DEPS.cast 
+
 
 DEP_MSG = dependency_message('nn.pinn.op') 
 logger = fusionlog().get_fusionlab_logger(__name__)
 logger.addFilter(OncePerMessageFilter())
+
+
+_SMALL = 1e-12
+
+# ---------------------------------------------------------------------
+# Time-units helpers (SI conversion)
+# ---------------------------------------------------------------------
+
+_TIME_UNIT_TO_SECONDS = {
+    # identity / legacy
+    "unitless": 1.0, 
+    "step": 1.0,
+    "index": 1.0,
+
+    # seconds
+    "s": 1.0, 
+    "sec": 1.0,
+    "second": 1.0, 
+    "seconds": 1.0,
+
+    # minutes / hours
+    "min": 60.0, 
+    "minute": 60.0, 
+    "minutes": 60.0,
+    
+    "h": 3600.0, 
+    "hr": 3600.0, 
+    "hour": 3600.0,
+    "hours": 3600.0,
+
+    # days / weeks
+    "day": 86400.0,
+    "days": 86400.0,
+    
+    "week": 7.0 * 86400.0, 
+    "weeks": 7.0 * 86400.0,
+
+    # years/months (mean Gregorian)
+    "year": 31556952.0,
+    "years": 31556952.0, 
+    "yr": 31556952.0,
+    
+    "month": 31556952.0 / 12.0, 
+    "months": 31556952.0 / 12.0,
+}
+
+def _normalize_time_units(u: Optional[str]) -> str:
+    """
+    Normalize a user-provided time unit string to a canonical key.
+
+    Notes
+    -----
+    - We interpret `time_units` as a *time denominator* for rates, e.g.
+      "m/year", "mm/yr", "1/year" all normalize to "year".
+    - The numerator (e.g. "m/" or "mm/") is ignored by design.
+    - Whitespace is ignored and matching is case-insensitive.
+    """
+    if u is None:
+        return "unitless"
+
+    s = str(u).strip().lower().replace(" ", "")
+
+    # If user passes a rate-like unit ("m/year", "mm/yr", "1/year"),
+    # keep only the denominator.
+    if "/" in s:
+        # e.g. "m/year" -> "year", "1/year" -> "year"
+        s = s.split("/", 1)[1]
+
+    # Also accept explicit reciprocal forms without a slash (rare but safe):
+    # e.g. "1year" is not supported; only "1/year" or "1/yr" etc.
+    if s.startswith("1/"):
+        s = s[2:]
+
+    # Common aliases/cleanup (optional but helpful)
+    if s == "secs":
+        s = "sec"
+    elif s == "yrs":
+        s = "yr"
+    elif s == "mins":
+        s = "min"
+    elif s == "hrs":
+        s = "hr"
+
+    return s
+
+
+def seconds_per_time_unit(
+    time_units: Optional[str],
+    dtype=tf_float32,
+) -> Tensor:
+    """
+    Return seconds-per-unit for a given time unit string.
+
+    Examples
+    --------
+    - "year"   -> 31556952.0
+    - "m/year" -> 31556952.0   (rate-like input; denominator parsed)
+    - "sec"    -> 1.0
+    """
+    key = _normalize_time_units(time_units)
+
+    if key not in _TIME_UNIT_TO_SECONDS:
+        supported = sorted(_TIME_UNIT_TO_SECONDS.keys())
+        raise ValueError(
+            f"Unsupported time_units={time_units!r} (normalized={key!r}). "
+            f"Supported keys: {supported}"
+        )
+
+    return tf_constant(float(_TIME_UNIT_TO_SECONDS[key]), dtype=dtype)
+
+
+@optional_tf_function
+def dt_to_seconds(dt: Tensor, time_units: Optional[str]) -> Tensor:
+    """Convert dt (in `time_units`) to seconds."""
+    sec = seconds_per_time_unit(time_units, dtype=dt.dtype)
+    return dt * sec
+
+
+@optional_tf_function
+def rate_to_per_second(dz_dt: Tensor, time_units: Optional[str]) -> Tensor:
+    """Convert derivative w.r.t. `time_units` to derivative per second."""
+    sec = seconds_per_time_unit(time_units, dtype=dz_dt.dtype)
+    return dz_dt / (sec + _SMALL)
+
+
+def positive(x, eps: float = _SMALL):
+    """Softplus positivity with tiny epsilon to avoid exact zeros."""
+    return tf_softplus(x) + eps
+
+def default_scales(
+    s: Tensor,
+    h: Tensor,
+    dt: Tensor,
+    K: Optional[Tensor] = None,
+    Ss: Optional[Tensor] = None,
+    Q: Optional[Tensor] = None,
+    time_units: Optional[str] = "yr",
+    eps: float = 1e-12,
+    *,
+    min_cons_rate: float = 1e-3,
+    min_gw_scale: float = 1e-12,
+    head_scale_floor: float = 1.0,
+) -> Dict[str, Tensor]:
+    """
+    Heuristic, safe defaults for PDE scaling constants c* (m/s) and g* (1/s).
+
+    Key behavior:
+    - Uses both incremental and amplitude-based rates.
+    - Floors c* so it cannot collapse when s(t) is initially flat.
+    - Floors dt_ref so weird dt cannot collapse scales.
+    """
+    if time_units is None:
+        time_units = "yr"
+
+    def _flat(x: Tensor) -> Tensor:
+        return tf_reshape(x, [-1])
+
+    # Ensure expected ranks (B, T, 1)
+    if getattr(s, "shape", None) is not None and s.shape.rank == 2:
+        s = s[:, :, None]
+    if getattr(h, "shape", None) is not None and h.shape.rank == 2:
+        h = h[:, :, None]
+
+    # --- dt reference (seconds) ---
+    dt_sec = dt_to_seconds(dt, time_units=time_units)
+    dt_ref = tf_reduce_mean(tf_abs(_flat(dt_sec)))
+    dt_ref = tf_maximum(
+        dt_ref,
+        tf_cast(seconds_per_time_unit(time_units), dt_ref.dtype),
+    )
+
+    # XXX TODO: In future:
+    # default_scales(...) estimates typical rates using differences 
+    # like s[:,1:] - s[:,:-1]. That is correct only when s is
+    # cumulative (which is your case). 
+    # (for 'rate targets', then default_scales should be 
+    #  extended with a subsidence_kind flag. 
+    # --- consolidation scale c* (m/s) ---
+    ds = s[:, 1:, :] - s[:, :-1, :]
+    ds_abs = tf_abs(_flat(ds))
+    s_abs = tf_abs(_flat(s))
+
+    ds_mean = tf_reduce_mean(ds_abs)
+    s_mean = tf_reduce_mean(s_abs)
+
+    T = tf_shape(s)[1]
+    Tm1 = tf_maximum(T - 1, 1)
+    Tm1_f = tf_cast(Tm1, dt_ref.dtype)
+    dt_total = dt_ref * Tm1_f
+
+    rate_inc = ds_mean / dt_ref
+    rate_amp = s_mean / dt_total
+
+    rate_inc_max = tf_reduce_max(ds_abs) / dt_ref
+    rate_amp_max = tf_reduce_max(s_abs) / dt_total
+
+    cons_scale = tf_maximum(
+        tf_maximum(rate_inc, rate_amp),
+        0.1 * tf_maximum(rate_inc_max, rate_amp_max),
+    )
+
+    cons_floor = rate_to_per_second(
+        tf_cast(min_cons_rate, cons_scale.dtype),
+        time_units=time_units,
+    )
+    cons_scale = tf_maximum(cons_scale, cons_floor)
+    cons_scale = tf_maximum(cons_scale, tf_cast(eps, cons_scale.dtype))
+
+    # --- groundwater scale g* (1/s) ---
+    dh = h[:, 1:, :] - h[:, :-1, :]
+    dh_abs = tf_abs(_flat(dh))
+    h_abs = tf_abs(_flat(h))
+
+    dh_mean = tf_reduce_mean(dh_abs)
+    h_mean = tf_reduce_mean(h_abs)
+
+    dh_dt_inc = dh_mean / dt_ref
+    dh_dt_amp = h_mean / dt_total
+    dh_dt_ref = tf_maximum(dh_dt_inc, dh_dt_amp)
+
+    head_scale = tf_maximum(
+        h_mean,
+        tf_cast(head_scale_floor, dh_dt_ref.dtype),
+    )
+
+    if Ss is not None:
+        Ss_ref = tf_reduce_mean(tf_abs(_flat(Ss)))
+    else:
+        Ss_ref = 1.0 / head_scale
+
+    gw_scale_1 = Ss_ref * dh_dt_ref
+    gw_scale_2 = dh_dt_ref / head_scale
+    gw_scale = tf_maximum(gw_scale_1, gw_scale_2)
+    gw_scale = tf_maximum(gw_scale, tf_cast(min_gw_scale, gw_scale.dtype))
+    gw_scale = tf_maximum(gw_scale, tf_cast(eps, gw_scale.dtype))
+
+    return {"cons_scale": cons_scale, "gw_scale": gw_scale}
+
+
+@optional_tf_function
+def scale_residual(residual, scale):
+    """Safely nondimensionalize a residual by its scale."""
+    return residual / (tf_cast(scale, residual.dtype) + _SMALL)
 
 
 def extract_physical_parameters(
@@ -42,9 +302,14 @@ def extract_physical_parameters(
     to_csv: bool = False,
     filename: Optional[str] = None,
     save_dir: Optional[str] = None,
+    model_name: Optional[str] = None, 
+    inputs: dict | list | None = None,     
+    return_fields: bool = False,           
+    field_stat: str = "mean",              
     verbose: int = 0,
+    log_fn =None, 
 ) -> Dict[str, float]:
-    """Extracts physical parameters from a PINN model.
+    r"""Extracts physical parameters from a PINN model.
 
     This function inspects a trained PINN model (like
     TransFlowSubsNet or PIHALNet) and extracts the final values
@@ -66,6 +331,11 @@ def extract_physical_parameters(
     save_dir : str, optional
         Directory to save the CSV file. Defaults to the current
         working directory.
+    model_name : str, optional
+        The name of the model to determine which parameters to
+        extract.
+        - 'geoprior' or 'geopriorsubsnet': Extracts mv, kappa, etc.
+        - None or other: Extracts K, Ss, Q, C (old model).
     verbose : int, default=0
         Controls the verbosity of the output. Set to 1 to print
         the extracted parameters to the console.
@@ -82,6 +352,15 @@ def extract_physical_parameters(
     physical parameters. For example, it will only extract the
     consolidation coefficient 'C' from a `PIHALNet` model
     without raising an error for missing `K`, `Ss`, or `Q`.
+    
+    For GeoPrior/GeoPriorSubsNet:
+        
+       - mv, kappa via model.current_mv()/current_kappa()
+         (or log_* / *_fixed fallback)
+       - K, Ss, tau are fields -> if `inputs` is given, 
+         run a forward pass and
+         add summary stats (and optionally the full fields).
+         
 
     See Also
     --------
@@ -103,58 +382,133 @@ def extract_physical_parameters(
     {'Hydraulic_Conductivity_K': 8.5e-05, 'Specific_Storage_Ss': 6e-06, ...}
     """
     params = {}
+    log = log_fn if log_fn is not None else print 
+    
+    
     if verbose:
-        print("Extracting physical parameters from the trained model...")
+        log("Extracting physical parameters from the trained model...")
 
+    def _tofloat(x):
+        try:
+            x = x.numpy()
+        except Exception:
+            pass
+        return float(x) if np.ndim(x) == 0 else x
+    
     # A helper function to print verbose messages
     def _vprint(message):
         if verbose:
             print(message)
 
-    # --- Extract Hydraulic Conductivity (K) ---
-    if hasattr(model, 'log_K'):
-        # Parameter was learnable (stored as log(K))
-        value = tf_exp(model.log_K).numpy()
-        params['Hydraulic_Conductivity_K'] = float(value)
-        _vprint(f"  - Found learnable K: {value:.4e}")
-    elif hasattr(model, 'K'):
-        # Parameter was fixed
-        value = model.K.numpy()
-        params['Hydraulic_Conductivity_K'] = float(value)
-        _vprint(f"  - Found fixed K: {value:.4e}")
+    is_geoprior = (
+        str(model_name or "").lower() in {
+        "geoprior", "geopriorsubsnet"}
+        ) or hasattr(
+            model, "current_mv") and hasattr(model, "current_kappa")
+                      
+    # --- Extract Compressibility (mv) ---
+    if hasattr(model, "current_mv"):
+        val = _tofloat(model.current_mv())
+        params["Compressibility_mv"] = val
+        _vprint(f"  - Found learnable mv (current_mv): {val:.4e}")
+    elif hasattr(model, "log_mv"):
+        val = _tofloat(tf_exp(model.log_mv))
+        params["Compressibility_mv"] = val
+        _vprint(f"  - Found learnable mv (log_mv): {val:.4e}")
+    elif hasattr(model, "_mv_fixed"):
+        val = _tofloat(model._mv_fixed)
+        params["Compressibility_mv"] = val
+        _vprint(f"  - Found fixed mv: {val:.4e}")
+        
+    # --- Extract Consistency Prior (kappa) ----
+    if hasattr(model, "current_kappa"):
+        val = _tofloat(model.current_kappa())
+        params["Consistency_Kappa"] = val
+        _vprint(f"  - - Found learnable kappa (current_kappa): {val:.4e}")
+    elif hasattr(model, "log_kappa"):
+        val = _tofloat(tf_exp(model.log_kappa))
+        params["Consistency_Kappa"] = val
+        _vprint(f"  - - Found learnable kappa (log_kappa): {val:.4e}")
+    elif hasattr(model, "_kappa_fixed"):
+        val = _tofloat(model._kappa_fixed)
+        params["Consistency_Kappa"] = val
+        _vprint(f"  - Found fixed kappa: {val:.4e}")
+        
+    # --- Extract Fixed Constants ---
+    if hasattr(model, 'gamma_w'):
+        value = model.gamma_w.numpy()
+        params['Unit_Weight_Water_gamma_w'] = float(value)
+        _vprint(f"  - Found fixed gamma_w: {value:.4e}")
+        
+    if hasattr(model, 'h_ref'):
+        value = model.h_ref.numpy()
+        params['Reference_Head_h_ref'] = float(value)
+        _vprint(f"  - Found fixed h_ref: {value:.4e}")
+            
+    # ---- GeoPrior fields (K, Ss, tau) ----
+    if is_geoprior and inputs is not None:
+        # Forward pass to obtain field heads; then split to (s,h,K,Ss,tau)
+        outputs = model(inputs, training=False)
+        s_mean, h_mean, K_field, Ss_field, tau_field = model.split_physics_predictions(
+            outputs)
 
-    # --- Extract Specific Storage (Ss) ---
-    if hasattr(model, 'log_Ss'):
-        # Parameter was learnable (stored as log(Ss))
-        value = tf_exp(model.log_Ss).numpy()
-        params['Specific_Storage_Ss'] = float(value)
-        _vprint(f"  - Found learnable Ss: {value:.4e}")
-    elif hasattr(model, 'Ss'):
-        # Parameter was fixed
-        value = model.Ss.numpy()
-        params['Specific_Storage_Ss'] = float(value)
-        _vprint(f"  - Found fixed Ss: {value:.4e}")
+        # Summary stat (keep minimal: mean | min | max)
+        reducer = {"mean": tf_reduce_mean}.get(field_stat, tf_reduce_mean)
 
-    # --- Extract Source/Sink Term (Q) ---
-    if hasattr(model, 'Q'):
-        q_param = model.Q
-        value = q_param.numpy()
-        params['Source_Sink_Q'] = float(value)
-        if isinstance(q_param, Variable):
-            _vprint(f"  - Found learnable Q: {value:.4e}")
-        else:
-            _vprint(f"  - Found fixed Q: {value:.4e}")
+        params[f"Hydraulic_Conductivity_K_{field_stat}"] = _tofloat(reducer(K_field))
+        params[f"Specific_Storage_Ss_{field_stat}"] = _tofloat(reducer(Ss_field))
+        params[f"Relaxation_Time_tau_{field_stat}"] = _tofloat(reducer(tau_field))
 
-    # --- Extract Consolidation Coefficient (C) ---
-    # Using a getter method is robust if the model defines it
-    if hasattr(model, 'get_pinn_coefficient_C'):
-        value = model.get_pinn_coefficient_C().numpy()
-        params['Consolidation_Coefficient_C'] = float(value)
-        # Check for the underlying log variable to confirm learnability
-        if hasattr(model, 'log_C_coefficient'):
-             _vprint(f"  - Found learnable C: {value:.4e}")
-        else:
-             _vprint(f"  - Found fixed C: {value:.4e}")
+        if return_fields:
+            params["K_field"] = _tofloat(K_field)
+            params["Ss_field"] = _tofloat(Ss_field)
+            params["tau_field"] = _tofloat(tau_field)
+    else:
+        
+        # --- Extract Hydraulic Conductivity (K) ---
+        if hasattr(model, 'log_K'):
+            # Parameter was learnable (stored as log(K))
+            value = tf_exp(model.log_K).numpy()
+            params['Hydraulic_Conductivity_K'] = float(value)
+            _vprint(f"  - Found learnable K: {value:.4e}")
+        elif hasattr(model, 'K'):
+            # Parameter was fixed
+            value = model.K.numpy()
+            params['Hydraulic_Conductivity_K'] = float(value)
+            _vprint(f"  - Found fixed K: {value:.4e}")
+    
+        # --- Extract Specific Storage (Ss) ---
+        if hasattr(model, 'log_Ss'):
+            # Parameter was learnable (stored as log(Ss))
+            value = tf_exp(model.log_Ss).numpy()
+            params['Specific_Storage_Ss'] = float(value)
+            _vprint(f"  - Found learnable Ss: {value:.4e}")
+        elif hasattr(model, 'Ss'):
+            # Parameter was fixed
+            value = model.Ss.numpy()
+            params['Specific_Storage_Ss'] = float(value)
+            _vprint(f"  - Found fixed Ss: {value:.4e}")
+    
+        # --- Extract Source/Sink Term (Q) ---
+        if hasattr(model, 'Q'):
+            q_param = model.Q
+            value = q_param.numpy()
+            params['Source_Sink_Q'] = float(value)
+            if isinstance(q_param, Variable):
+                _vprint(f"  - Found learnable Q: {value:.4e}")
+            else:
+                _vprint(f"  - Found fixed Q: {value:.4e}")
+    
+        # --- Extract Consolidation Coefficient (C) ---
+        # Using a getter method is robust if the model defines it
+        if hasattr(model, 'get_pinn_coefficient_C'):
+            value = model.get_pinn_coefficient_C().numpy()
+            params['Consolidation_Coefficient_C'] = float(value)
+            # Check for the underlying log variable to confirm learnability
+            if hasattr(model, 'log_C_coefficient'):
+                 _vprint(f"  - Found learnable C: {value:.4e}")
+            else:
+                 _vprint(f"  - Found fixed C: {value:.4e}")
 
     # --- Handle CSV Export ---
     if to_csv or filename:
@@ -176,7 +530,7 @@ def extract_physical_parameters(
                 print("\nSuccessfully exported parameters to:"
                       f" {os.path.abspath(save_path)}")
         except IOError as e:
-            print(f"\nError: Could not write to file at {save_path}."
+            log(f"\nError: Could not write to file at {save_path}."
                   " Please check permissions.")
             raise e
 
@@ -189,7 +543,7 @@ def compute_consolidation_residual(
     C: Union[float, Tensor], 
     eps: float  = 1e-5
 ) -> Tensor:
-    """
+    r"""
     Computes the residual of a simplified consolidation equation.
 
     This function enforces a simplified form of Terzaghi's 1D
@@ -309,7 +663,7 @@ def compute_gw_flow_residual(
     Q: Union[float, Tensor] = 0.0,
     h_pred: Optional[Tensor] = None
 ) -> Tensor:
-    """
+    r"""
     Compute the residual of the 2D transient groundwater
     flow equation via PINN.
 
@@ -409,7 +763,8 @@ def compute_gw_flow_residual(
     del tape, inner_tape
     if d2h_dx2 is None or d2h_dy2 is None:
         raise ValueError(
-                "Failed to compute one or more second-order spatial gradients."
+                "Failed to compute one or more"
+                " second-order spatial gradients."
         )
 
     # Laplacian and residual
@@ -419,15 +774,19 @@ def compute_gw_flow_residual(
     residual = (K * lap_h) + Q - (Ss * dh_dt)
     return residual
 
+
 def process_pinn_inputs(
     inputs: Union[Dict[str, Optional[Tensor]], List[Optional[Tensor]]],
     mode: str = 'as_dict',
     coord_keys: Tuple[str, str, str] = ('t', 'x', 'y'),
     coord_slice_map: Dict[str, int] = {'t': 0, 'x': 1, 'y': 2},
+    model_name: Optional[str] = None, 
+    h_field_key: Optional[str] = None  
 ) -> Tuple[
-    Tensor, Tensor, Tensor, Optional[Tensor], Tensor, Optional[Tensor]
+    Tensor, Tensor, Tensor, Optional[Tensor], Optional[Tensor], 
+    Tensor, Optional[Tensor]
 ]:
-    """
+    r"""
     Processes and unpacks model inputs for PINN applications.
 
     This utility standardizes the handling of inputs for a PINN model,
@@ -461,7 +820,14 @@ def process_pinn_inputs(
         A dictionary mapping coordinate names to their integer index
         in the last dimension of the `coords` tensor. This defines how
         the `coords` tensor is sliced into individual coordinate tensors.
-
+    model_name : str, optional
+        If set to 'geoprior' or 'geopriorsubsnet', the function will
+        actively search for and return the `H_field` tensor.
+    h_field_key : str, optional
+        Explicit key for the soil thickness tensor. If None (default)
+        and `model_name` is 'geoprior', it will search for
+        'H_field' or 'soil_thickness'.
+        
     Returns
     -------
     Tuple[Tensor, Tensor, Tensor, Optional[Tensor], Tensor, Optional[Tensor]]
@@ -507,8 +873,12 @@ def process_pinn_inputs(
     static_features: Optional[Tensor] = None
     dynamic_features: Optional[Tensor] = None
     future_features: Optional[Tensor] = None
+    H_field: Optional[Tensor] = None 
     
-    # 0 — auto-detect the mode if requested
+    # --- NEW: Check model type ---
+    is_geoprior = str(model_name).lower().strip() in (
+        'geoprior', 'geopriorsubsnet')
+    
     if mode == "auto":
         mode = infer_pinn_mode(inputs)
 
@@ -518,7 +888,7 @@ def process_pinn_inputs(
                 f"Expected `inputs` to be a dictionary for mode='as_dict',"
                 f" but got {type(inputs)}."
             )
-        # Required inputs for dictionary mode
+        # Required inputs
         coords_tensor = inputs.get('coords')
         dynamic_features = inputs.get('dynamic_features')
         if coords_tensor is None or dynamic_features is None:
@@ -529,7 +899,24 @@ def process_pinn_inputs(
         # Optional inputs
         static_features = inputs.get('static_features')
         future_features = inputs.get('future_features')
-
+        
+        # --- NEW: Conditional Check for H_field ---
+        if is_geoprior:
+            if h_field_key:
+                H_field = inputs.get(h_field_key)
+            else:
+                # Use default keys if no explicit key is given
+                H_field = get_tensor_from (inputs,'H_field','soil_thickness')
+                
+                # H_field = inputs.get('H_field') is not None or inputs.get('soil_thickness')
+            
+            if H_field is None:
+                raise ValueError(
+                    f"model='{model_name}' requires an 'H_field' input, "
+                    "but could not find key 'H_field', 'soil_thickness', "
+                    f"or the provided `h_field_key` ('{h_field_key}')."
+                )
+      
     elif mode == 'as_list':
         if not isinstance(inputs, (list, tuple)):
             raise TypeError(
@@ -544,28 +931,49 @@ def process_pinn_inputs(
                 f"Got {num_inputs} elements."
             )
         # Unpack based on the defined order
+        # [coords, dynamic, static, future, H]
         coords_tensor = inputs[0]
-        static_features = inputs[1] if num_inputs > 2 else None
-        dynamic_features = inputs[2]
+        dynamic_features = inputs[1] # Required
+        static_features = inputs[2] if num_inputs > 2 else None
         future_features = inputs[3] if num_inputs > 3 else None
+        
+        # --- NEW: Conditional Check for H_field ---
+        if is_geoprior:
+            if num_inputs > 4:
+                H_field = inputs[4]
+            if H_field is None:
+                raise ValueError(
+                    f"model='{model_name}' requires H_field as the 5th "
+                    "element in the input list, but it was missing or None."
+                )
+        # --- End New Logic ---
 
     else:
         raise ValueError(
-            f"Invalid `mode`: '{mode}'. Must be 'as_dict' or 'as_list'."
+            f"Invalid `mode`: '{mode}'. Must be 'as_dict', 'as_list', or 'auto'."
         )
 
-    # Slice the coordinates tensor to isolate t, x, and y
-    # Keep the last dimension for concatenation or broadcasting later.
+    # Slice the coordinates tensor
     t = coords_tensor[..., coord_slice_map['t']:coord_slice_map['t']+1]
     x = coords_tensor[..., coord_slice_map['x']:coord_slice_map['x']+1]
     y = coords_tensor[..., coord_slice_map['y']:coord_slice_map['y']+1]
 
-    return (
-        t, x, y,
-        static_features,
-        dynamic_features,
-        future_features
-    )
+    if is_geoprior:
+        return (
+            t, x, y,
+            H_field, 
+            static_features,
+            dynamic_features,
+            future_features
+        )
+    else:
+        return (
+            t, x, y,
+            static_features,
+            dynamic_features,
+            future_features
+        )
+    
 
 def infer_pinn_mode(
     inputs: Union[
@@ -579,7 +987,7 @@ def infer_pinn_mode(
     Parameters
     ----------
     inputs :
-        * **Mapping**  – a dict-like object whose *values* are tensors
+        * **Mapping** – a dict-like object whose *values* are tensors
           (e.g. ``{'coords': …, 'dynamic_features': …}``).  
           → returns ``'as_dict'``.
         * **Sequence** – a list **or** tuple whose *items* are tensors
@@ -808,4 +1216,96 @@ def compute_gw_flow_derivatives(
     return dh_dt, d2h_dx2, d2h_dy2
 
 
+
+@optional_tf_function
+def _default_scales(
+    h: Tensor, 
+    s: Tensor, 
+    dt: Tensor, 
+    K: Optional[Tensor] = None, 
+    Ss: Optional[Tensor] = None, 
+    Q: Optional[Union[float, Tensor]] = None, 
+    time_units: Optional[str] = None,
+    **kws
+) -> Dict[str, Tensor]:
+    r"""
+    Derive simple data-driven scale factors so residuals are O(1).
+
+    This function calculates characteristic *scalar* scales for the entire
+    batch by taking the mean of the absolute values of the input tensors
+    (fields). These scalar scales are then used to non-dimensionalize
+    the PDE loss terms, ensuring they are of a similar magnitude (O(1))
+    and preventing any single loss term from dominating the gradient.
+
+    The scales are computed as:
+    .. math::
+        
+        \text{cons\_scale} = \frac{\text{s\_ref}}{\text{dt\_ref}}\\
+            \approx \text{Scale}(\frac{\partial s}{\partial t})
+            
+        \text{gw\_scale} = \frac{\text{Ss\_ref} \cdot \text{h\_ref}}\\
+            {\text{dt\_ref}} \approx \text{Scale}(S_s \frac{\partial h}{\partial t})
+    
+    All reference values (h_ref, s_ref, dt_ref, Ss_ref) are computed
+    using ``tf.stop_gradient`` to treat them as constants during
+    differentiation.
+
+    Parameters
+    ----------
+    h : tf.Tensor
+        Predicted hydraulic head field, shape `(B, H, 1)`.
+    s : tf.Tensor
+        Predicted subsidence field, shape `(B, H, 1)`.
+    dt : tf.Tensor
+        Time step intervals, shape `(B, H-1, 1)` or similar.
+    K : tf.Tensor, optional
+        Predicted hydraulic conductivity field. Currently unused in
+        this function but included for API consistency.
+    Ss : tf.Tensor, optional
+        Predicted specific storage field, shape `(B, H, 1)`.
+    Q : float or tf.Tensor, optional
+        Source/sink term. Currently unused.
+
+    Returns
+    -------
+    dict
+        A dictionary containing the scalar reference values and the
+        computed scales:
+        - "h_ref": Scalar mean of |h|
+        - "s_ref": Scalar mean of |s|
+        - "dt_ref": Scalar mean of |dt|
+        - "gw_scale": Characteristic scale for the groundwater flow residual.
+        - "cons_scale": Characteristic scale for the consolidation residual.
+    """
+    # ---  time-unit normalization for dt ----------------------------
+    time_units = time_units  or kws.get(
+        "time_units", kws.get("time_unit", None))
+
+    # dt passed in is in the same units as coords['t'] → convert to seconds
+    dt_si = dt_to_seconds(dt, time_units)
+
+    # robust refs (stop gradients to keep them 'constants' during backprop)
+    h_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(h)) + _SMALL)
+    s_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(s)) + _SMALL)
+    dt_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(dt_si)) + _SMALL)
+
+    # groundwater residual typical scale ~ Ss * h / dt  (first-order)
+    if Ss is not None:
+        # Get the batch-mean of the Ss field
+        Ss_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(Ss)) + _SMALL)
+        gw_scale = Ss_ref * h_ref / dt_ref
+    else:
+        # Fallback if Ss is not provided (e.g., gw_flow mode disabled)
+        gw_scale = tf_constant(1.0, dtype=tf_float32)
+
+    # consolidation residual typical scale ~ s / dt
+    cons_scale = s_ref / dt_ref
+
+    return {
+        "h_ref": h_ref,
+        "s_ref": s_ref,
+        "dt_ref": dt_ref,  # now in seconds
+        "gw_scale": gw_scale,
+        "cons_scale": cons_scale,
+    }
 

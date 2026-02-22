@@ -26,11 +26,12 @@ from contextlib import suppress
 import numpy as np
 from numpy.typing import ArrayLike
 import pandas as pd
-from numpy.core.numeric import ComplexWarning  
 import scipy.sparse as sp
 from inspect import signature, Parameter, isclass 
 
 from ._array_api import get_namespace, _asarray_with_order
+from ..compat.numpy import ComplexWarning
+
 FLOAT_DTYPES = (np.float64, np.float32, np.float16)
 
 __all__=[
@@ -5718,7 +5719,7 @@ def check_is_fitted(estimator, attributes=None, *, msg=None, all_or_any=all):
     raises a NotFittedError with the given message.
 
     If an estimator does not set any attributes with a trailing underscore, it
-    can define a ``__sklearn_is_fitted__`` or ``__gofast_is_fitted__`` method
+    can define a ``__sklearn_is_fitted__`` or ``__fusionlab_is_fitted__`` method
     returning a boolean to specify if the estimator is fitted or not.
 
     Parameters
@@ -5756,6 +5757,7 @@ def check_is_fitted(estimator, attributes=None, *, msg=None, all_or_any=all):
         If the attributes are not found.
     """
     from ..exceptions import NotFittedError 
+    
     if isclass(estimator):
         raise TypeError("{} is a class, not an instance.".format(estimator))
     if msg is None:
@@ -5773,7 +5775,7 @@ def check_is_fitted(estimator, attributes=None, *, msg=None, all_or_any=all):
         fitted = all_or_any([hasattr(estimator, attr) for attr in attributes])
     elif hasattr(estimator, "__sklearn_is_fitted__"):
         fitted = estimator.__sklearn_is_fitted__()
-    elif hasattr(estimator, "__gofast_is_fitted__"):
+    elif hasattr(estimator, "__fusionlab_is_fitted__"):
         fitted = estimator.__gofast_is_fitted__() 
     else:
         fitted = [

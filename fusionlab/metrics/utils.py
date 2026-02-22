@@ -28,6 +28,8 @@ from ._metrics import (
     prediction_stability_score,
     quantile_calibration_error,
 )
+
+
 def compute_quantile_diagnostics(
     *dfs: Union[ pd.DataFrame, Sequence[pd.DataFrame]],
     target_name: str,
@@ -139,7 +141,6 @@ def compute_quantile_diagnostics(
     >>> 'mean_squared_log_error' in results_custom
     True
     """
-    
     from ..utils.generic_utils import  ( 
         ExistenceChecker,  vlog, insert_affix_in 
     )
@@ -148,6 +149,7 @@ def compute_quantile_diagnostics(
     dfs = are_all_frames_valid (*dfs, ops ='validate')
     # 1. Prepare the DataFrame
     df = pd.concat(list(dfs), axis=1)
+    
     # 2. Validate & sort quantiles
     quantiles_sorted = sorted(
         validate_quantiles(quantiles, dtype=np.float64)
@@ -219,7 +221,8 @@ def compute_quantile_diagnostics(
     )
     # 5. Compute the core quantile diagnostic metrics
     y_true = df[actual_col].values
-    resolved_metrics = _resolve_metrics(metrics, default_set=default_metrics_set)
+    resolved_metrics = _resolve_metrics(
+        metrics, default_set=default_metrics_set)
     y_med = df[median_q_col].values
     
     for metric_name, metric_func in resolved_metrics.items():
@@ -274,7 +277,8 @@ def compute_quantile_diagnostics(
     return results
 
 def _resolve_metrics(
-    metrics: Optional[Union[List[str], List[Callable], Dict[str, Callable]]],
+    metrics: Optional[Union[List[str], List[Callable],
+                            Dict[str, Callable]]],
     default_set: Optional[str] = None
 ) -> Dict[str, Callable]:
     """
@@ -389,3 +393,4 @@ def stack_quantile_predictions(
     # Stack along new axis=1 → (n_samples, 3, n_timesteps)
     y_pred = np.stack([lower, median, upper], axis=1)
     return y_pred
+

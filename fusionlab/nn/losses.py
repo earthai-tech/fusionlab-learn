@@ -30,7 +30,7 @@ tf_reduce_mean=KERAS_DEPS.reduce_mean
 tf_square=KERAS_DEPS.square 
 tf_reshape=KERAS_DEPS.reshape 
 tf_convert_to_tensor=KERAS_DEPS.convert_to_tensor 
-tf_expand_dims=KERAS_DEPS.expand_dims
+tf_expand_dims=KERAS_DEPS.expand_dims 
 tf_maximum=KERAS_DEPS.maximum
 tf_rank=KERAS_DEPS.rank 
 tf_cond =KERAS_DEPS.cond 
@@ -38,6 +38,11 @@ tf_constant =KERAS_DEPS.constant
 tf_equal = KERAS_DEPS.equal 
 tf_cast=KERAS_DEPS.cast 
 tf_zeros_like=KERAS_DEPS.zeros_like
+tf_constant = KERAS_DEPS.constant 
+tf_float32 = KERAS_DEPS.float32 
+tf_reduce_sum = KERAS_DEPS.reduce_sum
+tf_gather = KERAS_DEPS.gather 
+
 register_keras_serializable=KERAS_DEPS.register_keras_serializable
     
 DEP_MSG = dependency_message('nn.losses') 
@@ -53,6 +58,275 @@ __all__ = [
     'objective_loss', 
     'prediction_based_loss'
  ]
+
+@ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)
+def make_weighted_pinball(qs, weights):
+    r"""
+    Weighted quantile (pinball) loss for sequence forecasts.
+
+    This factory returns a Keras-serializable loss that computes a
+    *weighted* pinball score across the quantile axis and then averages
+    over batch and horizon. It accepts common rank patterns and handles
+    broadcasting internally.
+
+    The pinball loss for a single quantile :math:`\\tau \\in (0,1)` and
+    error :math:`e = y - \\hat y` is
+
+    .. math::
+
+        L_\\tau(y, \\hat y) = \\max(\\tau e, (\\tau - 1) e).
+
+    With multiple quantiles :math:`\\{\\tau_q\\}_{q=1}^Q`, a set of
+    non-negative weights :math:`\\{w_q\\}`, and per-horizon predictions,
+    this loss computes a weighted sum along the quantile axis and then
+    reduces the result via mean over remaining axes.
+
+    Parameters
+    ----------
+    qs : sequence of float
+        Quantile levels in the *same order* as the model output's
+        quantile dimension. Length ``Q``. Typical example:
+        ``[0.1, 0.5, 0.9]``.
+
+    weights : dict or sequence of float
+        Per-quantile weights. If a ``dict``, keys are quantile levels
+        (e.g., ``{0.1: 3.0, 0.5: 1.0, 0.9: 3.0}``) and are matched to
+        ``qs`` using a tolerant float comparison (±1e-6). If a sequence,
+        it must have length ``Q`` and correspond *positionally* to
+        ``qs``. Weights are normalized to sum to 1 across the quantile
+        axis before aggregation.
+
+    Returns
+    -------
+    loss_fn : Callable
+        A function ``loss_fn(y_true, y_pred) -> tf.Tensor`` compatible
+        with ``tf.keras.Model.compile(loss=...)``. It returns a scalar
+        mean loss over batch and horizon.
+
+    Shape semantics
+    ---------------
+    Let ``B`` be batch size, ``H`` the forecast horizon, and ``Q`` the
+    number of quantiles.
+
+    * ``y_true`` : ``(B, H)`` or ``(B, H, 1)``
+    * ``y_pred`` : ``(B, H, Q)`` or ``(B, H, Q, 1)``
+
+    The function internally reshapes to
+
+    * ``y_true``  → ``(B, H, 1, 1)``
+    * ``y_pred``  → ``(B, H, Q, 1)``
+    * ``qs``/``weights``  → broadcast to ``(1, 1, Q, 1)``
+
+    and computes a weighted sum along the quantile axis (``Q``), then a
+    mean over ``B`` and ``H``.
+
+    Notes
+    -----
+    * The order of ``qs`` must match the model output order along the
+      quantile axis. If you change the model's quantile ordering, update
+      ``qs`` accordingly.
+    * When ``weights`` is a dict, any quantile in ``qs`` that is not
+      found in the dict (within ±1e-6) defaults to weight 1 before the
+      final weight normalization.
+    * Setting a zero weight for a quantile zeroes its contribution (and
+      its gradient), which can be useful for focusing optimization on
+      tails or the median.
+
+    Examples
+    --------
+    >>> from fusionlab.nn.losses import make_weighted_pinball
+    >>> qs = [0.1, 0.5, 0.9]
+    >>> w  = {0.1: 3.0, 0.5: 1.0, 0.9: 3.0}
+    >>> subs_loss = make_weighted_pinball(qs, w)
+    >>> model.compile(optimizer="adam",
+    ...               loss={"subs_pred": subs_loss, "gwl_pred": "mse"})
+
+    See Also
+    --------
+    pinball_loss
+        Unweighted (equal-weight) pinball loss across quantiles.
+
+    References
+    ----------
+    Koenker, R. and Bassett, G. (1978). Regression quantiles.
+    Econometrica, 46(1):33–50.
+    """
+    # existing implementation unchanged…
+    qs_list = [float(q) for q in list(qs)]
+    def _lookup_weight(q):
+        if isinstance(weights, dict):
+            for k, v in weights.items():
+                if abs(float(k) - q) <= 1e-6:
+                    return float(v)
+            return 1.0
+        else:
+            return None
+
+    if isinstance(weights, dict):
+        w_list = [_lookup_weight(q) for q in qs_list]
+    else:
+        w_list = list(weights)
+
+    qs_tf = tf_constant(qs_list, dtype=tf_float32)  # [Q]
+    w_tf  = tf_constant(w_list, dtype=tf_float32)   # [Q]
+    w_tf  = w_tf / tf_reduce_sum(w_tf)
+
+    @register_keras_serializable("fusionlab.nn.losses",
+                                 name="make_weighted_pinball")
+    def loss_fn(y_true, y_pred):
+        y_true = tf_convert_to_tensor(y_true)
+        y_pred = tf_convert_to_tensor(y_pred)
+
+        # If someone accidentally passed (B,H,Q,O) targets, drop Q.
+        if y_true.shape.rank == 4:
+            y_true = tf_gather(y_true, 0, axis=2)   # -> (B,H,O)
+    
+        # y_true -> (B,H,1)
+        ytrue_rank = tf_rank(y_true)
+        
+        y_true_3 = tf_cond(
+            tf_equal(ytrue_rank, 2),
+            lambda: tf_expand_dims(y_true, axis=-1),  # (B,H)->(B,H,1)
+            lambda: y_true
+        )
+
+        # y_pred -> (B,H,Q,1)
+        ypred_rank = tf_rank(y_pred)
+        y_pred_4 = tf_cond(
+            tf_equal(ypred_rank, 3),
+            lambda: tf_expand_dims(y_pred, axis=-1),  # (B,H,Q)->(B,H,Q,1)
+            lambda: y_pred                             # already (B,H,Q,1)
+        )
+
+        # Broadcast y_true over Q
+        y_true_exp = tf_expand_dims(y_true_3, axis=2)     # (B,H,1,1)
+
+        # Pinball
+        tau = tf_reshape(qs_tf, [1, 1, -1, 1])            # (1,1,Q,1)
+        err = y_true_exp - y_pred_4                       # (B,H,Q,1)
+        pin = tf_maximum(tau * err, (tau - 1.0) * err)    # (B,H,Q,1)
+
+        # Weighted over Q
+        ww  = tf_reshape(w_tf, [1, 1, -1, 1])             # (1,1,Q,1)
+        pin_w = tf_reduce_sum(ww * pin, axis=2)           # (B,H,1)
+
+        # Mean over batch & horizon
+        return tf_reduce_mean(pin_w)
+
+    return loss_fn
+
+
+@ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)
+def pinball_loss(qs: List[float]):
+    r"""
+    Unweighted quantile (pinball) loss for sequence forecasts.
+
+    This factory returns a Keras-serializable loss that computes the
+    *unweighted* pinball score across the quantile axis and averages
+    over batch and horizon. It supports common rank patterns and
+    performs safe broadcasting.
+
+    Given error :math:`e = y - \\hat y` and quantile
+    :math:`\\tau \\in (0,1)`, the loss is
+
+    .. math::
+
+        L_\\tau(y, \\hat y) = \\max(\\tau e, (\\tau - 1) e).
+
+    For multiple quantiles, the loss averages across the quantile axis.
+
+    Parameters
+    ----------
+    qs : sequence of float
+        Quantile levels in the same order as the model output's
+        quantile dimension (length ``Q``), e.g., ``[0.1, 0.5, 0.9]``.
+
+    Returns
+    -------
+    loss : Callable
+        A function ``loss(y_true, y_pred) -> tf.Tensor`` suitable for
+        ``tf.keras.Model.compile``. It returns a scalar mean loss over
+        batch and horizon.
+
+    Shape semantics
+    ---------------
+    Let ``B`` be batch size, ``H`` the forecast horizon, and ``Q`` the
+    number of quantiles.
+
+    * ``y_true`` : ``(B, H)`` or ``(B, H, 1)``
+    * ``y_pred`` : ``(B, H, Q)`` or ``(B, H, Q, 1)``
+
+    Internally, shapes are broadcast so that ``y_true`` aligns with the
+    quantile axis of ``y_pred`` and the pinball score is computed per
+    quantile before being averaged.
+
+    Raises
+    ------
+    ValueError
+        If ``y_pred`` rank is not 3 or 4 (i.e., not ``(B,H,Q)`` nor
+        ``(B,H,Q,1)``).
+
+    Notes
+    -----
+    * If you need to *emphasize* tails or the median, use
+      :func:`make_weighted_pinball` instead and supply per-quantile
+      weights.
+    * The order of ``qs`` must match the model output order along the
+      quantile axis.
+
+    Examples
+    --------
+    >>> from fusionlab.nn.losses import pinball_loss
+    >>> qloss = pinball_loss([0.1, 0.5, 0.9])
+    >>> model.compile(optimizer="adam",
+    ...               loss={"subs_pred": qloss, "gwl_pred": "mse"})
+
+    See Also
+    --------
+    make_weighted_pinball
+        Pinball loss with explicit per-quantile weighting.
+
+    References
+    ----------
+    Koenker, R. and Bassett, G. (1978). Regression quantiles.
+    Econometrica, 46(1):33–50.
+    """
+    # existing implementation unchanged
+    q_base = tf_constant(qs, dtype=tf_float32)  # shape (Q,)
+
+    @register_keras_serializable("fusionlab.nn.losses", name="pinball_loss")
+    def loss(y_true, y_pred):
+        yt = tf_cast(y_true, tf_float32)
+        yp = tf_cast(y_pred, tf_float32)
+
+        # --- Normalize shapes ---
+        # y_pred: either (B,H,Q) or (B,H,Q,1)
+        if yp.shape.rank == 3:
+            # want y_true as (B,H,1) so it broadcasts across Q
+            if yt.shape.rank == 2:               # (B,H) -> (B,H,1)
+                yt = tf_expand_dims(yt, axis=-1)
+            # if yt is already (B,H,1), leave it
+            q = q_base[None, None, :]            # (1,1,Q) -> matches (B,H,Q)
+
+        elif yp.shape.rank == 4:
+            # want y_true as (B,H,1,1) to match (B,H,Q,1)
+            if yt.shape.rank == 2:               # (B,H) -> (B,H,1)
+                yt = tf_expand_dims(yt, axis=-1)
+            if yt.shape.rank == 3:               # (B,H,1) -> (B,H,1,1)
+                yt = tf_expand_dims(yt, axis=2)
+            q = q_base[None, None, :, None]      # (1,1,Q,1) -> matches (B,H,Q,1)
+
+        else:
+            raise ValueError(
+                "y_pred must be rank 3 (B,H,Q) or rank 4 (B,H,Q,1)."
+            )
+
+        # --- Pinball loss ---
+        err = yt - yp
+        pin = tf_maximum(q * err, (q - 1.0) * err)
+        return tf_reduce_mean(pin)
+
+    return loss
 
 @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)
 def objective_loss(

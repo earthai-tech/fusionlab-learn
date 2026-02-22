@@ -7,7 +7,7 @@ import os
 try:
     import tensorflow as tf
     # Import SuperXTFT and its base class XTFT
-    from fusionlab.nn.models._xtft import SuperXTFT, XTFT
+    from fusionlab.nn.models._legacy_xtft import SuperXTFT, XTFT
     # Import necessary components used internally if needed for checks
     from fusionlab.nn.components import (
         VariableSelectionNetwork, GatedResidualNetwork # Min dependencies

@@ -464,9 +464,3 @@ class DaskBackend(BaseBackend):
         raise NotImplementedError("Dask does not directly support 'eig'."
                                   " Requires custom implementation.")
 
-# Example of using the DaskBackend
-if __name__ == "__main__":
-    dask_backend = DaskBackend()
-    # Example usage of Dask array creation
-    x = dask_backend.array([1, 2, 3, 4, 5])
-    print(x.compute())  # Compute the result and print

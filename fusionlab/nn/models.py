@@ -8,7 +8,8 @@ from . import KERAS_BACKEND
 if KERAS_BACKEND:
     from ._base_attentive import BaseAttentive 
     from .hybrid._halnet import HALNet 
-    from .hybrid._xtft import XTFT , SuperXTFT 
+    from .hybrid._xtft import XTFT 
+    from .hybrid._super_xtft import SuperXTFT 
     from .transformers._ts_transformers import TimeSeriesTransformer 
     from .transformers._adj_tft import TFT
     from .transformers._tft import TemporalFusionTransformer, DummyTFT 

@@ -419,7 +419,7 @@ class NNBackend( BaseClass):
         else:
             raise RuntimeError("Unsupported backend.")
 
-    def optimizer(self, name='adam', **kwargs):
+    def optimizer(self, name='adam', model=None, **kwargs):
         """
         Retrieve an optimizer based on the specified name and backend.
         Supports a variety of commonly used optimizers for both TensorFlow 
@@ -484,6 +484,10 @@ class NNBackend( BaseClass):
 
         # PyTorch Optimizers
         elif self.backend == 'pytorch':
+            if model is None and getattr(self, 'model', None) is None:
+                raise RuntimeError(
+                    "Provide model, before creating optimizer."
+                )
             import torch.optim as optim
             pytorch_optimizers = {
                 'adam': optim.Adam,
@@ -942,8 +946,9 @@ class NNBackend( BaseClass):
         calculated manually during training.
         """
         if self.backend == 'tensorflow':
-            from tensorflow.keras.metrics import Metric
-            return Metric(name=name, metric_fn=func)
+            # from tensorflow.keras.metrics import Metric
+            # Metric(name=name, metric_fn=func)
+            return func # expected signature (y_true, y_pred)
         elif self.backend == 'pytorch':
             # In PyTorch, the custom metric function is manually applied 
             # in the training loop.

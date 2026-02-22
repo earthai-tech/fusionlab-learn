@@ -187,6 +187,14 @@ class HelpMeta(type):
 
     MAX_ITEMS_DISPLAY = 5  # Default maximum items to display inline
 
+    # Keras lifecycle hooks: DO NOT wrap these (signature-sensitive in Keras 3)
+    KERAS_RESERVED = {
+        "__init__", "build", "call",
+        "get_config", "from_config", 'compile', "fit", 
+        "evaluate", "predict", 
+        "compute_output_shape", "compute_mask",
+    }
+
     def __new__(mcs, name, bases, namespace):
 
         cls = super(HelpMeta, mcs).__new__(mcs, name, bases, namespace)
@@ -256,7 +264,8 @@ class HelpMeta(type):
             help(obj)
             return NoOutput()  # Suppress 'None' output
         return help_method
-    
+
+
     @classmethod
     def _decorate_method(mcs, method):
         """
@@ -302,11 +311,17 @@ class HelpMeta(type):
             class_wrapper.my_params = DisplayStr(mcs._get_my_params(original_func))
             class_wrapper.help = mcs._create_help(original_func)
             return classmethod(class_wrapper)
-
+        
         # Case 3: If method is a regular instance method (FunctionType)
         elif isinstance(method, FunctionType):
             original_func = method
-
+        
+            # NEW: don't wrap Keras lifecycle methods (keep the original signature)
+            if original_func.__name__ in mcs.KERAS_RESERVED:
+                original_func.my_params = DisplayStr(mcs._get_my_params(original_func))
+                original_func.help = mcs._create_help(original_func)
+                return original_func
+        
             # Check if it's likely a Keras Model's 'call' method
             # A simple check: name is 'call' and first arg after 'self' is 'inputs'
             sig = inspect.signature(original_func)
@@ -316,16 +331,14 @@ class HelpMeta(type):
                 len(params) > 1 and params[0].name == 'self' and
                 params[1].name == 'inputs' # Keras usually expects 'inputs'
             )
-
+        
             if is_keras_model_call:
                 # Create a wrapper that matches Keras's expected call signature
                 @wraps(original_func)
-                def keras_call_wrapper(
-                        self_obj, inputs, **call_kwargs):
+                def keras_call_wrapper(self_obj, inputs, **call_kwargs):
                     # self_obj is 'self' for the instance
                     # Pass through known Keras call arguments explicitly
-                    return original_func(
-                        self_obj, inputs, **call_kwargs)
+                    return original_func(self_obj, inputs, **call_kwargs)
                 
                 wrapper_to_enhance = keras_call_wrapper
             else:
@@ -334,9 +347,8 @@ class HelpMeta(type):
                 def generic_wrapper(self_obj, *args, **call_kwargs):
                     return original_func(self_obj, *args, **call_kwargs)
                 wrapper_to_enhance = generic_wrapper
-            
-            wrapper_to_enhance.my_params = DisplayStr(
-                mcs._get_my_params(original_func))
+        
+            wrapper_to_enhance.my_params = DisplayStr(mcs._get_my_params(original_func))
             wrapper_to_enhance.help = mcs._create_help(original_func)
             return wrapper_to_enhance
         
@@ -2186,7 +2198,8 @@ class PandasDataHandlers(BaseClass):
             ".pkl": pd.read_pickle,
             ".sas": pd.read_sas,
             ".spss": pd.read_spss,
-            ".txt": pd.read_csv
+            ".txt": pd.read_csv,
+            ".parquet": pd.read_parquet, 
         }
 
     @staticmethod

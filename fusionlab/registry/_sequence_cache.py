@@ -7,11 +7,14 @@ from typing import Any, Optional, Literal
 from platformdirs import user_cache_dir
 _log = logging.getLogger("fusionlab.seqcache")
 
-
-
 _APP_NAME   = "fusionlab-learn"
 _APP_AUTHOR = "earthai-tech"
 
+
+__all__=[
+    'ensure_sequence_cache_dir', 'get_sequence_cache_dir', 'load_seq_cache',
+    'resolve_sequence_cache', 'save_seq_cache', 'user_runs_root'
+   ]
 
 def resolve_sequence_cache(
     run_dir: str | Path | None = None,
@@ -56,8 +59,6 @@ def resolve_sequence_cache(
 
     raise ValueError(f"mode must be 'get' or 'ensure', not {mode!r}")
 
-
-
 def user_runs_root() -> Path:
     """Return the OS-appropriate *runs* cache root."""
     root = Path(user_cache_dir(appname=_APP_NAME, appauthor=_APP_AUTHOR))
@@ -92,8 +93,6 @@ def _runs_root() -> Path:
     * Linux   →  ~/.cache/earthai-tech/fusionlab-learn/runs
     """
     return (Path(user_cache_dir(_APP_NAME, _APP_AUTHOR)) / "runs").resolve()
-
-
 
 
 def _sha1_of(obj: Any) -> str:

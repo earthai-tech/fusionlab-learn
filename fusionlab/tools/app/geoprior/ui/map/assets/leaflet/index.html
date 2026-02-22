@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0"
+    />
+
+    <!-- Leaflet CSS -->
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+
+    <!-- Your CSS -->
+    <link rel="stylesheet" href="./style.css" />
+
+    <!-- Qt bridge -->
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+
+    <!-- Common contract + helpers (must load before main.js) -->
+    <script src="../common/api_contract.js"></script>
+    <script src="../common/utils.js"></script>
+    <script src="../common/colormap.js"></script>
+    <script src="../common/bridge_qt.js"></script>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <!-- Leaflet layer modules -->
+    <script src="./layers/basemap.js"></script>
+    <script src="./layers/hotspots.js"></script>
+    <script src="./layers/vectors.js"></script>
+    <script src="./layers/points.js"></script>
+    <script src="./layers/hexbin.js"></script>
+    <script src="./layers/contours.js"></script>
+  </head>
+
+  <body>
+    <div id="map"></div>
+
+    <!-- Engine main -->
+    <script src="./main.js"></script>
+  </body>
+</html>

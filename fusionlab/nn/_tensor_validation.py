@@ -19,8 +19,6 @@ from ..compat.tf import (
 from ..compat.tf import  HAS_TF, TFConfig 
 from . import KERAS_DEPS, KERAS_BACKEND
 
-
-
 if not HAS_TF:
     # Warn the user that TensorFlow
     # is required for this module
@@ -50,10 +48,18 @@ tf_constant =KERAS_DEPS.constant
 tf_assert_equal=KERAS_DEPS.assert_equal
 tf_autograph=KERAS_DEPS.autograph
 tf_concat = KERAS_DEPS.concat
-
+tf_sequence_mask = KERAS_DEPS.sequence_mask
+tf_bool = KERAS_DEPS.bool
+tf_switch_case  = KERAS_DEPS.switch_case   
+tf_reduce_mean = KERAS_DEPS.reduce_mean 
 tf_expand_dims=KERAS_DEPS.expand_dims
 tf_control_dependencies=KERAS_DEPS.control_dependencies
 tf_get_static_value = KERAS_DEPS.get_static_value
+tf_reduce_sum = KERAS_DEPS.reduce_sum
+tf_cond = KERAS_DEPS.cond 
+tf_greater =KERAS_DEPS.greater 
+tf_greater_equal =KERAS_DEPS.greater_equal 
+tf_squeeze = KERAS_DEPS.squeeze
 
 if hasattr(tf_autograph, 'set_verbosity'):
     tf_autograph.set_verbosity(0) 
@@ -61,6 +67,284 @@ if hasattr(tf_autograph, 'set_verbosity'):
 _logger = fusionlog().get_fusionlab_logger(__name__)
 
 # --------------------------- tensor validation -------------------------------
+
+def maybe_reduce_quantiles_bh(
+    x,
+    *,
+    name: str = "tensor",
+    axis: int = 2,
+    reduction: str | callable = "mean",
+):
+    """
+    If x looks like (B,H,Q) or (B,H,Q,1), reduce over Q axis.
+    Otherwise return x unchanged. Graph-safe.
+    """
+    x = tf_convert_to_tensor(x)
+
+    def _reduce(t):
+        if callable(reduction):
+            return reduction(t, axis=axis)
+        red = str(reduction).lower()
+        if red == "mean":
+            return tf_reduce_mean(t, axis=axis)
+        if red == "sum":
+            return tf_reduce_sum(t, axis=axis)
+        raise ValueError(
+            f"{name}: unsupported reduction='{reduction}'. "
+            "Use 'mean', 'sum', or a callable."
+        )
+
+    r = tf_rank(x)
+
+    # rank-4: assume (B,H,Q,1) -> reduce Q -> (B,H,1)
+    x = tf_cond(
+        tf_greater_equal(r, 4),
+        lambda: _reduce(x),
+        lambda: x,
+    )
+
+    r = tf_rank(x)
+
+    # rank-3: could be (B,H,1) or (B,H,Q)
+    def _rank3():
+        last = tf_shape(x)[-1]
+        return tf_cond(
+            tf_greater(last, 1),
+            lambda: _reduce(x),  # (B,H,Q) -> (B,H)
+            lambda: x,           # (B,H,1) -> keep
+        )
+
+    x = tf_cond(
+        tf_equal(r, 3),
+        _rank3,
+        lambda: x,
+    )
+    return x
+
+
+def ensure_bh1(
+    x,
+    *,
+    name: str = "tensor",
+    dtype=None,
+    reduce_axis: int | None = None,
+    reduction: str | callable = "mean",
+    allow_rank1: bool = False,
+):
+    """
+    Ensure `x` has shape ``(B, H, 1)`` (graph-safe).
+
+    This helper is designed for GeoPrior/TFT-style batches where most
+    physics signals must be rank-3 with a singleton last dimension:
+    ``(batch, horizon, 1)``.
+
+    Parameters
+    ----------
+    x : array-like or tf.Tensor
+        Input to standardize. Common accepted shapes:
+
+        - ``(B, H)``           -> ``(B, H, 1)``
+        - ``(B, H, 1)``        -> unchanged
+        - ``(B, H, Q)``        -> requires `reduce_axis=2` to become
+          ``(B, H, 1)``
+        - ``(B, H, Q, 1)``     -> requires `reduce_axis=2` to become
+          ``(B, H, 1)``
+        - ``(B,)`` (optional)  -> ``(B, 1, 1)`` if `allow_rank1=True`
+
+    name : str, default="tensor"
+        Name used in error messages.
+
+    dtype : tf.DType or None, default=None
+        If provided, cast `x` to this dtype after conversion.
+
+    reduce_axis : int or None, default=None
+        If provided, reduce `x` along this axis before enforcing
+        ``(B, H, 1)``. Use this when `x` still has a quantile/channel
+        dimension (e.g. ``(B, H, Q)``).
+
+    reduction : {"mean", "sum"} or callable, default="mean"
+        Reduction used when `reduce_axis` is not None.
+
+        - If a string, must be "mean" or "sum".
+        - If a callable, it must have signature ``fn(t, axis=...)`` and
+          return a tensor.
+
+        Note: median is intentionally not built in (avoid extra deps);
+        pass a callable if you need it.
+
+    allow_rank1 : bool, default=False
+        If True, accept a rank-1 input ``(B,)`` and convert it to
+        ``(B, 1, 1)``. If False, rank-1 inputs raise.
+
+    Returns
+    -------
+    tf.Tensor
+        Tensor with shape ``(B, H, 1)`` (rank 3, last dim 1).
+
+    Raises
+    ------
+    ValueError
+        If `x` cannot be coerced to ``(B, H, 1)`` unambiguously.
+
+    Notes
+    -----
+    This function is safe under `tf.function` / graph mode: it does not
+    use symbolic tensors in Python boolean contexts.
+    """
+    # import tensorflow as tf
+
+    # --- Convert/cast -------------------------------------------------
+    x = tf_convert_to_tensor(x)
+    if dtype is not None:
+        x = tf_cast(x, dtype)
+
+    # --- Optional reduction (e.g., quantiles) -------------------------
+    if reduce_axis is not None:
+        if callable(reduction):
+            x = reduction(x, axis=reduce_axis)
+        else:
+            red = str(reduction).lower()
+            if red == "mean":
+                x = tf_reduce_mean(x, axis=reduce_axis)
+            elif red == "sum":
+                x = tf_reduce_sum(x, axis=reduce_axis)
+            else:
+                raise ValueError(
+                    f"{name}: unsupported reduction='{reduction}'. "
+                    "Use 'mean', 'sum', or a callable."
+                )
+
+    # --- Rank handling: prefer static rank when available -------------
+    r_static = x.shape.rank
+
+    def _bad_rank(msg: str):
+        # Graph-safe "raise": trigger an always-failing assertion.
+        tf_debugging.assert_equal(
+            tf_constant(0, tf_int32),
+            tf_constant(1, tf_int32),
+            message=msg,
+        )
+        return x  # unreachable
+
+    if r_static is not None:
+        # Static rank path (fast + clean error messages)
+        if r_static == 4:
+            # Common case: (B,H,Q,1) or (B,H,1,1)
+            last = x.shape[-1]
+            if last != 1:
+                raise ValueError(
+                    f"{name}: rank-4 tensor must have last dim == 1, "
+                    f"got shape={x.shape}."
+                )
+            x3 = tf_squeeze(x, axis=-1)  # (B,H,Q) or (B,H,1)
+            # If still has Q, reduce it; otherwise keep
+            if x3.shape.rank == 3 and (x3.shape[-1] is not None) and x3.shape[-1] > 1:
+                x3 = tf_reduce_mean(x3, axis=2)   # (B,H)
+                x3 = tf_expand_dims(x3, axis=-1)  # (B,H,1)
+            return x3
+
+        if r_static == 3:
+            last = x.shape[-1]
+            if last == 1:
+                return x
+            raise ValueError(
+                f"{name}: expected last dim == 1 for rank-3 tensor, "
+                f"got shape={x.shape}. If this is (B,H,Q), pass "
+                "reduce_axis=2 first."
+            )
+
+        if r_static == 2:
+            return tf_expand_dims(x, axis=-1)
+
+        if r_static == 1:
+            if not allow_rank1:
+                raise ValueError(
+                    f"{name}: rank-1 input is not allowed (shape={x.shape}). "
+                    "Set allow_rank1=True to coerce (B,) -> (B,1,1)."
+                )
+            x = tf_expand_dims(x, axis=1)   # (B,1)
+            x = tf_expand_dims(x, axis=-1)  # (B,1,1)
+            return x
+
+        raise ValueError(
+            f"{name}: expected rank 2 or 3 (or rank 1 with allow_rank1=True), "
+            f"got rank={r_static}, shape={x.shape}. If you have an extra "
+            "dimension (e.g. quantiles), reduce it first via reduce_axis."
+        )
+
+    # --- Dynamic rank path (graph-safe) -------------------------------
+    r = tf_rank(x)
+
+    def case_rank1():
+        if not allow_rank1:
+            return _bad_rank(
+                f"{name}: rank-1 input is not allowed. "
+                "Set allow_rank1=True to coerce (B,) -> (B,1,1)."
+            )
+        t = tf_expand_dims(x, axis=1)
+        t = tf_expand_dims(t, axis=-1)
+        return t
+
+    def case_rank2():
+        return tf_expand_dims(x, axis=-1)
+
+    def case_rank3():
+        # Assert last dim == 1
+        tf_debugging.assert_equal(
+            tf_shape(x)[-1],
+            tf_constant(1, tf_int32),
+            message=(
+                f"{name}: expected last dim == 1 for rank-3 tensor. "
+                "If this is (B,H,Q), pass reduce_axis=2 first."
+            ),
+        )
+        return x
+    
+    def case_rank4():
+        # Expect last dim == 1, then squeeze it.
+        last = tf_shape(x)[-1]
+
+        def _last_is_1():
+            x3 = tf_squeeze(x, axis=-1)  # (B,H,Q) or (B,H,1)
+            q = tf_shape(x3)[-1]
+
+            # If q>1, it's (B,H,Q) -> mean over Q -> (B,H) -> expand -> (B,H,1)
+            return tf_cond(
+                tf_greater(q, 1),
+                lambda: tf_expand_dims(tf_reduce_mean(x3, axis=2), axis=-1),
+                lambda: x3,  # already (B,H,1)
+            )
+
+        return tf_cond(
+            tf_equal(last, tf_constant(1, tf_int32)),
+            _last_is_1,
+            lambda: _bad_rank(
+                f"{name}: rank-4 tensor must have last dim == 1. "
+                "If you have (B,H,Q,C) use a different reduction."
+            ),
+        )
+
+    def default_case():
+        return _bad_rank(
+            f"{name}: expected rank 2 or 3 (or rank 1 with allow_rank1=True). "
+            "If you have extra dimensions (e.g. quantiles), reduce them first "
+            "via reduce_axis."
+        )
+
+    # switch_case requires concrete branch keys; we map rank->branch.
+    # For ranks not explicitly handled, default_case raises via assert.
+    # IMPORTANT: keys must be {0,1,2,3} (contiguous from 0)
+    return tf_switch_case(
+        tf_cast(r, tf_int32),
+        branch_fns={
+            0: default_case,  # rank 0 is invalid -> raise via assert
+            1: case_rank1,
+            2: case_rank2,
+            3: case_rank3,
+            4: case_rank4,   
+        },
+        default=default_case,
+    )
 
 def set_anomaly_config(
         anomaly_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1436,7 +1720,7 @@ def validate_batch_sizes_eager(
         )
 
 # @optional_tf_function 
-def align_temporal_dimensions(
+def _align_temporal_dimensions(
     tensor_ref: Tensor,
     tensor_to_align: Tensor,
     ref_time_dim_index: int = 1,
@@ -1622,6 +1906,234 @@ def align_temporal_dimensions(
                          "'truncate_ref_if_shorter'.")
 
     return output_tensor_ref, output_tensor_to_align
+
+def align_temporal_dimensions(
+    tensor_ref: Tensor,
+    tensor_to_align: Tensor,
+    ref_time_dim_index: int = 1,
+    align_time_dim_index: int = 1,
+    mode: str = "slice_to_ref",
+    name: str = "tensor_to_align",
+    padding_value: int = 0,
+    return_mask: bool = False,
+) -> Tuple[Tensor, Tensor]:
+    r"""Aligns the time dimension of `tensor_to_align` to `tensor_ref`.
+
+    This function is typically used to ensure that two temporal tensors
+    (e.g., dynamic past features and known future features) have a
+    compatible time dimension before operations like concatenation or
+    element-wise addition, especially for input to encoder stages.
+
+    Parameters
+    ----------
+    tensor_ref : Tensor or np.ndarray
+        The reference tensor, typically 3D (Batch, Time_Ref, Features_Ref).
+        The time dimension of this tensor is used as the target length.
+    tensor_to_align : Tensor or np.ndarray
+        The tensor whose time dimension needs to be aligned, typically 3D
+        (Batch, Time_Align, Features_Align).
+    ref_time_dim_index : int, default=1
+        The index of the time dimension in `tensor_ref`.
+    align_time_dim_index : int, default=1
+        The index of the time dimension in `tensor_to_align`.
+    mode : {'slice_to_ref', 'pad_to_ref', 'truncate_ref_if_shorter'}, default='slice_to_ref'
+        Strategy for alignment:
+        - ``'slice_to_ref'``: Slices `tensor_to_align` if it is longer
+          than `tensor_ref` along the time dimension. Raises an error
+          if `tensor_to_align` is shorter. `tensor_ref` is unchanged.
+        - ``'pad_to_ref'``: If `tensor_to_align` is shorter than
+          `tensor_ref` in time, it's padded with `padding_value` (default 0)
+          at the end of its time dimension. If longer, it's sliced.
+          `tensor_ref` is unchanged.
+        - ``'truncate_ref_if_shorter'``: If `tensor_to_align`'s time
+          dimension is shorter than `tensor_ref`'s, then `tensor_ref`
+          itself is truncated to match `tensor_to_align`'s time length.
+          `tensor_to_align` is returned as is. If `tensor_to_align` is
+          not shorter, both are returned as is.
+        
+        - ``'auto'``:
+            If align_len < ref_len  -> pad_to_ref
+            If align_len > ref_len  -> slice_to_ref
+            Else                    -> identity
+        - ``'truncate_both_to_min'``:
+            Slice **both** tensors to min(ref_len, align_len).
+            
+    name : str, default="tensor_to_align"
+        Name for the tensor being aligned, used in error messages.
+    padding_value : int, default=0
+        Value to use for padding if `mode='pad_to_ref'` and
+        `tensor_to_align` is shorter.
+    return_mask: bool, False 
+        If ``return_mask`` is True, also returns a boolean mask of shape
+        (B, T_align_after) that is True for *real* (non‑padded) steps.
+    
+    Returns
+    -------
+    (Tensor, Tensor)
+        Possibly modified ``tensor_ref`` and ``tensor_to_align``.
+
+    Raises
+    ------
+    ValueError
+        For invalid ranks / indices / unsupported modes.
+    """
+
+    # ---- Rank / index checks ----
+    rank_ref = len(tensor_ref.shape)
+    rank_align = len(tensor_to_align.shape)
+    if rank_ref < 2 or rank_align < 2:
+        raise ValueError(
+            "Both tensor_ref and tensor_to_align must be >=2D. "
+            f"Got ranks: ref={rank_ref}, align={rank_align}"
+        )
+    if not (0 <= ref_time_dim_index < rank_ref):
+        raise ValueError(
+            f"Invalid ref_time_dim_index {ref_time_dim_index} for "
+            f"rank {rank_ref}"
+        )
+    if not (0 <= align_time_dim_index < rank_align):
+        raise ValueError(
+            f"Invalid align_time_dim_index {align_time_dim_index} "
+            f"for rank {rank_align}"
+        )
+
+    shape_ref = tf_shape(tensor_ref)
+    shape_align = tf_shape(tensor_to_align)
+    ref_len = shape_ref[ref_time_dim_index]
+    align_len = shape_align[align_time_dim_index]
+
+    out_ref = tensor_ref
+    out_align = tensor_to_align
+    
+    mask = None  # will build if needed
+
+    # ---- Small helpers ----
+    def _slice(tensor, axis, length):
+        slicers = [slice(None)] * len(tensor.shape)
+        slicers[axis] = slice(None, length)
+        return tensor[tuple(slicers)]
+
+    def _pad_to(tensor, axis, length):
+        pad_len = length - tf_shape(tensor)[axis]
+        paddings = [[0, 0]] * len(tensor.shape)
+        paddings[axis] = [0, pad_len]
+        return tf_pad(
+            tensor, paddings, mode="CONSTANT",
+            constant_values=padding_value
+        )
+
+    # build mask helper (only if we padded)
+    def _make_mask(orig_len, final_len):
+        # orig_len and final_len may be scalars; broadcast over batch
+        # assume same len for all batch elems (common in this code)
+        return tf_sequence_mask(
+            orig_len, maxlen=final_len, dtype=tf_bool
+        )
+    
+    # ---- Implement each mode ----
+    if mode == "slice_to_ref":
+        tf_debugging.assert_greater_equal(
+            align_len, ref_len,
+            message=(f"{name} time steps ({align_len}) must be >= "
+                     f"ref ({ref_len}) for 'slice_to_ref'.")
+        )
+        out_align = _slice(tensor_to_align, align_time_dim_index, ref_len)
+
+    elif mode == "pad_to_ref":
+        def pad_branch():
+            return _pad_to(tensor_to_align, align_time_dim_index, ref_len)
+
+        def slice_branch():
+            return _slice(tensor_to_align, align_time_dim_index, ref_len)
+
+        def id_branch():
+            return tensor_to_align
+
+        out_align = tf_cond(
+            align_len < ref_len,
+            true_fn=pad_branch,
+            false_fn=lambda: tf_cond(
+                align_len > ref_len,
+                true_fn=slice_branch,
+                false_fn=id_branch,
+            ),
+        )
+        if return_mask:
+            # if padded, mask is length=ref_len with first align_len True
+            mask = _make_mask(align_len, ref_len)
+
+
+    elif mode == "truncate_ref_if_shorter":
+        # If align shorter -> truncate ref, else noop
+        def trunc():
+            return _slice(tensor_ref, ref_time_dim_index, align_len)
+
+        out_ref = tf_cond(
+            align_len < ref_len,
+            true_fn=trunc,
+            false_fn=lambda: tensor_ref,
+        )
+        # out_align stays as is
+        
+        # no padding, so no mask needed unless requested for symmetry
+        if return_mask:
+            mask = _make_mask(align_len, align_len)
+            
+
+    elif mode == "auto":
+        # Alias to the dynamic choice described above
+        def pad_branch():
+            return _pad_to(
+                tensor_to_align, align_time_dim_index, ref_len)
+
+        def slice_branch():
+            return _slice(
+                tensor_to_align, align_time_dim_index, ref_len)
+
+        def id_branch():
+            return tensor_to_align
+
+        out_align = tf_cond(
+            align_len < ref_len,
+            true_fn=pad_branch,
+            false_fn=lambda: tf_cond(
+                align_len > ref_len,
+                true_fn=slice_branch,
+                false_fn=id_branch,
+            ),
+        )
+        
+        if return_mask:
+            final_len = ref_len
+            true_len = tf_cond(
+                align_len < ref_len,
+                true_fn=lambda: align_len,
+                false_fn=lambda: final_len,
+            )
+            mask = _make_mask(true_len, final_len)
+
+    elif mode == "truncate_both_to_min":
+        # Compute min length and slice both
+        min_len = tf_debugging.minimum(ref_len, align_len)
+        out_ref = _slice(tensor_ref, ref_time_dim_index, min_len)
+        out_align = _slice(
+            tensor_to_align, align_time_dim_index, min_len)
+        
+        if return_mask:
+            mask = _make_mask(min_len, min_len)
+
+
+    else:
+        raise ValueError(
+            f"Unsupported alignment mode: '{mode}'. Choose one of "
+            "'slice_to_ref', 'pad_to_ref', 'truncate_ref_if_shorter', "
+            "'auto', 'truncate_both_to_min'."
+        )
+
+    if return_mask:
+        return out_ref, out_align, mask
+    
+    return out_ref, out_align
 
 def validate_minimal_inputs(
     X_static: Union[np.ndarray, Tensor],
@@ -2550,6 +3062,7 @@ def _validate_tft_flexible_inputs_soft_mode(
 
     return static_p, dynamic_p, future_p
 
+@optional_tf_function 
 def validate_model_inputs(
     inputs: Union[Tensor, np.ndarray,
                  List[Optional[Union[np.ndarray, Tensor]]]],
