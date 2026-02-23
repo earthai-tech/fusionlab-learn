@@ -28,7 +28,14 @@ from typing import Optional, Sequence
 
 import pandas as pd
 
-from PyQt5.QtCore import Qt, pyqtSignal, QSignalBlocker
+from PyQt5.QtCore import (
+    Qt,
+    QEvent,
+    QPoint,
+    pyqtSignal,
+    QSignalBlocker,
+)
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QComboBox,
     QFrame,
@@ -46,7 +53,9 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QStyle,
     QSizePolicy, 
-    QScrollArea
+    QScrollArea,
+    QGraphicsDropShadowEffect,
+    QMenu,
 )
 
 from ...config.store import GeoConfigStore
@@ -99,6 +108,11 @@ from .keys import (
     MAP_SAMPLING_SEED,
     MAP_SAMPLING_MAX_PER_CELL,
     MAP_SAMPLING_APPLY_HOTSPOTS,
+    MAP_ANALYTICS_TAB,
+    MAP_ANALYTICS_COMPACT,
+    MAP_ANALYTICS_MANUAL,
+    MAP_ANALYTICS_POS_X,
+    MAP_ANALYTICS_POS_Y,
 )
 
 
@@ -190,10 +204,17 @@ class CollapsibleAnalyticsPanel(QFrame):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("MapAnalyticsPanel")
-        self.setFrameShape(QFrame.StyledPanel)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setAttribute(
+            Qt.WA_TranslucentBackground,
+            True,
+        )
 
         self.store = store
         self._expanded = True
+        self._dragging = False
+        self._drag_off = QPoint(0, 0)
+        self._compact = False
 
         self._ctx = MapAnaCtx(q_cols=[])
 
@@ -366,56 +387,141 @@ class CollapsibleAnalyticsPanel(QFrame):
     # -------------------------
     # UI
     # -------------------------
-    def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(8)
+    # def _build_ui(self) -> None:
+    #     root = QVBoxLayout(self)
+    #     root.setContentsMargins(10, 10, 10, 10)
+    #     root.setSpacing(8)
     
-        hdr = QHBoxLayout()
+    #     hdr = QHBoxLayout()
+    #     hdr.setContentsMargins(0, 0, 0, 0)
+    #     hdr.setSpacing(8)
+    
+    #     self.lb_title = QLabel("Analytics", self)
+    #     self.lb_title.setObjectName("gpDockTitle")
+    #     hdr.addWidget(self.lb_title, 0)
+    
+    #     hdr.addStretch(1)
+    
+    #     self.btn_pin = QToolButton(self)
+    #     self.btn_pin.setObjectName("miniAction")
+    #     self.btn_pin.setAutoRaise(True)
+    #     self.btn_pin.setToolTip("Pin (pop out)")
+
+    #     ico = try_icon("pin.svg")
+    #     if ico is not None and (not ico.isNull()):
+    #         self.btn_pin.setIcon(ico)
+    #     else:
+    #         self.btn_pin.setIcon(
+    #             self.style().standardIcon(QStyle.SP_TitleBarMaxButton)
+    #         )
+
+    #     self.btn_pin.clicked.connect(
+    #         self.request_pin.emit
+    #     )
+    #     hdr.addWidget(self.btn_pin, 0)
+    
+    #     self.btn_close = QToolButton(self)
+    #     self.btn_close.setObjectName("miniAction")
+    #     self.btn_close.setAutoRaise(True)
+    #     self.btn_close.setToolTip("Close analytics")
+    #     self.btn_close.setIcon(
+    #         self.style().standardIcon(
+    #             QStyle.SP_TitleBarCloseButton
+    #         )
+    #     )
+    #     self.btn_close.clicked.connect(
+    #         self.request_close.emit
+    #     )
+    #     hdr.addWidget(self.btn_close, 0)
+    
+    #     root.addLayout(hdr, 0)
+    
+    #     self.body = QWidget(self)
+    #     self.body.setObjectName("gpDockBody")
+    #     body_l = QVBoxLayout(self.body)
+    #     body_l.setContentsMargins(0, 0, 0, 0)
+    #     body_l.setSpacing(0)
+    
+    #     self.tabs = QTabWidget(self.body)
+    #     self.tabs.setObjectName("gpAnalyticsTabs")
+ 
+    #     body_l.addWidget(self.tabs, 1)
+    #     root.addWidget(self.body, 1)
+
+    def _build_ui(self) -> None:
+        wrap = QVBoxLayout(self)
+        wrap.setContentsMargins(14, 14, 14, 14)
+        wrap.setSpacing(0)
+    
+        self.card = QFrame(self)
+        self.card.setObjectName("gpAnaCard")
+        self.card.setFrameShape(QFrame.NoFrame)
+        wrap.addWidget(self.card, 1)
+    
+        root = QVBoxLayout(self.card)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(10)
+    
+        eff = QGraphicsDropShadowEffect(self.card)
+        eff.setBlurRadius(26.0)
+        eff.setOffset(0.0, 6.0)
+        eff.setColor(QColor(0, 0, 0, 85))
+        self.card.setGraphicsEffect(eff)
+    
+        self.drag_bar = QWidget(self.card)
+        self.drag_bar.setObjectName("gpAnaDragBar")
+        self.drag_bar.setCursor(Qt.OpenHandCursor)
+        self.drag_bar.setMouseTracking(True)
+        self.drag_bar.setAttribute(Qt.WA_Hover, True)
+        self.drag_bar.installEventFilter(self)
+    
+        hdr = QHBoxLayout(self.drag_bar)
         hdr.setContentsMargins(0, 0, 0, 0)
         hdr.setSpacing(8)
     
-        self.lb_title = QLabel("Analytics", self)
+        self.lb_title = QLabel("Analytics", self.drag_bar)
         self.lb_title.setObjectName("gpDockTitle")
-        hdr.addWidget(self.lb_title, 0)
+        hdr.addWidget(self.lb_title, 1)
     
-        hdr.addStretch(1)
+        self.btn_opts = QToolButton(self.drag_bar)
+        self.btn_opts.setObjectName("miniAction")
+        self.btn_opts.setAutoRaise(True)
+        self.btn_opts.setToolTip("Options")
+        self._set_icon(
+            self.btn_opts,
+            "settings.svg",
+            QStyle.SP_FileDialogDetailedView,
+        )
+        self._build_opts_menu()
+        hdr.addWidget(self.btn_opts, 0)
     
-        self.btn_pin = QToolButton(self)
+        self.btn_pin = QToolButton(self.drag_bar)
         self.btn_pin.setObjectName("miniAction")
         self.btn_pin.setAutoRaise(True)
         self.btn_pin.setToolTip("Pin (pop out)")
-
-        ico = try_icon("pin.svg")
-        if ico is not None and (not ico.isNull()):
-            self.btn_pin.setIcon(ico)
-        else:
-            self.btn_pin.setIcon(
-                self.style().standardIcon(QStyle.SP_TitleBarMaxButton)
-            )
-
-        self.btn_pin.clicked.connect(
-            self.request_pin.emit
+        self._set_icon(
+            self.btn_pin,
+            "pin.svg",
+            QStyle.SP_TitleBarMaxButton,
         )
+        self.btn_pin.clicked.connect(self.request_pin.emit)
         hdr.addWidget(self.btn_pin, 0)
     
-        self.btn_close = QToolButton(self)
+        self.btn_close = QToolButton(self.drag_bar)
         self.btn_close.setObjectName("miniAction")
         self.btn_close.setAutoRaise(True)
         self.btn_close.setToolTip("Close analytics")
-        self.btn_close.setIcon(
-            self.style().standardIcon(
-                QStyle.SP_TitleBarCloseButton
-            )
+        self._set_icon(
+            self.btn_close,
+            "close2.svg",
+            QStyle.SP_DockWidgetCloseButton,
         )
-        self.btn_close.clicked.connect(
-            self.request_close.emit
-        )
+        self.btn_close.clicked.connect(self.request_close.emit)
         hdr.addWidget(self.btn_close, 0)
     
-        root.addLayout(hdr, 0)
+        root.addWidget(self.drag_bar, 0)
     
-        self.body = QWidget(self)
+        self.body = QWidget(self.card)
         self.body.setObjectName("gpDockBody")
         body_l = QVBoxLayout(self.body)
         body_l.setContentsMargins(0, 0, 0, 0)
@@ -423,11 +529,136 @@ class CollapsibleAnalyticsPanel(QFrame):
     
         self.tabs = QTabWidget(self.body)
         self.tabs.setObjectName("gpAnalyticsTabs")
- 
         body_l.addWidget(self.tabs, 1)
+    
         root.addWidget(self.body, 1)
 
+    def _set_icon(
+        self,
+        btn: QToolButton,
+        name: str,
+        fallback: int,
+    ) -> None:
+        ico = try_icon(str(name))
+        if ico is not None and (not ico.isNull()):
+            btn.setIcon(ico)
+            return
+        btn.setIcon(self.style().standardIcon(fallback))
     
+    def _build_opts_menu(self) -> None:
+        m = QMenu(self.btn_opts)
+        m.setObjectName("gpAnaMenu")
+    
+        self.act_compact = m.addAction("Compact mode")
+        self.act_compact.setCheckable(True)
+        self.act_compact.toggled.connect(
+            self._on_compact_toggled
+        )
+    
+        m.addSeparator()
+    
+        a_reset = m.addAction("Reset position")
+        a_reset.triggered.connect(self._reset_position)
+    
+        self.btn_opts.setMenu(m)
+        self.btn_opts.setPopupMode(QToolButton.InstantPopup)
+    
+    def _on_compact_toggled(self, on: bool) -> None:
+        on = bool(on)
+        if self.store is not None:
+            self.store.set(MAP_ANALYTICS_COMPACT, on)
+            return
+        self.set_compact(on)
+    
+    def _reset_position(self) -> None:
+        s = self.store
+        if s is None:
+            return
+        with s.batch():
+            s.set(MAP_ANALYTICS_MANUAL, False)
+            s.set(MAP_ANALYTICS_POS_X, -1)
+            s.set(MAP_ANALYTICS_POS_Y, -1)
+    
+    def eventFilter(self, obj, ev) -> bool:
+        if obj is getattr(self, "drag_bar", None):
+            et = ev.type()
+    
+            if et == QEvent.MouseButtonPress:
+                if ev.button() == Qt.LeftButton:
+                    child = self.drag_bar.childAt(ev.pos())
+                    if child in (
+                        self.btn_opts,
+                        self.btn_pin,
+                        self.btn_close,
+                    ):
+                        return False
+    
+                    self._dragging = True
+                    self.drag_bar.setCursor(
+                        Qt.ClosedHandCursor
+                    )
+                    self.raise_()
+    
+                    try:
+                        self._drag_off = (
+                            ev.globalPos() - self.pos()
+                        )
+                    except Exception:
+                        self._drag_off = QPoint(0, 0)
+                    return True
+    
+            if et == QEvent.MouseMove:
+                if self._dragging and (ev.buttons() & Qt.LeftButton):
+                    try:
+                        p = ev.globalPos() - self._drag_off
+                    except Exception:
+                        return True
+    
+                    par = self.parentWidget()
+                    if par is not None:
+                        r = par.rect()
+                        x = max(
+                            10,
+                            min(
+                                p.x(),
+                                r.width() - self.width() - 10,
+                            ),
+                        )
+                        y = max(
+                            56,
+                            min(
+                                p.y(),
+                                r.height() - self.height() - 10,
+                            ),
+                        )
+                        self.move(int(x), int(y))
+                    else:
+                        self.move(int(p.x()), int(p.y()))
+                    return True
+    
+            if et == QEvent.MouseButtonRelease:
+                if self._dragging:
+                    self._dragging = False
+                    self.drag_bar.setCursor(Qt.OpenHandCursor)
+    
+                    if self.store is not None:
+                        with self.store.batch():
+                            self.store.set(
+                                MAP_ANALYTICS_MANUAL,
+                                True,
+                            )
+                            self.store.set(
+                                MAP_ANALYTICS_POS_X,
+                                int(self.x()),
+                            )
+                            self.store.set(
+                                MAP_ANALYTICS_POS_Y,
+                                int(self.y()),
+                            )
+                    return True
+    
+        return super().eventFilter(obj, ev)
+
     def _build_tabs(self) -> None:
         tabs = self.tabs
         if tabs is None:
@@ -454,25 +685,153 @@ class CollapsibleAnalyticsPanel(QFrame):
             pass
     
         tabs.currentChanged.connect(self._on_tab_changed)
+        self.set_tabbar_visible(False)
+        
+        if self.store is not None:
+            k = str(
+                self.store.get(
+                    MAP_ANALYTICS_TAB,
+                    "selection",
+                )
+                or "selection"
+            )
+            self.set_active_tab(k, push=False)
+        
+            c = bool(
+                self.store.get(
+                    MAP_ANALYTICS_COMPACT,
+                    False,
+                )
+            )
+            self.set_compact(c)
     
+    # def _on_tab_changed(self, _i: int) -> None:
+    #     # Prefer sender() because tabs may be temporarily moved/reparented.
+    #     s = self.sender()
+    #     tabs = s if isinstance(s, QTabWidget) else self.tabs
+    #     if tabs is None:
+    #         return
+    
+    #     try:
+    #         w = tabs.currentWidget()
+    #     except Exception:
+    #         return
+    
+    #     if w is None:
+    #         return
+    
+    #     self.refresh()
     
     def _on_tab_changed(self, _i: int) -> None:
-        # Prefer sender() because tabs may be temporarily moved/reparented.
         s = self.sender()
         tabs = s if isinstance(s, QTabWidget) else self.tabs
         if tabs is None:
             return
     
+        self._update_title_from_tabs(tabs)
+    
+        if self.store is not None:
+            k = self._tab_key_from_tabs(tabs)
+            if k:
+                self.store.set(MAP_ANALYTICS_TAB, k)
+    
+        self.refresh()
+
+    def set_tabbar_visible(self, visible: bool) -> None:
+        tabs = self.tabs
+        if tabs is None:
+            return
         try:
-            w = tabs.currentWidget()
+            tabs.tabBar().setVisible(bool(visible))
         except Exception:
             return
     
-        if w is None:
+    def set_active_tab(
+        self,
+        key: str,
+        *,
+        push: bool = False,
+    ) -> None:
+        tabs = self.tabs
+        if tabs is None:
             return
     
-        self.refresh()
+        k = str(key or "").strip().lower()
+        idx = self._tab_index_from_key(k)
+        if idx < 0:
+            return
     
+        with QSignalBlocker(tabs):
+            tabs.setCurrentIndex(int(idx))
+    
+        self._update_title_from_tabs(tabs)
+    
+        if push and self.store is not None:
+            self.store.set(MAP_ANALYTICS_TAB, k)
+    
+    def set_compact(self, compact: bool) -> None:
+        c = bool(compact)
+        self._compact = c
+    
+        a = getattr(self, "act_compact", None)
+        if a is not None:
+            was = a.blockSignals(True)
+            a.setChecked(c)
+            a.blockSignals(was)
+    
+        for w in (
+            self._sel,
+            self._spatial,
+            self._sharp,
+            self._rely,
+            self._insp,
+        ):
+            fn = getattr(w, "set_compact", None)
+            if fn is None:
+                continue
+            try:
+                fn(c)
+            except Exception:
+                pass
+    
+    def _tab_index_from_key(self, key: str) -> int:
+        k = str(key or "").strip().lower()
+        m = {
+            "selection": 0,
+            "spatial": 1,
+            "sharpness": 2,
+            "reliability": 3,
+            "inspector": 4,
+        }
+        return int(m.get(k, -1))
+    
+    def _tab_key_from_tabs(self, tabs: QTabWidget) -> str:
+        try:
+            idx = int(tabs.currentIndex())
+        except Exception:
+            return ""
+        m = {
+            0: "selection",
+            1: "spatial",
+            2: "sharpness",
+            3: "reliability",
+            4: "inspector",
+        }
+        return str(m.get(idx, ""))
+    
+    def _update_title_from_tabs(self, tabs: QTabWidget) -> None:
+        lb = getattr(self, "lb_title", None)
+        if lb is None:
+            return
+        try:
+            name = str(tabs.tabText(tabs.currentIndex()))
+        except Exception:
+            name = ""
+        if name:
+            lb.setText(f"Analytics · {name}")
+        else:
+            lb.setText("Analytics")
+            
     def take_tabs(self) -> Optional[QTabWidget]:
         tabs = self.tabs
         if tabs is None:
@@ -723,11 +1082,15 @@ class _TabBase(QWidget):
         h = QHBoxLayout(host)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(10)
-
+        
+        self._ctrl_widget = ctrl
+        
         ctrl.setParent(host)
         plot.setParent(host)
 
-        ctrl.setMinimumWidth(max(ctrl.sizeHint().width(), self._CTRL_MIN_W))
+        mw = max(ctrl.sizeHint().width(), self._CTRL_MIN_W)
+        self._ctrl_min_w = int(mw)
+        ctrl.setMinimumWidth(int(mw))
         plot.setMinimumSize(self._PLOT_MIN_W, self._PLOT_MIN_H)
 
         h.addWidget(ctrl, 0)
@@ -737,6 +1100,24 @@ class _TabBase(QWidget):
 
         sa.setWidget(host)
         outer.addWidget(sa, 1)
+
+    def set_compact(self, compact: bool) -> None:
+        c = bool(compact)
+        w = getattr(self, "_ctrl_widget", None)
+        mw = int(getattr(self, "_ctrl_min_w", 240))
+    
+        if w is None:
+            return
+    
+        if c:
+            w.setVisible(False)
+            w.setMinimumWidth(0)
+            w.setMaximumWidth(0)
+            return
+    
+        w.setVisible(True)
+        w.setMaximumWidth(16777215)
+        w.setMinimumWidth(max(mw, 120))
         
     def _save_plot_png(
         self,

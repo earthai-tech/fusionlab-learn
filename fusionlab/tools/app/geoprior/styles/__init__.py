@@ -79,7 +79,7 @@ from ._styles import (
 
 from ._preprocess import PREP_PATCH_DARK, PREP_PATCH_LIGHT
 from ._xfer import XFER_ADVSEC_LIGHT, XFER_ADVSEC_DARK
-from ._map import MAP_DOCK_LIGHT, MAP_DOCK_DARK
+from ._map import MAP_TAB_LIGHT, MAP_TAB_DARK
 from ._physics import PHYSICS_DLG_DARK, PHYSICS_DLG_LIGHT
 
 FLAB_STYLE_SHEET = ( 
@@ -95,7 +95,7 @@ FLAB_STYLE_SHEET = (
     + INFER_CHIP 
     + TRAIN_COMP_SCROLL_LIGHT
     + PREP_PATCH_LIGHT
-    + MAP_DOCK_LIGHT
+    + MAP_TAB_LIGHT
     + PHYSICS_DLG_LIGHT
 )
 
@@ -113,7 +113,7 @@ DARK_THEME_STYLESHEET = (
     + INFER_CHIP 
     + TRAIN_COMP_SCROLL_DARK
     + PREP_PATCH_DARK
-    + MAP_DOCK_DARK
+    + MAP_TAB_DARK
     + PHYSICS_DLG_DARK
 
 )

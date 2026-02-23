@@ -138,6 +138,13 @@ from .keys import (
     MAP_SELECT_POS_Y, 
     MAP_SELECT_POS_X, 
     MAP_GOOGLE_API_KEY,
+    MAP_ANALYTICS_WIDTH,
+    MAP_ANALYTICS_TAB,
+    MAP_ANALYTICS_MANUAL,
+    MAP_ANALYTICS_POS_X,
+    MAP_ANALYTICS_POS_Y,
+    MAP_ANALYTICS_COMPACT,
+
     map_view_key, 
     
 )
@@ -567,23 +574,79 @@ class MapTab(QWidget):
             self._layout_sel_popover(w=w, h=h)
             sp.raise_()
 
-
         # Bottom dock (Analytics)
         if self.panel_d.isVisible():
             ph = int(
                 self.store.get(
                     MAP_ANALYTICS_HEIGHT,
                     280,
-                ) or 280
+                )
+                or 280
             )
             ph = max(220, min(ph, h - 60))
-            self.panel_d.setGeometry(0, h - ph, w, ph)
+        
+            pw = int(
+                self.store.get(
+                    MAP_ANALYTICS_WIDTH,
+                    560,
+                )
+                or 560
+            )
+            pw = max(420, min(pw, w - 20))
+        
+            manual = bool(
+                self.store.get(
+                    MAP_ANALYTICS_MANUAL,
+                    False,
+                )
+            )
+        
+            pad = 12
+        
+            if manual:
+                x0 = int(
+                    self.store.get(
+                        MAP_ANALYTICS_POS_X,
+                        -1,
+                    )
+                    or -1
+                )
+                y0 = int(
+                    self.store.get(
+                        MAP_ANALYTICS_POS_Y,
+                        -1,
+                    )
+                    or -1
+                )
+                if x0 < 0 or y0 < 0:
+                    manual = False
+                else:
+                    x0 = max(pad, min(x0, w - pw - pad))
+                    y0 = max(56, min(y0, h - ph - pad))
+        
+            if not manual:
+                left_pad = pad
+                if self._dock_a.isVisible():
+                    left_pad += int(self._dock_a.width()) + 10
+                x0 = max(pad, min(left_pad, w - pw - pad))
+                y0 = max(0, h - ph - pad)
+        
+            self.panel_d.setGeometry(x0, y0, pw, ph)
             self.panel_d.raise_()
 
         # Hover tooltab (top-center).
         if getattr(self, "tooltab", None) is not None:
             self.tooltab.relayout(w, h)
-                
+              
+    def _open_analytics_mode(self, mode: str) -> None:
+        m = str(mode or "").strip().lower()
+        if not m:
+            m = "selection"
+    
+        with self.store.batch():
+            self.store.set(MAP_SHOW_ANALYTICS, True)
+            self.store.set(MAP_ANALYTICS_TAB, m)
+        
     def _layout_sel_popover(self, *, w: int, h: int) -> None:
         sp = self.sel_panel
     
@@ -777,6 +840,10 @@ class MapTab(QWidget):
         self.head.data_toggled.connect(self._on_data_toggled)
         self.head.view_toggled.connect(self._on_view_toggled)
 
+        sig = self.head.analytics_requested
+        if sig is not None:
+            sig.connect(self._open_analytics_mode)
+    
         if getattr(self, "tooltab", None) is not None:
             self.tooltab.triggered.connect(
                 self._on_tooltab_triggered,
@@ -789,7 +856,10 @@ class MapTab(QWidget):
         self._dock_c.request_pin.connect(self._pin_view)
         self._dock_c.request_close.connect(self._close_view)
         self._win_c.request_unpin.connect(self._unpin_view)
-
+        
+        self._win_a.request_close.connect(self._close_data)
+        self._win_c.request_close.connect(self._close_view)
+        
         self.nav_c.export_requested.connect(
             self._on_export_requested
         )
@@ -807,7 +877,8 @@ class MapTab(QWidget):
         self._win_d.request_unpin.connect(
             self._unpin_analytics
         )
-
+        self._win_d.request_close.connect(self._close_analytics)
+        
         self.nav_a.active_changed.connect(
             self._on_active_file,
         )
@@ -1033,6 +1104,9 @@ class MapTab(QWidget):
             self._on_view_toggled(bool(state))
         elif k == "focus":
             self._on_focus_toggled(bool(state))
+        elif k.startswith("analytics:"):
+            mode = k.split(":", 1)[1]
+            self._open_analytics_mode(mode)
         elif k == "analytics":
             self._on_analytics_toggled(bool(state))
         elif k == "fit":
@@ -1134,6 +1208,12 @@ class MapTab(QWidget):
             self.tooltab.set_checked("view", is_open)
     
     def _close_data(self) -> None:
+        # If floating, bring the panel back (but keep closed).
+        w = self._win_a.take_panel()
+        if w is not None:
+            self._win_a.hide()
+            self._dock_a.set_panel(w)
+    
         self._dock_a.set_open(False)
         self.head.set_data_checked(False)
         if getattr(self, "tooltab", None) is not None:
@@ -1141,25 +1221,18 @@ class MapTab(QWidget):
         self._layout_overlays()
     
     def _close_view(self) -> None:
+        # If floating, bring the panel back (but keep closed).
+        w = self._win_c.take_panel()
+        if w is not None:
+            self._win_c.hide()
+            self._dock_c.set_panel(w)
+    
         self._dock_c.set_open(False)
         self.head.set_view_checked(False)
         if getattr(self, "tooltab", None) is not None:
             self.tooltab.set_checked("view", False)
         self._layout_overlays()
     
-    # def _pin_data(self) -> None:
-    #     w = self._dock_a.take_panel()
-    #     if w is None:
-    #         return
-    #     self._dock_a.set_open(False)
-    #     self.head.set_data_checked(False)
-    #     if getattr(self, "tooltab", None) is not None:
-    #         self.tooltab.set_checked("data", False)
-    #     self._win_a.set_panel(w)
-    #     self._win_a.show()
-    #     self._win_a.raise_()
-    #     self._win_a.activateWindow()
-
     def _dock_open_state(self, dock) -> bool:
         fn = getattr(dock, "is_open", None)
         if callable(fn):
@@ -1173,6 +1246,16 @@ class MapTab(QWidget):
     def _remember_dock(self, *, dock, which: str) -> None:
         if not hasattr(self, "_dock_prev_open"):
             self._dock_prev_open = {}
+    
+        pre = getattr(dock, "_pre_pin_open", None)
+        if pre is not None:
+            self._dock_prev_open[str(which)] = bool(pre)
+            try:
+                dock._pre_pin_open = None
+            except Exception:
+                pass
+            return
+    
         self._dock_prev_open[str(which)] = self._dock_open_state(dock)
     
     
@@ -1254,71 +1337,6 @@ class MapTab(QWidget):
         self._dock_c.set_panel(w)
         self._restore_dock(dock=self._dock_c, which="view")
     
-    # def _unpin_data(self) -> None:
-    #     w = self._win_a.take_panel()
-    #     self._win_a.hide()
-    #     if w is None:
-    #         return
-    #     self._dock_a.set_panel(w)
-        
-    # def _unpin_data(self) -> None:
-    #     w = self._win_a.take_panel()
-    #     self._win_a.hide()
-    #     if w is None:
-    #         return
-    
-    #     self._dock_a.set_panel(w)
-    
-    #     # If focus mode is ON, keep drawers closed.
-    #     if not bool(self.store.get("map.focus_mode", False)):
-    #         self._dock_a.set_open(True)
-    
-    #         is_open = bool(self._dock_a.isVisible())
-    #         self.head.set_data_checked(is_open)
-    
-    #         if getattr(self, "tooltab", None) is not None:
-    #             self.tooltab.set_checked("data", is_open)
-    
-    #     self._layout_overlays()
-    
-    # def _unpin_view(self) -> None:
-    #     w = self._win_c.take_panel()
-    #     self._win_c.hide()
-    #     if w is None:
-    #         return
-    
-    #     self._dock_c.set_panel(w)
-    
-    #     if not bool(self.store.get("map.focus_mode", False)):
-    #         self._dock_c.set_open(True)
-    
-    #         is_open = bool(self._dock_c.isVisible())
-    #         self.head.set_view_checked(is_open)
-    
-    #         if getattr(self, "tooltab", None) is not None:
-    #             self.tooltab.set_checked("view", is_open)
-    
-    #     self._layout_overlays()
-    
-    # def _pin_view(self) -> None:
-    #     w = self._dock_c.take_panel()
-    #     if w is None:
-    #         return
-    #     self._dock_c.set_open(False)
-    #     self.head.set_view_checked(False)
-    #     if getattr(self, "tooltab", None) is not None:
-    #         self.tooltab.set_checked("view", False)
-    #     self._win_c.set_panel(w)
-    #     self._win_c.show()
-    #     self._win_c.raise_()
-    #     self._win_c.activateWindow()
-    
-    # def _unpin_view(self) -> None:
-    #     w = self._win_c.take_panel()
-    #     self._win_c.hide()
-    #     if w is None:
-    #         return
-    #     self._dock_c.set_panel(w)
 
     def _check_prop_visibility(self, keys):
         if K_PROP_ENABLED in keys:
@@ -1365,12 +1383,7 @@ class MapTab(QWidget):
                 except Exception:
                     pass
                 return
-            
-    # def _close_analytics(self) -> None:
-    #     if self._win_d.isVisible():
-    #         self._unpin_analytics()
-    
-    #     self.store.set(MAP_SHOW_ANALYTICS, False)
+
     
     def _close_analytics(self) -> None:
         self.store.set(MAP_SHOW_ANALYTICS, False)
@@ -1380,40 +1393,10 @@ class MapTab(QWidget):
     def _pin_analytics(self) -> None:
         self.store.set(MAP_ANALYTICS_PINNED, True)
     
-    # def _pin_analytics(self) -> None:
-    #     w = self.panel_d.take_tabs()
-    #     if w is None:
-    #         return
-    
-    #     self._tabs_d = w
-    #     self.store.set(MAP_ANALYTICS_PINNED, True)
-    #     self.store.set(MAP_SHOW_ANALYTICS, True)
-    
-    #     self._set_analytics_visible(False)
-    
-    #     self._win_d.set_panel(w)
-    #     self._win_d.show()
-    #     self._win_d.raise_()
-    #     self._win_d.activateWindow()
-    
+
     def _unpin_analytics(self) -> None:
         self.store.set(MAP_ANALYTICS_PINNED, False)
-    
-    # def _unpin_analytics(self) -> None:
-    #     w = self._win_d.take_panel()
-    #     self._win_d.hide()
-    
-    #     self.store.set(MAP_ANALYTICS_PINNED, False)
-    
-    #     if w is None:
-    #         self._tabs_d = None
-    #         return
-    
-    #     self._tabs_d = None
-    #     self.panel_d.set_tabs(w)
-    
-    #     show_d = bool(self.store.get(MAP_SHOW_ANALYTICS, False))
-    #     self._set_analytics_visible(show_d)
+
 
     def _on_analytics_toggled(self, enabled: bool) -> None:
         enabled = bool(enabled)
@@ -1422,27 +1405,7 @@ class MapTab(QWidget):
         if enabled and bool(self.store.get(MAP_ANALYTICS_PINNED, False)):
             self._win_d.raise_()
             self._win_d.activateWindow()
-        
-    # def _on_analytics_toggled(self, enabled: bool) -> None:
-    #     enabled = bool(enabled)
-    
-    #     pinned = bool(
-    #         self.store.get(MAP_ANALYTICS_PINNED, False)
-    #     )
-    
-    #     # If pinned, the toggle controls the floating window.
-    #     if pinned:
-    #         if enabled:
-    #             self._win_d.show()
-    #             self._win_d.raise_()
-    #             self._win_d.activateWindow()
-    #             self.store.set(MAP_SHOW_ANALYTICS, True)
-    #         else:
-    #             self._close_analytics()
-    #         return
-    
-    #     # Normal (embedded) mode.
-    #     self.store.set(MAP_SHOW_ANALYTICS, enabled)
+
         
     def _on_run_simulation(self, years_to_add: int):
         self.store.set(K_PROP_ENABLED, True)
@@ -2142,108 +2105,7 @@ class MapTab(QWidget):
         self._eval_json_mtime = None
         self._eval_json_obj = None
 
-    # def _find_eval_json(
-    #     self,
-    #     p: Path,
-    # ) -> Optional[Path]:
-    #     pats = (
-    #         "geoprior_eval*_interpretable.json",
-    #         "geoprior_eval*.json",
-    #     )
 
-    #     for d in (p.parent, p.parent.parent):
-    #         if d is None or not d.exists():
-    #             continue
-    #         for pat in pats:
-    #             hits = sorted(d.glob(pat))
-    #             if hits:
-    #                 return hits[0]
-    #     return None
-
-    # def _load_eval_json_cached(
-    #     self,
-    #     p: Path,
-    # ) -> Optional[dict]:
-    #     jf = self._find_eval_json(p)
-    #     if jf is None:
-    #         return None
-
-    #     try:
-    #         mt = float(jf.stat().st_mtime)
-    #     except Exception:
-    #         mt = None
-
-    #     if (
-    #         self._eval_json_path == jf
-    #         and self._eval_json_mtime == mt
-    #         and isinstance(self._eval_json_obj, dict)
-    #     ):
-    #         return self._eval_json_obj
-
-    #     try:
-    #         with open(str(jf), "r", encoding="utf-8") as f:
-    #             obj = json.load(f)
-    #         if not isinstance(obj, dict):
-    #             return None
-    #     except :
-    #         return None
-
-    #     self._eval_json_path = jf
-    #     self._eval_json_mtime = mt
-    #     self._eval_json_obj = obj
-    #     return obj
-
-    # def _model_eval_md(self) -> str:
-    #     if not self.store:
-    #         return ""
-
-    #     if not bool(
-    #         self.store.get(
-    #             MAP_VIEW_INTERP_MODEL_ENABLED,
-    #             False,
-    #         )
-    #     ):
-    #         return ""
-
-    #     sel = self.store.get(
-    #         MAP_VIEW_INTERP_MODEL_BLOCKS,
-    #         [],
-    #     ) or []
-    #     sel = [
-    #         str(s).strip()
-    #         for s in list(sel)
-    #         if str(s).strip()
-    #     ]
-    #     if not sel:
-    #         return ""
-
-    #     ap = str(
-    #         self.store.get(MAP_ACTIVE_FILE, "") or ""
-    #     ).strip()
-    #     if not ap:
-    #         fs = self.store.get(MAP_SELECTED_FILES, []) or []
-    #         if fs:
-    #             ap = str(fs[0] or "").strip()
-
-    #     if not ap:
-    #         return (
-    #             "## Model-driven interpretation\n\n"
-    #             "- Note: dataset path is missing.\n"
-    #         )
-
-    #     obj = self._load_eval_json_cached(Path(ap))
-    #     if not obj:
-    #         return (
-    #             "## Model-driven interpretation\n\n"
-    #             "- Note: evaluation JSON not found near "
-    #             "the dataset file.\n"
-    #         )
-
-    #     blocks = build_model_blocks(obj)
-    #     return render_model_blocks_md(
-    #         blocks,
-    #         selected=sel,
-    #     )
 
     def _on_export_requested(self, kind: str) -> None:
         kind = str(kind or "").strip().lower()
@@ -2418,12 +2280,22 @@ class MapTab(QWidget):
     
             self._tabs_d = w
             self._win_d.set_panel(w)
-    
+            
+            try:
+                self.panel_d.set_tabbar_visible(True)
+            except Exception:
+                pass
+
             self.panel_d.collapse()
             self._layout_overlays()
             return
     
         # unpinned => move tabs back to bottom panel
+        try:
+            self.panel_d.set_tabbar_visible(False)
+        except Exception:
+            pass
+
         if self._tabs_d is None:
             return
     
@@ -3149,7 +3021,15 @@ class MapTab(QWidget):
             MAP_SAMPLING_CELL_KM,
             MAP_SAMPLING_MAX_PER_CELL,
             MAP_SAMPLING_APPLY_HOTSPOTS,
-            MAP_ANALYTICS_PINNED
+            MAP_ANALYTICS_PINNED,
+            MAP_ANALYTICS_PINNED,
+            MAP_ANALYTICS_HEIGHT,
+            MAP_ANALYTICS_WIDTH,
+            MAP_ANALYTICS_TAB,
+            MAP_ANALYTICS_COMPACT,
+            MAP_ANALYTICS_MANUAL,
+            MAP_ANALYTICS_POS_X,
+            MAP_ANALYTICS_POS_Y,
 
         }
        
@@ -3273,10 +3153,6 @@ class MapTab(QWidget):
         self.head.set_analytics_checked(show_d)
 
         if getattr(self, "tooltab", None) is not None:
-            # self.tooltab.set_checked(
-            #     "analytics",
-            #     bool(show_d or pinned),
-            # )
             self.tooltab.set_checked("analytics", bool(show_d))
     
         self.canvas.set_focus_checked(focus)
@@ -3290,21 +3166,46 @@ class MapTab(QWidget):
         # Analytics presentation (pinned vs embedded)
         # (Focus mode always hides analytics)
         # --------------------------------------------------
-        # if focus:
-        #     self._set_analytics_visible(False)
-        #     if pinned:
-        #         self._win_d.hide()
-        # else:
-        #     if pinned:
-        #         self._set_analytics_visible(False)
-        #         if not self._win_d.isVisible():
-        #             self._win_d.show()
-        #     else:
-        #         self._win_d.hide()
-        #         self._set_analytics_visible(show_d)
-        
+ 
         self._ensure_analytics_host(pinned)
+        k = str(
+            self.store.get(
+                MAP_ANALYTICS_TAB,
+                "selection",
+            )
+            or "selection"
+        )
+        try:
+            self.head.set_analytics_mode(k if show_d else "")
+        except Exception:
+            pass
         
+        if getattr(self, "tooltab", None) is not None:
+            try:
+                tt = self.head.btn_analytics.text()
+            except Exception:
+                tt = "Analytics"
+            try:
+                self.tooltab.set_tooltip("analytics", tt)
+            except Exception:
+                pass
+    
+        try:
+            self.panel_d.set_active_tab(k, push=False)
+        except Exception:
+            pass
+        
+        c = bool(
+            self.store.get(
+                MAP_ANALYTICS_COMPACT,
+                False,
+            )
+        )
+        try:
+            self.panel_d.set_compact(c)
+        except Exception:
+            pass
+
         if focus:
             self._set_analytics_visible(False)
             self._win_d.hide()
@@ -3349,8 +3250,6 @@ class MapTab(QWidget):
             names.append(str(it.get("name", "")))
         names = [n for n in names if n.strip()]
         self.head.set_bookmarks(names)
-    
-
     
     def _set_focus_mode(self, enabled: bool) -> None:
         enabled = bool(enabled)

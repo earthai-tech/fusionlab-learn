@@ -89,8 +89,10 @@ class MplPlot(QFrame):
         with_toolbar: bool = False,
         parent: Optional[QWidget] = None,
     ) -> None:
+
         super().__init__(parent)
         self.setFrameShape(QFrame.StyledPanel)
+        self.setObjectName("gpPlotCard")
 
         self._title = str(title or "")
         self._with_tb = bool(with_toolbar)

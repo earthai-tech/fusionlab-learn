@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
     QFrame,
     QGraphicsOpacityEffect,
     QHBoxLayout,
+    QMenu,
     QToolButton,
     QWidget,
     QStyle,
@@ -179,7 +180,42 @@ class MapToolTab(QWidget):
             btn.clicked.connect(lambda: _emit(True))
 
         return btn
-
+    
+    def _install_analytics_menu(self, btn: QToolButton) -> None:
+        if btn is None:
+            return
+    
+        m = QMenu(btn)
+        m.setObjectName("gpAnaMenu")
+    
+        def _act(label: str, key: str) -> None:
+            a = m.addAction(str(label))
+            a.triggered.connect(
+                lambda _=False: self.triggered.emit(
+                    str(key),
+                    True,
+                )
+            )
+    
+        _act("Selection", "analytics:selection")
+        _act("Spatial", "analytics:spatial")
+        _act("Sharpness", "analytics:sharpness")
+        _act("Reliability", "analytics:reliability")
+        _act("Inspector", "analytics:inspector")
+    
+        m.addSeparator()
+    
+        a_hide = m.addAction("Hide analytics")
+        a_hide.triggered.connect(
+            lambda _=False: self.triggered.emit(
+                "analytics",
+                False,
+            )
+        )
+    
+        btn.setMenu(m)
+        btn.setPopupMode(QToolButton.InstantPopup)
+    
     def set_checked(self, key: str, checked: bool) -> None:
         btn = self._btns.get(str(key))
         if btn is None:
@@ -187,7 +223,13 @@ class MapToolTab(QWidget):
         was = btn.blockSignals(True)
         btn.setChecked(bool(checked))
         btn.blockSignals(was)
-
+        
+    def set_tooltip(self, key: str, text: str) -> None:
+        btn = self._btns.get(str(key))
+        if btn is None:
+            return
+        btn.setToolTip(str(text))
+    
     # -------------------------
     # Default tools
     # -------------------------
@@ -232,15 +274,26 @@ class MapToolTab(QWidget):
                 checkable=True,
             )
         )
-        self.add_tool(
+        # self.add_tool(
+        #     ToolSpec(
+        #         key="analytics",
+        #         tooltip="Toggle Analytics",
+        #         icon_name="analytics.svg",
+        #         fallback_sp=QStyle.SP_ComputerIcon,
+        #         checkable=True,
+        #     )
+        # )
+        
+        btn_ana = self.add_tool(
             ToolSpec(
                 key="analytics",
-                tooltip="Toggle Analytics",
+                tooltip="Analytics",
                 icon_name="analytics.svg",
                 fallback_sp=QStyle.SP_ComputerIcon,
                 checkable=True,
             )
         )
+        self._install_analytics_menu(btn_ana)
 
         self.add_separator()
     

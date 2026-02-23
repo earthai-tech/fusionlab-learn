@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import traceback
+
 from typing import Callable, Dict, List, Optional
 
 from PyQt5.QtCore import Qt, QSettings, pyqtSignal
@@ -1010,35 +1012,67 @@ class ToolsTab(QWidget):
         # Apply filter state (search + favorites)
         self._apply_nav_filter(self._nav_search.text())
 
+    # def _build_tool_widget(self, spec: ToolSpec) -> QWidget:
+    #     if spec.factory is None:
+    #         return _make_placeholder_tool(
+    #             spec.title,
+    #             spec.description,
+    #         )
 
+    #     try:
+    #         w = spec.factory(self)
+    #         if isinstance(w, QWidget):
+    #             return w
+    #     except TypeError:
+    #         pass
+    #     except Exception:
+    #         pass
+
+    #     try:
+    #         w = spec.factory()  # type: ignore[misc]
+    #         if isinstance(w, QWidget):
+    #             return w
+    #     except Exception:
+    #         pass
+
+    #     return _make_placeholder_tool(
+    #         spec.title,
+    #         spec.description,
+    #     )
+    
     def _build_tool_widget(self, spec: ToolSpec) -> QWidget:
         if spec.factory is None:
             return _make_placeholder_tool(
                 spec.title,
                 spec.description,
             )
-
+    
         try:
             w = spec.factory(self)
             if isinstance(w, QWidget):
                 return w
-        except TypeError:
-            pass
-        except Exception:
-            pass
-
+        except Exception as exc:
+            traceback.print_exc()
+            return _make_placeholder_tool(
+                spec.title,
+                f"{spec.description}\n\nError: {exc}",
+            )
+    
         try:
             w = spec.factory()  # type: ignore[misc]
             if isinstance(w, QWidget):
                 return w
-        except Exception:
-            pass
-
+        except Exception as exc:
+            traceback.print_exc()
+            return _make_placeholder_tool(
+                spec.title,
+                f"{spec.description}\n\nError: {exc}",
+            )
+    
         return _make_placeholder_tool(
             spec.title,
             spec.description,
         )
-
     # ------------------------------------------------------------------
     # Favorites (persist)
     # ------------------------------------------------------------------

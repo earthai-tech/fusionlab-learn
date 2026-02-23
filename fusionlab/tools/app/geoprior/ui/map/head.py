@@ -25,8 +25,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional, Sequence
 
-from PyQt5.QtCore import Qt, QSize, pyqtSignal
-from PyQt5.QtGui import QIcon, QFontMetrics, QIntValidator
+from PyQt5.QtCore import Qt, QSize, pyqtSignal, QTimer
+from PyQt5.QtGui import (
+    QIcon,
+    QFontMetrics,
+    QIntValidator,
+    QColor,
+    QFont,
+    QCursor,
+)
 from PyQt5.QtWidgets import (
     QActionGroup,
     QComboBox,
@@ -35,15 +42,14 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
+    QWidgetAction,
     QSizePolicy,
     QToolButton,
     QVBoxLayout,
     QWidget,
-    QStyle, 
-    # QFontMetrics,
-    # QIntValidator,
+    QStyle,
+    QCompleter,
 )
-
 from ..icon_utils import try_icon
 
 @dataclass
@@ -91,7 +97,14 @@ class ElideLabel(QLabel):
                 w,
             )
         )
+        
+class ClickableFrame(QFrame):
+    clicked = pyqtSignal()
 
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
 
 class ColumnPicker(QWidget):
     """Compact picker: label + field + menu button."""
@@ -185,6 +198,7 @@ class MapHeadBar(QWidget):
     coord_mode_changed = pyqtSignal(str)
     focus_toggled = pyqtSignal(bool)
     analytics_toggled = pyqtSignal(bool)
+    analytics_requested = pyqtSignal(str)
 
     x_changed = pyqtSignal(str)
     y_changed = pyqtSignal(str)
@@ -345,6 +359,19 @@ class MapHeadBar(QWidget):
         )
         self.btn_analytics.setIconSize(QSize(16, 16))
         self.btn_analytics.setMinimumHeight(28)
+        # Analytics menu (dropdown)
+        self._ana_acts = {}
+        self._ana_group = QActionGroup(self)
+        self._ana_group.setExclusive(True)
+
+        self._ana_menu = self._build_analytics_menu()
+        self.btn_analytics.setMenu(self._ana_menu)
+        self.btn_analytics.setPopupMode(
+            QToolButton.InstantPopup
+        )
+        # Dynamic label state (default tab)
+        self._ana_mode = "selection"
+        self._update_ana_button_text()
 
         # Data / View (mini pill toggles)
         self.btn_data = QToolButton(self.card)
@@ -400,10 +427,6 @@ class MapHeadBar(QWidget):
         self.btn_more.setPopupMode(
             QToolButton.InstantPopup
         )
-        # ico = self.style().standardIcon(
-        #     QStyle.SP_TitleBarMenuButton
-        # )
-        # self.btn_more.setIcon(ico)
         self.btn_more.setIcon(
             try_icon(
                 "more.svg",
@@ -419,23 +442,122 @@ class MapHeadBar(QWidget):
         self._more_menu = self._build_more_menu()
         self.btn_more.setMenu(self._more_menu)
 
-        # Mapping pickers
-        self.pk_x = ColumnPicker(label="X:", parent=self.card)
-        self.pk_y = ColumnPicker(label="Y:", parent=self.card)
-        self.pk_z = ColumnPicker(label="Z:", parent=self.card)
-
-        # Actions
-        self.btn_swap = QToolButton(self.card)
+        # Mapping chip (dot + button inside)
+        self._map_state = "info"
+        self._pulse_on = False
+        
+        self.w_mapchip = ClickableFrame(self.card)
+        self.w_mapchip.setObjectName("mapHeadMapChip")
+        self.w_mapchip.setProperty("state", "info")
+        
+        wl = QHBoxLayout(self.w_mapchip)
+        wl.setContentsMargins(10, 0, 10, 0)
+        wl.setSpacing(8)
+        
+        self.lb_mapdot = QLabel(self.w_mapchip)
+        self.lb_mapdot.setObjectName("mapHeadMapDot")
+        self.lb_mapdot.setFixedSize(8, 8)
+        self.lb_mapdot.setProperty("state", "info")
+        self.lb_mapdot.setProperty("pulse", "0")
+        
+        self.lb_mapico = QLabel(self.w_mapchip)
+        self.lb_mapico.setObjectName("mapHeadMapIco")
+        ico = try_icon("mapping.svg")
+        if not ico.isNull():
+            self.lb_mapico.setPixmap(ico.pixmap(16, 16))
+        
+        # Key/Value segments (pro look)
+        def mk_key(txt: str) -> QLabel:
+            lb = QLabel(txt, self.w_mapchip)
+            lb.setObjectName("mapHeadMapKey")
+            return lb
+        
+        def mk_sep() -> QLabel:
+            lb = QLabel("·", self.w_mapchip)
+            lb.setObjectName("mapHeadMapSep")
+            return lb
+        
+        self.lb_xk = mk_key("X")
+        self.lb_xv = ElideLabel("—", self.w_mapchip)
+        self.lb_xv.setObjectName("mapHeadMapVal")
+        
+        self.lb_yk = mk_key("Y")
+        self.lb_yv = ElideLabel("—", self.w_mapchip)
+        self.lb_yv.setObjectName("mapHeadMapVal")
+        
+        self.lb_zk = mk_key("Z")
+        self.lb_zv = ElideLabel("—", self.w_mapchip)
+        self.lb_zv.setObjectName("mapHeadMapVal")
+        
+        # Swap inside capsule (so it feels like 1 control)
+        self.btn_swap = QToolButton(self.w_mapchip)
         self.btn_swap.setObjectName("miniAction")
         self.btn_swap.setProperty("role", "mapHead")
         self.btn_swap.setToolTip("Swap X and Y")
         self.btn_swap.setAutoRaise(True)
-        self.btn_swap.setText("⇄")
-        self.btn_swap.setFixedSize(30, 30)
+        self.btn_swap.setIcon(
+            try_icon(
+                "swap.svg",
+                fallback=self.style().standardIcon(
+                    QStyle.SP_BrowserReload
+                ),
+            )
+        )
+        self.btn_swap.setIconSize(QSize(15, 15))
+        self.btn_swap.setText("")
+        self.btn_swap.setFixedSize(28, 28)
+        
+        # Drop button (small), but capsule click also opens menu
+        self.btn_mapdrop = QToolButton(self.w_mapchip)
+        self.btn_mapdrop.setObjectName("miniAction")
+        self.btn_mapdrop.setProperty("role", "mapHead")
+        self.btn_mapdrop.setToolTip("Edit mapping")
+        self.btn_mapdrop.setAutoRaise(True)
+        
+        self.btn_mapdrop.setText("▾")
+        self.btn_mapdrop.setFixedSize(28, 28)
+        
+        self._map_menu = self._build_mapping_menu()
+        self._map_hover_timer = QTimer(self)
+        self._map_hover_timer.setInterval(260)
+        self._map_hover_timer.timeout.connect(
+            self._map_menu_autoclose_tick
+        )
+        
+        self._map_close_timer = QTimer(self)
+        self._map_close_timer.setSingleShot(True)
+        self._map_close_timer.setInterval(260)
+        self._map_close_timer.timeout.connect(
+            self._map_menu.close
+        )
+        
+        self._hook_map_menu_autoclose()
 
+        wl.addWidget(self.lb_mapdot, 0, Qt.AlignVCenter)
+        wl.addWidget(self.lb_mapico, 0, Qt.AlignVCenter)
+        wl.addWidget(self.lb_xk, 0)
+        wl.addWidget(self.lb_xv, 1)
+        
+        wl.addWidget(self.btn_swap, 0)
+        
+        wl.addWidget(self.lb_yk, 0)
+        wl.addWidget(self.lb_yv, 1)
+        
+        wl.addWidget(mk_sep(), 0)
+        
+        wl.addWidget(self.lb_zk, 0)
+        wl.addWidget(self.lb_zv, 1)
+        
+        wl.addStretch(1)
+        wl.addWidget(self.btn_mapdrop, 0)
+        
+        # Pulse timer (warn)
+        self._pulse_timer = QTimer(self)
+        self._pulse_timer.setInterval(520)
+        self._pulse_timer.timeout.connect(self._tick_pulse)
         # Map actions (fit/clear/reset) moved to the
         # hover tooltab and the "More" menu.
-
+        
         self._build_ui()
         self._connect()
         self._update_status()
@@ -523,10 +645,6 @@ class MapHeadBar(QWidget):
         c1.addSpacing(6)
         c1.addWidget(self._epsg_wrap, 0)
 
-        # No stretch here: ctrl stays "minimum needed"
-        # so Mapping gets the width.
-        # (Do not addStretch(1) in ctrl)
-
         # ---- Mapping group (gets stretch, won't collapse)
         mapping = QFrame(row1)
         mapping.setObjectName("mapHeadGroup")
@@ -539,22 +657,11 @@ class MapHeadBar(QWidget):
         m1.setContentsMargins(10, 8, 10, 8)
         m1.setSpacing(8)
 
-        title = QLabel("Mapping", mapping)
-        title.setObjectName("mapHeadKey")
+        # title = QLabel("Mapping", mapping)
+        # title.setObjectName("mapHeadKey")
+        mapping.setProperty("variant", "plain")
 
-        # Ensure pickers keep usable width.
-        for pk in (self.pk_x, self.pk_y, self.pk_z):
-            pk.setSizePolicy(
-                QSizePolicy.Expanding,
-                QSizePolicy.Fixed,
-            )
-            pk.setMinimumWidth(170)
-
-        m1.addWidget(title, 0)
-        m1.addWidget(self.pk_x, 1)
-        m1.addWidget(self.btn_swap, 0)
-        m1.addWidget(self.pk_y, 1)
-        m1.addWidget(self.pk_z, 1)
+        m1.addWidget(self.w_mapchip, 1)
         m1.addSpacing(2)
 
         # Critical stretch: Mapping expands, ctrl doesn't.
@@ -579,32 +686,174 @@ class MapHeadBar(QWidget):
         )
 
         self.btn_focus.toggled.connect(self.focus_toggled)
-        self.btn_analytics.toggled.connect(
-            self.analytics_toggled
-        )
 
-        self.pk_x.changed.connect(self.x_changed)
-        self.pk_y.changed.connect(self.y_changed)
-        self.pk_z.changed.connect(self.z_changed)
-
-        self.pk_x.changed.connect(
-            lambda _v: self._update_status(),
+        # User selection from dropdown
+        self.cmb_map_x.activated[int].connect(
+            lambda _i: self._commit_map("x")
         )
-        self.pk_y.changed.connect(
-            lambda _v: self._update_status(),
+        self.cmb_map_y.activated[int].connect(
+            lambda _i: self._commit_map("y")
         )
-        self.pk_z.changed.connect(
-            lambda _v: self._update_status(),
+        self.cmb_map_z.activated[int].connect(
+            lambda _i: self._commit_map("z")
         )
-
+        
+        # User typed a value then pressed Enter / left field
+        for w, cmb in (
+            ("x", self.cmb_map_x),
+            ("y", self.cmb_map_y),
+            ("z", self.cmb_map_z),
+        ):
+            le = cmb.lineEdit()
+            if le is not None:
+                le.editingFinished.connect(
+                    lambda ww=w: self._commit_map(ww)
+                )
         self.btn_swap.clicked.connect(self.swap_xy_clicked)
         self.btn_data.toggled.connect(self.data_toggled)
         self.btn_view.toggled.connect(self.view_toggled)
 
+        self.w_mapchip.clicked.connect(self._popup_map_menu)
+        self.btn_mapdrop.clicked.connect(self._popup_map_menu)
+        
     # -----------------------------
     # External setters
     # -----------------------------
+    def _hook_map_menu_autoclose(self) -> None:
+        """
+        Auto-dismiss mapping popover when the cursor leaves it.
+        Keeps it open while combo dropdowns / completer popups
+        are visible.
+        """
+        try:
+            self._map_menu.aboutToShow.connect(
+                self._map_hover_timer.start
+            )
+            self._map_menu.aboutToHide.connect(
+                self._map_hover_timer.stop
+            )
+            self._map_menu.aboutToHide.connect(
+                self._map_close_timer.stop
+            )
+        except Exception:
+            return
+    
+    
+    def _map_menu_autoclose_tick(self) -> None:
+        if not self._map_menu.isVisible():
+            self._map_close_timer.stop()
+            return
+    
+        if self._map_any_child_popup_open():
+            self._map_close_timer.stop()
+            return
+    
+        if self._map_menu_contains_cursor():
+            self._map_close_timer.stop()
+            return
+    
+        if not self._map_close_timer.isActive():
+            self._map_close_timer.start()
+    
+    
+    def _map_menu_contains_cursor(self) -> bool:
+        pos = QCursor.pos()
+    
+        # Main menu window geometry
+        if self._map_menu.frameGeometry().contains(pos):
+            return True
+    
+        # Combo dropdown / completer popups (separate windows)
+        for g in self._map_child_popup_geoms():
+            if g.contains(pos):
+                return True
+    
+        return False
+    
+    
+    def _map_any_child_popup_open(self) -> bool:
+        # If any dropdown is visible, do not auto-close.
+        for cmb in (self.cmb_map_x, self.cmb_map_y, self.cmb_map_z):
+            try:
+                vw = cmb.view()
+                if vw is not None:
+                    win = vw.window()
+                    if win is not None and win.isVisible():
+                        return True
+            except Exception:
+                pass
+    
+            try:
+                comp = cmb.completer()
+                if isinstance(comp, QCompleter):
+                    pv = comp.popup()
+                    if pv is not None and pv.isVisible():
+                        return True
+            except Exception:
+                pass
+    
+        return False
+    
+    
+    def _map_child_popup_geoms(self):
+        geoms = []
+    
+        for cmb in (self.cmb_map_x, self.cmb_map_y, self.cmb_map_z):
+            try:
+                vw = cmb.view()
+                if vw is not None:
+                    win = vw.window()
+                    if win is not None and win.isVisible():
+                        geoms.append(win.frameGeometry())
+            except Exception:
+                pass
+    
+            try:
+                comp = cmb.completer()
+                if isinstance(comp, QCompleter):
+                    pv = comp.popup()
+                    if pv is not None and pv.isVisible():
+                        geoms.append(pv.frameGeometry())
+            except Exception:
+                pass
+    
+        return geoms
 
+    def _popup_map_menu(self) -> None:
+        self._sync_map_flow()
+        pos = self.w_mapchip.mapToGlobal(
+            self.w_mapchip.rect().bottomLeft()
+        )
+        self._map_menu.popup(pos)
+        self._map_menu.setFocus(Qt.PopupFocusReason)
+    
+    def _tick_pulse(self) -> None:
+        if str(self._map_state) != "warn":
+            return
+        self._pulse_on = not bool(self._pulse_on)
+        self.lb_mapdot.setProperty(
+            "pulse",
+            "1" if self._pulse_on else "0",
+        )
+        self.lb_mapdot.style().unpolish(self.lb_mapdot)
+        self.lb_mapdot.style().polish(self.lb_mapdot)
+    
+    
+    def _set_pulse_enabled(self, on: bool) -> None:
+        if on:
+            if not self._pulse_timer.isActive():
+                self._pulse_on = False
+                self.lb_mapdot.setProperty("pulse", "0")
+                self._pulse_timer.start()
+        else:
+            if self._pulse_timer.isActive():
+                self._pulse_timer.stop()
+            self._pulse_on = False
+            self.lb_mapdot.setProperty("pulse", "0")
+            self.lb_mapdot.style().unpolish(self.lb_mapdot)
+            self.lb_mapdot.style().polish(self.lb_mapdot)
+            
+            
     def _clear_icon(self) -> QIcon:
         sp = getattr(QStyle, "SP_TrashIcon", None)
         if sp is None:
@@ -639,14 +888,22 @@ class MapHeadBar(QWidget):
             return
         self.epsg_changed.emit(int(v))
 
+    def _show_combo_start(self, cmb: QComboBox) -> None:
+        le = cmb.lineEdit()
+        if le is None:
+            return
+        le.setCursorPosition(0)
+        le.deselect()
+    
     def set_available_columns(
         self,
         cols: Sequence[str],
     ) -> None:
+
         self._cols = list(cols or [])
-        self.pk_x.set_columns(self._cols)
-        self.pk_y.set_columns(self._cols)
-        self.pk_z.set_columns(self._cols)
+        self._fill_map_combo(self.cmb_map_x, self._cols)
+        self._fill_map_combo(self.cmb_map_y, self._cols)
+        self._fill_map_combo(self.cmb_map_z, self._cols)
         self._update_status()
 
     def set_engine(self, engine: str) -> None:
@@ -673,14 +930,19 @@ class MapHeadBar(QWidget):
         self.btn_view.blockSignals(False)
 
     def set_analytics_checked(self, checked: bool) -> None:
-        self.btn_analytics.blockSignals(True)
+        was = self.btn_analytics.blockSignals(True)
         self.btn_analytics.setChecked(bool(checked))
-        self.btn_analytics.blockSignals(False)
+        self.btn_analytics.blockSignals(was)
+        self._update_ana_button_text()
 
     def set_xyz(self, *, x: str, y: str, z: str) -> None:
-        self.pk_x.set_value(x)
-        self.pk_y.set_value(y)
-        self.pk_z.set_value(z)
+        # self.pk_x.set_value(x)
+        # self.pk_y.set_value(y)
+        # self.pk_z.set_value(z)
+        # self._update_status()
+        self._set_map_value(self.cmb_map_x, x)
+        self._set_map_value(self.cmb_map_y, y)
+        self._set_map_value(self.cmb_map_z, z)
         self._update_status()
 
     def set_active_dataset(
@@ -725,6 +987,487 @@ class MapHeadBar(QWidget):
         self.lb_city.setText(" · ".join(parts))
         self.lb_city.setVisible(True)
         self.lb_city.setToolTip(self.lb_city.text())
+
+    # -----------------------------
+    # Analytics dropdown
+    # -----------------------------
+    def _ana_label(self, mode: str) -> str:
+        m = str(mode or "").strip().lower()
+        lab = {
+            "selection": "Selection",
+            "spatial": "Spatial",
+            "sharpness": "Sharpness",
+            "reliability": "Reliability",
+            "inspector": "Inspector",
+        }
+        if not m:
+            return ""
+        return lab.get(m, m[:1].upper() + m[1:])
+    
+    def _update_ana_button_text(self) -> None:
+        base = "Analytics"
+        if not bool(self.btn_analytics.isChecked()):
+            self.btn_analytics.setText(base)
+            self.btn_analytics.setToolTip(base)
+            return
+    
+        mode = getattr(self, "_ana_mode", "")
+        label = self._ana_label(mode)
+        if not label:
+            self.btn_analytics.setText(base)
+            self.btn_analytics.setToolTip(base)
+            return
+    
+        txt = f"{base} · {label}"
+        self.btn_analytics.setText(txt)
+        self.btn_analytics.setToolTip(txt)
+    
+    def _build_analytics_menu(self) -> QMenu:
+        menu = QMenu(self)
+        menu.setToolTipsVisible(True)
+
+        def add_item(key: str, label: str) -> None:
+            act = menu.addAction(str(label))
+            act.setCheckable(True)
+            act.setData(str(key))
+            self._ana_group.addAction(act)
+            self._ana_acts[str(key)] = act
+
+            act.triggered.connect(
+                lambda _=False, k=key:
+                self._emit_analytics_mode(str(k))
+            )
+
+        add_item("selection", "Selection")
+        add_item("spatial", "Spatial")
+        add_item("sharpness", "Sharpness")
+        add_item("reliability", "Reliability")
+        add_item("inspector", "Inspector")
+
+        menu.addSeparator()
+
+        a_hide = menu.addAction("Hide analytics")
+        a_hide.triggered.connect(
+            lambda: self._hide_analytics()
+        )
+
+        return menu
+
+    def _emit_analytics_mode(self, mode: str) -> None:
+        m = str(mode or "").strip().lower()
+        if not m:
+            return
+    
+        self._ana_mode = m
+        self.set_analytics_mode(m)
+    
+        # visual indicator (checked) without re-entrancy
+        was = self.btn_analytics.blockSignals(True)
+        self.btn_analytics.setChecked(True)
+        self.btn_analytics.blockSignals(was)
+    
+        # keep old pipeline working
+        self.analytics_toggled.emit(True)
+    
+        # tell MapTab which view to open
+        self.analytics_requested.emit(str(m))
+
+    def _hide_analytics(self) -> None:
+        was = self.btn_analytics.blockSignals(True)
+        self.btn_analytics.setChecked(False)
+        self.btn_analytics.blockSignals(was)
+    
+        self.analytics_toggled.emit(False)
+        self._update_ana_button_text()
+
+    def set_analytics_mode(self, mode: str) -> None:
+        m = str(mode or "").strip().lower()
+    
+        if m:
+            self._ana_mode = m
+            act = self._ana_acts.get(m, None)
+            if act is not None:
+                act.blockSignals(True)
+                act.setChecked(True)
+                act.blockSignals(False)
+    
+        self._update_ana_button_text()
+
+    # -----------------------------
+    # Mapping popover (premium)
+    # -----------------------------
+    def _build_mapping_menu(self) -> QMenu:
+        menu = QMenu(self)
+        menu.setObjectName("mapMapMenu")
+        menu.setToolTipsVisible(True)
+        menu.setAttribute(Qt.WA_TranslucentBackground, True)
+        menu.setWindowFlags(
+            menu.windowFlags()
+            | Qt.FramelessWindowHint
+            | Qt.NoDropShadowWindowHint
+        )
+    
+        pop = QFrame(menu)
+        pop.setObjectName("mapMapPopover")
+        pop.setFrameShape(QFrame.NoFrame)
+        pop.setMinimumWidth(360)
+    
+        lay = QVBoxLayout(pop)
+        lay.setContentsMargins(12, 8, 12, 8)
+        lay.setSpacing(8)
+    
+        hdr = QWidget(pop)
+        hl = QHBoxLayout(hdr)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(8)
+    
+        lb = QLabel("Mapping", hdr)
+        lb.setObjectName("mapMapTitle")
+    
+        self.lb_map_hint = QLabel("", hdr)
+        self.lb_map_hint.setObjectName("mapMapHint")
+        self.lb_map_hint.setAlignment(
+            Qt.AlignRight | Qt.AlignVCenter
+        )
+    
+        hl.addWidget(lb, 0)
+        hl.addWidget(self.lb_map_hint, 1)
+        lay.addWidget(hdr, 0)
+    
+        row = QWidget(pop)
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(6)
+        
+        lx = QLabel("X", row); lx.setObjectName("mapMapKey")
+        ly = QLabel("Y", row); ly.setObjectName("mapMapKey")
+        lz = QLabel("Z", row); lz.setObjectName("mapMapKey")
+        
+        self.cmb_map_x = self._make_map_combo(row)
+        self.cmb_map_y = self._make_map_combo(row)
+        self.cmb_map_z = self._make_map_combo(row)
+        
+        self.cmb_map_x.setToolTip("X / longitude column")
+        self.cmb_map_y.setToolTip("Y / latitude column")
+        self.cmb_map_z.setToolTip("Value / color column")
+        
+        bswap = QToolButton(row)
+        bswap.setObjectName("miniAction")
+        bswap.setProperty("role", "mapHead")
+        bswap.setAutoRaise(True)
+        bswap.setToolTip("Swap X and Y")
+        bswap.setIcon(
+            try_icon(
+                "swap.svg",
+                fallback=self.style().standardIcon(
+                    QStyle.SP_BrowserReload
+                ),
+            )
+        )
+        bswap.setIconSize(QSize(15, 15))
+        bswap.setFixedSize(28, 28)
+        bswap.clicked.connect(self.swap_xy_clicked.emit)
+
+        rl.addWidget(lx, 0)
+        rl.addWidget(self.cmb_map_x, 1)
+        
+        rl.addWidget(bswap, 0)
+        
+        rl.addWidget(ly, 0)
+        rl.addWidget(self.cmb_map_y, 1)
+        
+        rl.addSpacing(6)
+        
+        rl.addWidget(lz, 0)
+        rl.addWidget(self.cmb_map_z, 1)
+        
+        lay.addWidget(row, 0)
+            
+        actw = QWidget(pop)
+        al = QHBoxLayout(actw)
+        al.setContentsMargins(0, 0, 0, 0)
+        al.setSpacing(8)
+        
+        breset = QToolButton(actw)
+        breset.setObjectName("miniAction")
+        breset.setProperty("role", "mapHead")
+        breset.setAutoRaise(True)
+        breset.setToolTip("Reset X/Y/Z mapping")
+        breset.setIcon(
+            try_icon(
+                "reset.svg",
+                fallback=self._clear_icon(),
+            )
+        )
+        breset.setIconSize(QSize(15, 15))
+        breset.setFixedSize(28, 28)
+        breset.clicked.connect(
+            self.reset_mapping_clicked.emit
+        )
+        
+        bok = QToolButton(actw)
+        bok.setObjectName("miniAction")
+        bok.setProperty("role", "mapHead")
+        bok.setProperty("accent", "true")
+        bok.setAutoRaise(True)
+        bok.setToolTip("OK")
+        bok.setIcon(
+            try_icon(
+                "ok.svg",
+                fallback=self.style().standardIcon(
+                    QStyle.SP_DialogApplyButton
+                ),
+            )
+        )
+        bok.setIconSize(QSize(15, 15))
+        bok.setFixedSize(28, 28)
+        bok.clicked.connect(menu.close)
+        
+        al.addStretch(1)
+        al.addWidget(breset, 0)
+        al.addWidget(bok, 0)
+        
+        lay.addWidget(actw, 0)
+    
+        wa = QWidgetAction(menu)
+        wa.setDefaultWidget(pop)
+        menu.addAction(wa)
+        
+        self._sync_map_flow()
+        
+        return menu
+
+    def _sync_map_flow(self) -> None:
+        x = self._map_val(self.cmb_map_x)
+        y = self._map_val(self.cmb_map_y)
+    
+        self.cmb_map_y.setEnabled(bool(x))
+        self.cmb_map_z.setEnabled(bool(x and y))
+    
+    def _make_map_combo(self, parent: QWidget) -> QComboBox:
+        cmb = QComboBox(parent)
+        cmb.setObjectName("mapMapCombo")
+        cmb.setEditable(True)
+        cmb.setInsertPolicy(QComboBox.NoInsert)
+        cmb.setMinimumHeight(30)
+        cmb.setMinimumWidth(140)
+        cmb.setMaximumWidth(240)
+        
+        view = cmb.view()
+        view.setMinimumWidth(260)
+        view.setMaximumWidth(320)
+    
+        comp = cmb.completer()
+        if isinstance(comp, QCompleter):
+            comp.setCaseSensitivity(Qt.CaseInsensitive)
+            comp.setFilterMode(Qt.MatchContains)
+    
+        self._fill_map_combo(cmb, [])
+        return cmb
+
+    def _mapping_full(self) -> bool:
+        x = self._map_val(self.cmb_map_x)
+        y = self._map_val(self.cmb_map_y)
+        z = self._map_val(self.cmb_map_z)
+    
+        if not (x and y and z):
+            return False
+    
+        cols = list(self._cols or [])
+        if cols and (
+            (x not in cols)
+            or (y not in cols)
+            or (z not in cols)
+        ):
+            return False
+    
+        return True
+    
+    
+    def _commit_map(self, which: str) -> None:
+        self._emit_map_xyz(which)
+    
+        w = str(which or "").strip().lower()
+    
+        # Step-by-step UX: X -> focus Y, Y -> focus Z
+        if w == "x":
+            try:
+                self.cmb_map_y.setFocus()
+            except Exception:
+                pass
+            return
+    
+        if w == "y":
+            try:
+                self.cmb_map_z.setFocus()
+            except Exception:
+                pass
+            return
+    
+        # Close like the old menu once Z is chosen
+        if w == "z" and self._mapping_full():
+            QTimer.singleShot(0, self._map_menu.close)
+
+    def _map_val(self, cmb: QComboBox) -> str:
+        v = cmb.currentData()
+        if not v:
+            v = cmb.currentText()
+        return str(v or "").strip()
+
+    def _fill_map_combo(
+        self,
+        cmb: QComboBox,
+        cols: Sequence[str],
+    ) -> None:
+        cur = self._map_val(cmb)
+        items = [str(c) for c in (cols or [])]
+    
+        cmb.blockSignals(True)
+        cmb.clear()
+        cmb.addItem("—", "")
+        for c in items:
+            cmb.addItem(c, c)
+    
+        if cur and cur not in items:
+            warn = self.style().standardIcon(
+                QStyle.SP_MessageBoxWarning
+            )
+            cmb.insertItem(1, cur, cur)
+            cmb.setItemIcon(1, warn)
+        
+            cmb.setItemData(
+                1,
+                "Missing column in current dataset",
+                Qt.ToolTipRole,
+            )
+        
+            f = QFont(cmb.font())
+            f.setItalic(True)
+            cmb.setItemData(1, f, Qt.FontRole)
+        
+            cmb.setItemData(
+                1,
+                QColor(180, 120, 30),
+                Qt.ForegroundRole,
+            )
+        
+            cmb.setCurrentIndex(1)
+            self._show_combo_start(cmb)
+            
+        elif cur:
+            idx = cmb.findData(cur)
+            if idx >= 0:
+                cmb.setCurrentIndex(idx)
+        else:
+            cmb.setCurrentIndex(0)
+    
+        cmb.blockSignals(False)
+
+    
+    def _set_map_value(self, cmb: QComboBox, v: str) -> None:
+        v = str(v or "").strip()
+        if not v:
+            cmb.blockSignals(True)
+            cmb.setCurrentIndex(0)
+            cmb.blockSignals(False)
+            return
+    
+        idx = cmb.findData(v)
+        if idx < 0:
+            cmb.blockSignals(True)
+            # cmb.insertItem(1, f"{v} [—]", v)
+            warn = self.style().standardIcon(QStyle.SP_MessageBoxWarning)
+            cmb.insertItem(1, v, v)
+            cmb.setItemIcon(1, warn)
+            cmb.setItemData(
+                1,
+                "Missing column in current dataset",
+                Qt.ToolTipRole,
+            )
+            f = QFont(cmb.font())
+            f.setItalic(True)
+            cmb.setItemData(1, f, Qt.FontRole)
+            cmb.setItemData(1, QColor(180, 120, 30), Qt.ForegroundRole)
+
+            cmb.setCurrentIndex(1)
+            self._show_combo_start(cmb)
+            cmb.blockSignals(False)
+            return
+    
+        cmb.blockSignals(True)
+        cmb.setCurrentIndex(idx)
+        self._show_combo_start(cmb)
+        cmb.blockSignals(False)
+
+
+    def _emit_map_xyz(self, which: str) -> None:
+        w = str(which or "").strip().lower()
+        if w == "x":
+            self.x_changed.emit(self._map_val(self.cmb_map_x))
+        elif w == "y":
+            self.y_changed.emit(self._map_val(self.cmb_map_y))
+        elif w == "z":
+            self.z_changed.emit(self._map_val(self.cmb_map_z))
+            
+        self._sync_map_flow()
+        self._update_status()
+        
+    
+    def _short_col(self, v: str, n: int = 14) -> str:
+        s = str(v or "").strip()
+        if not s:
+            return "—"
+        if len(s) <= int(n):
+            return s
+        return s[: int(n) - 1] + "…"
+
+    def _update_mapping_pill(self, map_ok: bool) -> None:
+        x = self._map_val(self.cmb_map_x)
+        y = self._map_val(self.cmb_map_y)
+        z = self._map_val(self.cmb_map_z)
+    
+        sx = self._short_col(x)
+        sy = self._short_col(y)
+        sz = self._short_col(z)
+    
+        if map_ok:
+            state = "ok"
+            hint = "OK"
+        elif x or y or z:
+            state = "warn"
+            hint = "Pick X/Y"
+        else:
+            state = "info"
+            hint = "Not set"
+    
+        self._map_state = state
+    
+        # Pro display: keys bold, values normal
+        self.lb_xv.set_full_text(sx)
+        self.lb_yv.set_full_text(sy)
+        self.lb_zv.set_full_text(sz)
+    
+        tip = (
+            "Mapping columns\n"
+            f"X: {x or '—'}\n"
+            f"Y: {y or '—'}\n"
+            f"Z: {z or '—'}"
+        )
+        self.w_mapchip.setToolTip(tip)
+    
+        # State drives capsule + dot
+        self.w_mapchip.setProperty("state", state)
+        self.lb_mapdot.setProperty("state", state)
+    
+        if hasattr(self, "lb_map_hint"):
+            self.lb_map_hint.setText(str(hint))
+    
+        for w in (self.w_mapchip, self.lb_mapdot):
+            w.style().unpolish(w)
+            w.style().polish(w)
+    
+        self._set_pulse_enabled(state == "warn")
+        
 
     def _build_more_menu(self) -> QMenu:
         menu = QMenu(self)
@@ -927,53 +1670,59 @@ class MapHeadBar(QWidget):
     # -----------------------------
     # Status logic
     # -----------------------------
+
     def _mapping_ok(self) -> bool:
-        x = self.pk_x.value()
-        y = self.pk_y.value()
+        x = self._map_val(self.cmb_map_x)
+        y = self._map_val(self.cmb_map_y)
         if not x or not y:
             return False
-
+    
         cols = list(self._cols or [])
         if cols and (x not in cols or y not in cols):
             return False
-
+    
         return True
 
     def _update_status(self) -> None:
         n = int(self._n_sets)
-        x = self.pk_x.value()
-        y = self.pk_y.value()
-
-        have_map = bool(x or y or self.pk_z.value())
+    
+        x = self._map_val(self.cmb_map_x)
+        y = self._map_val(self.cmb_map_y)
+        z = self._map_val(self.cmb_map_z)
+    
+        have_map = bool(x or y or z)
         have_data = n > 0
-
+    
         if not have_data and not have_map:
             self.lb_status.setVisible(False)
             self.lb_status.setText("")
+            self._update_mapping_pill(False)
             return
-
+    
         map_ok = self._mapping_ok()
-
+    
         if have_data:
             left = f"{n} datasets"
         else:
             left = "No data"
-
+    
         right = "mapping OK" if map_ok else "pick X/Y"
         text = f"{left} · {right}"
-
+    
         if have_data and map_ok:
             state = "ok"
         elif have_data and not map_ok:
             state = "warn"
         else:
             state = "info"
-
+    
         self.lb_status.setProperty("state", state)
         self.lb_status.setText(text)
         self.lb_status.setVisible(True)
         self.lb_status.style().unpolish(self.lb_status)
         self.lb_status.style().polish(self.lb_status)
+    
+        self._update_mapping_pill(map_ok)
 
     def _set_brand_icon(self) -> None:
         ico = self._load_icon("map.svg")

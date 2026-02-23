@@ -302,6 +302,16 @@ MAP_SELECT_MANUAL = "map.select.manual"
 # keys.py
 MAP_VIEW_LEGEND_ORIENT = "map.view.legend_orient"
 
+MAP_ANALYTICS_HEIGHT = "map.analytics.height"
+MAP_ANALYTICS_WIDTH = "map.analytics.width"
+MAP_ANALYTICS_PINNED = "map.analytics.pinned"
+MAP_ANALYTICS_TAB = "map.analytics.tab"
+
+MAP_ANALYTICS_MANUAL = "map.analytics.manual"
+MAP_ANALYTICS_POS_X = "map.analytics.pos_x"
+MAP_ANALYTICS_POS_Y = "map.analytics.pos_y"
+MAP_ANALYTICS_COMPACT = "map.analytics.compact"
+
 # # -------------------------
 # Map Core Defaults
 # -------------------------
@@ -380,13 +390,17 @@ _MAP_DEFAULTS = {
     
     MAP_SELECT_ANCHOR_X: -1,
     MAP_SELECT_ANCHOR_Y: -1,
-    
-    # keys.py  (inside _MAP_DEFAULTS)
 
     MAP_SHOW_ANALYTICS: False,
-    MAP_ANALYTICS_PINNED: True,   # default: floating
-    MAP_ANALYTICS_HEIGHT: 280,    # used if unpinned later
-
+    MAP_ANALYTICS_PINNED: False,
+    MAP_ANALYTICS_HEIGHT: 280,
+    MAP_ANALYTICS_WIDTH: 560,
+    MAP_ANALYTICS_TAB: "selection",
+    
+    MAP_ANALYTICS_MANUAL: False,
+    MAP_ANALYTICS_POS_X: -1,
+    MAP_ANALYTICS_POS_Y: -1,
+    MAP_ANALYTICS_COMPACT: False,
 
 }
 

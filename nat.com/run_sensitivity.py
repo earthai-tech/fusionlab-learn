@@ -56,11 +56,11 @@ python nat.com/run_lambda_sensitivity.py --epochs 20
 
 to force rerun everything:
 
-python nat.com/run_lambda_sensitivity.py --epochs 20 --no-resume
+python nat.com/run_sensitivity.py --epochs 20 --no-resume
 
 results live elsewhere: 
 
-python nat.com/run_lambda_sensitivity.py --epochs 20 \
+python nat.com/run_sensitivity.py --epochs 20 \
   --scan-root F:/repositories/fusionlab-learn/results/zhongshan
     
 """

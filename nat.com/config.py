@@ -43,13 +43,13 @@
 # -------------------------------------------------------------------
 # CITY_NAME selects which city dataset is used.
 # Typical values: "nansha", "zhongshan"
-CITY_NAME = "zhongshan"
+CITY_NAME = "nansha"
 
 # MODEL_NAME selects the Stage-2 model flavour:
 #   - "HybridAttn-NoPhysics" : HybridAttn encoder-decoder, physics OFF
 #   - "PoroElasticSubsNet"   : poroelastic surrogate (consolidation-only)
 #   - "GeoPriorSubsNet"      : full GeoPriorSubsNet (default)
-MODEL_NAME = "PoroElasticSubsNet"
+MODEL_NAME = "GeoPriorSubsNet"
 
 
 # -------------------------------------------------------------------
