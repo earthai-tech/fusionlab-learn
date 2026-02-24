@@ -1,0 +1,16 @@
+{
+  "Nansha": {
+    "r2_logtau": 0.9999999804381176,
+    "eps_prior_rms": 0.00035735134263007254,
+    "eps_cons_rms": 2.6105740776441598e-12,
+    "tau_ratio_median": 0.9996814928118917,
+    "payload": "J:\\nature\\results\\nansha_GeoPriorSubsNet_stage1\\train_20260222-141331\\nansha_phys_payload_run_val.npz"
+  },
+  "Zhongshan": {
+    "r2_logtau": 0.999999928078981,
+    "eps_prior_rms": 0.0003927535397904611,
+    "eps_cons_rms": 9.564718009229693e-13,
+    "tau_ratio_median": 1.000217493460217,
+    "payload": "J:\\nature\\results\\zhongshan_GeoPriorSubsNet_stage1\\train_20260218-175001\\zhongshan_phys_payload_run_val.npz"
+  }
+}

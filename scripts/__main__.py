@@ -54,6 +54,16 @@ _CMD: Dict[str, _CmdSpec] = {
         "plot_physics_sanity_main",
         "Physics sanity plots.",
     ),
+    "plot-physics-maps": _CmdSpec(
+        "plot_physics_maps",
+        "plot_physics_maps_main",
+        "Physics maps plots.",
+    ),
+    "plot-physics-fields": _CmdSpec(
+        "plot_physics_fields",
+        "plot_physics_fields_main",
+        "Physics fields plots.",
+    ),
     "plot-physics-profiles": _CmdSpec(
         "plot_physics_profiles",
         "figA1_phys_profiles_main",

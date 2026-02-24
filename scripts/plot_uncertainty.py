@@ -8,7 +8,7 @@
 # uncertainty summary.
 #
 # Outputs:
-#   - scripts/figs/<out>.png + <out>.svg
+#   - scripts/figs/<outhow.png + <out>.svg
 #   - scripts/out/<out-csv>
 #
 
@@ -21,7 +21,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib.gridspec import GridSpec
 
 from . import config as cfg
 from . import utils
@@ -566,6 +565,7 @@ def _build_metrics_table(
     int_source: str,
 ) -> pd.DataFrame:
     r0 = _pivot_emp(rel_all, by_horizon=False)
+    r0_row = r0.iloc[0] if not r0.empty else pd.Series(dtype=float)
     rh = _pivot_emp(rel_h, by_horizon=True)
 
     if int_all.empty:
@@ -589,9 +589,9 @@ def _build_metrics_table(
             "forecast_step": 0,
             "coverage80": cov0,
             "sharpness80": shp0,
-            "emp_q10": float(r0.get("emp_q10", np.nan)),
-            "emp_q50": float(r0.get("emp_q50", np.nan)),
-            "emp_q90": float(r0.get("emp_q90", np.nan)),
+            "emp_q10": float(r0_row.get("emp_q10", np.nan)),
+            "emp_q50": float(r0_row.get("emp_q50", np.nan)),
+            "emp_q90": float(r0_row.get("emp_q90", np.nan)),
         }
     )
 
