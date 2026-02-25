@@ -3472,7 +3472,7 @@ def _write_done_marker(
 
 
 _write_done_marker(
-    RUN_OUTPUT_PATH,
+    Path(RUN_OUTPUT_PATH),
     city=CITY_NAME,
     pde_mode=PDE_MODE_CONFIG,
     lambda_cons=LAMBDA_CONS,
