@@ -199,7 +199,23 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_LPRIOR,
         help="Grid for lambda_prior.",
     )
-
+    p.add_argument(
+        "--no-early-stopping",
+        action="store_true",
+        help=(
+            "Disable EarlyStopping in "
+            "sensitivity.py."
+        ),
+    )
+    
+    p.add_argument(
+        "--fast",
+        action="store_true",
+        help=(
+            "Skip plotting + calibration "
+            "extras in sensitivity.py."
+        ),
+    )
     # -----------------------------
     # Optional deconfounding knobs
     # -----------------------------
@@ -546,6 +562,8 @@ def make_env(
     lambda_bounds: Optional[float],
     lambda_mv: Optional[float],
     lambda_q: Optional[float],
+    no_early_stopping: bool,
+    fast: bool,
 ) -> Dict[str, str]:
     env = dict(base_env)
 
@@ -557,7 +575,12 @@ def make_env(
 
     # Traceability
     env["RUN_TAG"] = spec.run_tag()
-    env["DISABLE_EARLY_STOPPING"] = "1"
+    env["DISABLE_EARLY_STOPPING"] = (
+        "1" if no_early_stopping else "0"
+    )
+    env["FAST_SENSITIVITY"] = (
+        "1" if fast else "0"
+    )
 
     # Optional controls
     env["TRAINING_STRATEGY_OVERRIDE"] = str(strategy)
@@ -753,6 +776,10 @@ def main() -> None:
             lambda_bounds=args.lambda_bounds,
             lambda_mv=args.lambda_mv,
             lambda_q=args.lambda_q,
+            no_early_stopping=bool(
+                args.no_early_stopping
+            ),
+            fast=bool(args.fast),
         )
 
         try:

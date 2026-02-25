@@ -47,6 +47,27 @@ from PyQt5.QtWidgets import (
 )
 
 
+def _as_str_list(v: Any) -> List[str]:
+    if v is None:
+        return []
+
+    if isinstance(v, str):
+        s = v.strip()
+        return [s] if s else []
+
+    if not isinstance(v, (list, tuple)):
+        v = [v]
+
+    out: List[str] = []
+    for x in v:
+        if x is None:
+            continue
+        s = str(x).strip()
+        if s:
+            out.append(s)
+
+    return out
+
 @dataclass
 class _JsonDoc:
     path: Optional[Path]
@@ -107,18 +128,20 @@ class JsonViewerTool(QWidget):
     # Settings
     # -----------------------------------------------------------------
     def _load_pins(self) -> None:
-        v = self._settings.value("json_viewer.pins", [])
-        self._pins = [s for s in v if isinstance(s, str)]
-        self._pins = [s for s in self._pins if s.strip()]
+        v = self._settings.value("json_viewer.pins", None)
+        if v is None and self._settings.contains("json_viewer.pins"):
+            self._settings.remove("json_viewer.pins")
+        self._pins = self._as_str_list(v)
 
     def _save_pins(self) -> None:
         self._settings.setValue("json_viewer.pins", self._pins)
 
     def _load_recents(self) -> None:
-        v = self._settings.value("json_viewer.recents", [])
-        xs = [s for s in v if isinstance(s, str)]
-        xs = [s for s in xs if s.strip()]
-        # unique, keep order
+        v = self._settings.value("json_viewer.recents", None)
+        if v is None and self._settings.contains("json_viewer.recents"):
+            self._settings.remove("json_viewer.recents")
+        xs = self._as_str_list(v)
+    
         out: List[str] = []
         seen = set()
         for s in xs:
@@ -126,7 +149,7 @@ class JsonViewerTool(QWidget):
                 out.append(s)
                 seen.add(s)
         self._recents = out[:12]
-
+    
     def _save_recents(self) -> None:
         self._settings.setValue(
             "json_viewer.recents",
