@@ -2,50 +2,17 @@
 # License: BSD-3-Clause
 # Author: LKouadio
 #
-# nat.com/figs/make_supp_figS6_ablations.py
+# scripts/plot_ablations_sensitivity.py
 #
 r"""
 Supplement S6 • Extended ablations & sensitivities
 
-This figure supports the main ablation figure (Fig. 2) by showing how
-predictive performance and uncertainty/physics metrics vary across
-physics hyper-parameters.
-
-Layout
-------
-Top row (bar strips)
-  Per-city bar strips of a chosen "skill" metric (default: r2) versus
-  lambda_prior, with separate bars for pde_mode in {"none","both"}.
-
-Bottom row (heatmaps)
-  Per-city heatmaps over (lambda_cons, lambda_prior) of a chosen metric
-  (default: coverage80). Best cell is marked (min/max depending on
-  metric). A shared colourbar can be shown/hidden.
-
-Data source
------------
-We scan for JSONL under:
-  <root>/**/ablation_records/ablation_record*.jsonl
-
-Each line is one JSON record (dict), typically containing:
-  city, pde_mode, lambda_cons, lambda_prior, r2, coverage80, ...
-
-Outputs
--------
-- Figure: <out>.png and <out>.pdf
-- Tidy table copy: tableS6_ablations_tidy.csv (next to figure)
-
-API conventions
----------------
-- Style via scripts.utils.set_paper_style()
-- Output path via scripts.utils.resolve_fig_out()
-- JSONL discovery via cfg.PATTERNS["ablation_record_jsonl"] +
-  scripts.utils.find_all()
-- main(argv) wrapper calls a *_main(argv) function.
-
-Linting / format
-----------------
-- black + ruff, line length <= 62
+Updated v3.2 behavior:
+- Prefer ablation_record.updated*.jsonl when present.
+- Dedupe (timestamp, city): keep best record (updated wins).
+- Normalize pde_mode to buckets: none vs both
+  (off/none -> none, else -> both).
+- Optional explicit --input (csv/json/jsonl) and --models filtering.
 """
 
 from __future__ import annotations
@@ -53,7 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -62,8 +29,6 @@ import pandas as pd
 from . import config as cfg
 from . import utils
 
-
-# Metrics where "lower is better" (best cell = min).
 _LOWER_IS_BETTER = {
     "mae",
     "mse",
@@ -71,7 +36,6 @@ _LOWER_IS_BETTER = {
     "epsilon_prior",
     "epsilon_cons",
 }
-
 
 # ---------------------------------------------------------------------
 # CLI
@@ -86,13 +50,18 @@ def _parse_args(argv: List[str] | None) -> argparse.Namespace:
         "--root",
         type=str,
         default="results",
+        help="Root to scan for ablation_record*.jsonl",
+    )
+    p.add_argument(
+        "--input",
+        type=str,
+        default=None,
+        action="append",
         help=(
-            "Root to scan for "
-            "**/ablation_records/ablation_record*.jsonl"
+            "Explicit ablation file/table (repeatable). "
+            "Supports .jsonl/.json/.csv."
         ),
     )
-
-    # Backward compat: explicit output directory override.
     p.add_argument(
         "--out-dir",
         type=str,
@@ -100,22 +69,13 @@ def _parse_args(argv: List[str] | None) -> argparse.Namespace:
         help="Optional output dir override.",
     )
 
-    p.add_argument(
-        "--font",
-        type=int,
-        default=cfg.PAPER_FONT,
-    )
-    p.add_argument(
-        "--dpi",
-        type=int,
-        default=cfg.PAPER_DPI,
-    )
+    p.add_argument("--font", type=int, default=cfg.PAPER_FONT)
+    p.add_argument("--dpi", type=int, default=cfg.PAPER_DPI)
 
-    # Which metrics to display
     p.add_argument(
         "--bar-metric",
         type=str,
-        default="r2",
+        default="mae",
         choices=[
             "r2",
             "mae",
@@ -130,11 +90,11 @@ def _parse_args(argv: List[str] | None) -> argparse.Namespace:
     p.add_argument(
         "--heatmap-metric",
         type=str,
-        default="coverage80",
+        default="sharpness80",
         choices=[
-            "r2",
             "mae",
             "mse",
+            "r2",
             "coverage80",
             "sharpness80",
             "epsilon_prior",
@@ -143,13 +103,13 @@ def _parse_args(argv: List[str] | None) -> argparse.Namespace:
         help="Metric for bottom-row heatmaps.",
     )
 
-    # Paper editing toggles via our standard args
-    utils.add_plot_text_args(
-        p,
-        default_out="supp_fig_S6_ablations",
+    p.add_argument(
+        "--models",
+        type=str,
+        default="",
+        help="Comma list of model names to keep.",
     )
 
-    # Script-specific toggles
     p.add_argument(
         "--mute-values",
         type=str,
@@ -160,97 +120,318 @@ def _parse_args(argv: List[str] | None) -> argparse.Namespace:
         "--no-colorbar",
         type=str,
         default="false",
-        help="Show shared heatmap colourbar (true/false).",
+        help="Hide shared heatmap colorbar (true/false).",
     )
 
-    # City labels kept explicit for consistency with old S6.
+    p.add_argument(
+        "--cities",
+        type=str,
+        default="",
+        help="Comma list of cities (overrides city-a/b).",
+    )
     p.add_argument(
         "--city-a",
         type=str,
         default="Nansha",
-        help="First city name as recorded in JSONL.",
+        help="First city name.",
     )
     p.add_argument(
         "--city-b",
         type=str,
         default="Zhongshan",
-        help="Second city name as recorded in JSONL.",
+        help="Second city name.",
     )
 
+    utils.add_plot_text_args(
+        p,
+        default_out="supp_fig_S6_ablations",
+    )
     return p.parse_args(argv)
 
 
 # ---------------------------------------------------------------------
 # I/O
 # ---------------------------------------------------------------------
-def _read_records(root: Path) -> pd.DataFrame:
-    rows: List[dict] = []
+def _read_jsonl(fp: Path) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    with fp.open("r", encoding="utf-8") as f:
+        for ln in f:
+            s = ln.strip()
+            if not s:
+                continue
+            try:
+                rec = json.loads(s)
+            except Exception:
+                continue
+            if isinstance(rec, dict):
+                rows.append(rec)
+    return rows
 
+
+def _load_one_input(path: Path) -> pd.DataFrame:
+    suf = path.suffix.lower()
+
+    if suf == ".csv":
+        df = pd.read_csv(path)
+        if "_src" not in df.columns:
+            df["_src"] = str(path)
+        return df
+
+    if suf == ".jsonl":
+        rows = _read_jsonl(path)
+        df = pd.DataFrame(rows)
+        if "_src" not in df.columns:
+            df["_src"] = str(path)
+        return df
+
+    if suf == ".json":
+        try:
+            obj = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            obj = None
+
+        if isinstance(obj, list):
+            df = pd.DataFrame(obj)
+            if "_src" not in df.columns:
+                df["_src"] = str(path)
+            return df
+
+        if isinstance(obj, dict):
+            df = pd.DataFrame([obj])
+            if "_src" not in df.columns:
+                df["_src"] = str(path)
+            return df
+
+    return pd.DataFrame([])
+
+
+def _scan_records(root: Path) -> pd.DataFrame:
     files = utils.find_all(
         root,
         cfg.PATTERNS.get("ablation_record_jsonl", ()),
     )
 
+    blocks: List[pd.DataFrame] = []
     for fp in files:
-        try:
-            with fp.open("r", encoding="utf-8") as f:
-                for line in f:
-                    s = line.strip()
-                    if not s:
-                        continue
-                    try:
-                        rec = json.loads(s)
-                    except Exception:
-                        continue
-                    if isinstance(rec, dict):
-                        rec["_src"] = str(fp)
-                        rows.append(rec)
-        except Exception:
-            continue
+        df = _load_one_input(fp)
+        if not df.empty:
+            blocks.append(df)
 
-    df = pd.DataFrame(rows)
+    if not blocks:
+        return pd.DataFrame([])
+    return pd.concat(blocks, ignore_index=True)
+
+
+def _load_records(args: argparse.Namespace) -> pd.DataFrame:
+    if args.input:
+        blocks: List[pd.DataFrame] = []
+        for s in args.input:
+            p = utils.as_path(s)
+            if p.exists():
+                df = _load_one_input(p)
+                if not df.empty:
+                    blocks.append(df)
+        if not blocks:
+            return pd.DataFrame([])
+        return pd.concat(blocks, ignore_index=True)
+
+    root = utils.as_path(args.root)
+    return _scan_records(root)
+
+
+# ---------------------------------------------------------------------
+# Canonicalization / precedence
+# ---------------------------------------------------------------------
+def _canon_pde_mode(x: Any) -> str:
+    s = str(x or "").strip().lower()
+    if s in {"none", "off", "no", "0", "false"}:
+        return "none"
+    if s in {"both", "on", "1", "true"}:
+        return "both"
+    # treat any physics-on mode as "both" bucket
+    if s in {"consolidation", "gw_flow"}:
+        return "both"
+    return s
+
+
+def _canon_cols(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
 
-    for col in ["lambda_prior", "lambda_cons"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(
-                df[col],
-                errors="coerce",
-            )
+    aliases = {
+        "timestamp": ("timestamp", "ts"),
+        "city": ("city", "City"),
+        "model": ("model", "Model"),
+        "pde_mode": ("pde_mode", "pde"),
+        "lambda_prior": ("lambda_prior", "lambda_p"),
+        "lambda_cons": ("lambda_cons", "lambda_c"),
+        "coverage80": ("coverage80", "coverage8"),
+        "sharpness80": ("sharpness80", "sharpness"),
+    }
+    utils.ensure_columns(df, aliases=aliases)
+
+    if "city" in df.columns:
+        df["city"] = df["city"].astype(str).map(
+            utils.canonical_city
+        )
+
+    if "pde_mode" in df.columns:
+        df["pde_mode"] = df["pde_mode"].map(_canon_pde_mode)
+    else:
+        df["pde_mode"] = "both"
+
+    # stable bucket used by S6 layout:
+    #   - "none": physics off
+    #   - "both": any physics on mode
+    df["pde_bucket"] = np.where(
+        df["pde_mode"].astype(str).eq("none"),
+        "none",
+        "both",
+    )
+
+    num_cols = [
+        "lambda_prior",
+        "lambda_cons",
+        "r2",
+        "mae",
+        "mse",
+        "coverage80",
+        "sharpness80",
+        "epsilon_prior",
+        "epsilon_cons",
+    ]
+    for c in num_cols:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
 
     return df
+
+
+def _needs_si_to_mm(row: pd.Series) -> bool:
+    u = row.get("units", None)
+    if isinstance(u, dict):
+        uu = str(u.get("subs_metrics_unit", "")).lower()
+        if uu == "mm":
+            return False
+        if uu in {"m", "meter", "metre"}:
+            return True
+
+    mae = row.get("mae", np.nan)
+    mse = row.get("mse", np.nan)
+    shp = row.get("sharpness80", np.nan)
+
+    ok = (
+        np.isfinite(mae)
+        and np.isfinite(mse)
+        and np.isfinite(shp)
+        and 0.0 < float(mae) < 1.0
+        and 0.0 < float(mse) < 1.0
+        and 0.0 < float(shp) < 1.0
+    )
+    return bool(ok)
+
+
+def _harmonize_units(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    if "mae" not in df.columns or "mse" not in df.columns:
+        return df
+
+    mask = df.apply(_needs_si_to_mm, axis=1)
+    if not mask.any():
+        return df
+
+    for c in ["mae", "sharpness80"]:
+        if c in df.columns:
+            df.loc[mask, c] = df.loc[mask, c] * 1000.0
+
+    if "mse" in df.columns:
+        df.loc[mask, "mse"] = df.loc[mask, "mse"] * 1e6
+
+    return df
+
+
+def _record_score(row: pd.Series) -> int:
+    s = 0
+    src = str(row.get("_src", "")).lower()
+    if "updated" in src:
+        s += 100
+
+    u = row.get("units", None)
+    if isinstance(u, dict):
+        uu = str(u.get("subs_metrics_unit", "")).lower()
+        if uu == "mm":
+            s += 50
+
+    if isinstance(row.get("legacy", None), dict):
+        s += 10
+    if isinstance(row.get("metrics", None), dict):
+        s += 10
+
+    return int(s)
+
+
+def _dedupe_prefer_best(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    if "timestamp" not in df.columns:
+        return df
+    if "city" not in df.columns:
+        df["city"] = ""
+
+    df = df.copy()
+    df["_score"] = df.apply(_record_score, axis=1)
+
+    df = df.sort_values(
+        by=["timestamp", "city", "_score"],
+        ascending=[True, True, False],
+    )
+    df = df.drop_duplicates(
+        subset=["timestamp", "city"],
+        keep="first",
+    ).copy()
+
+    return df.drop(columns=["_score"], errors="ignore")
+
+
+def _filter_models(df: pd.DataFrame, models: str) -> pd.DataFrame:
+    s = str(models or "").strip()
+    if not s or "model" not in df.columns:
+        return df
+
+    keep = [m.strip() for m in s.split(",") if m.strip()]
+    if not keep:
+        return df
+
+    return df.loc[df["model"].astype(str).isin(keep)].copy()
+
+
+def _resolve_cities(args: argparse.Namespace) -> List[str]:
+    raw = str(args.cities or "").strip()
+    if raw:
+        parts = [p.strip() for p in raw.split(",") if p.strip()]
+        out = [utils.canonical_city(p) for p in parts]
+        return out
+
+    a = utils.canonical_city(args.city_a)
+    b = utils.canonical_city(args.city_b)
+    return [a, b]
 
 
 # ---------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------
-def _city_mask(df: pd.DataFrame, city: str) -> pd.Series:
-    return (
-        df["city"]
-        .astype(str)
-        .str.strip()
-        .str.lower()
-        .eq(str(city).strip().lower())
-    )
-
-
-def _present_modes(series: Iterable[str]) -> List[str]:
-    # Keep stable order for visual consistency.
-    seen = set(str(x) for x in series)
-    out: List[str] = []
-    for m in ("none", "both"):
-        if m in seen:
-            out.append(m)
-    return out
-
-
 def _metric_label(name: str) -> str:
     k = str(name).strip()
-
-    # Prefer central physics labels when available.
     if k in cfg.PHYS_LABELS:
         return cfg.PHYS_LABELS[k]
+
+    meta = cfg.PLOT_METRIC_META.get(k, None)
+    if isinstance(meta, dict):
+        yl = str(meta.get("ylabel", k))
+        unit = str(meta.get("unit", "") or "")
+        return yl.format(unit=unit)
 
     kl = k.lower()
     if kl == "coverage80":
@@ -259,12 +440,14 @@ def _metric_label(name: str) -> str:
         return "Sharpness (80%)"
     if kl == "r2":
         return "R\u00b2"
-    if kl == "mae":
-        return "MAE"
-    if kl == "mse":
-        return "MSE"
-
     return k
+
+
+def _metric_fmt(metric: str) -> str:
+    meta = cfg.PLOT_METRIC_META.get(str(metric), None)
+    if isinstance(meta, dict):
+        return str(meta.get("fmt", "{:.3g}"))
+    return "{:.3g}"
 
 
 def _axes_cleanup(ax: plt.Axes) -> None:
@@ -272,17 +455,13 @@ def _axes_cleanup(ax: plt.Axes) -> None:
     ax.spines["right"].set_visible(False)
 
 
-def _best_ij(
-    arr: np.ndarray,
-    *,
-    metric: str,
-) -> Optional[Tuple[int, int]]:
+def _best_ij(arr: np.ndarray, *, metric: str) -> Optional[Tuple[int, int]]:
     try:
         a = np.asarray(arr, dtype=float)
         if not np.isfinite(a).any():
             return None
 
-        if metric.lower() in _LOWER_IS_BETTER:
+        if str(metric).lower() in _LOWER_IS_BETTER:
             idx = int(np.nanargmin(a))
         else:
             idx = int(np.nanargmax(a))
@@ -306,21 +485,18 @@ def _bars_by_lambda(
     show_ticks: bool,
     show_title: bool,
 ) -> None:
-    sub = df[_city_mask(df, city)].copy()
+    sub = df.loc[df["city"].astype(str).eq(str(city))].copy()
     if sub.empty or metric not in sub.columns:
         ax.set_axis_off()
         return
 
-    keep = sub[sub["pde_mode"].isin(["none", "both"])].copy()
+    keep = sub.loc[sub["pde_bucket"].isin(["none", "both"])].copy()
     if keep.empty:
         ax.set_axis_off()
         return
 
     grp = (
-        keep.groupby(
-            ["pde_mode", "lambda_prior"],
-            dropna=False,
-        )[metric]
+        keep.groupby(["pde_bucket", "lambda_prior"], dropna=False)[metric]
         .mean()
         .reset_index()
     )
@@ -333,19 +509,17 @@ def _bars_by_lambda(
         ax.set_axis_off()
         return
 
-    modes = _present_modes(grp["pde_mode"])
-    if not modes:
-        ax.set_axis_off()
-        return
-
+    modes = ["none", "both"]
     base = np.arange(len(xs), dtype=float)
-    width = 0.8 / max(len(modes), 1)
-    offset0 = (len(modes) - 1) / 2.0
+    width = 0.8 / 2.0
+    offset0 = 0.5
+
+    fmt = _metric_fmt(metric)
 
     for i, m in enumerate(modes):
         y = [
             grp.loc[
-                (grp["pde_mode"] == m)
+                (grp["pde_bucket"] == m)
                 & (grp["lambda_prior"] == x),
                 metric,
             ].mean()
@@ -369,7 +543,7 @@ def _bars_by_lambda(
                     ax.text(
                         xi,
                         yi,
-                        f"{yi:.3g}",
+                        fmt.format(float(yi)),
                         ha="center",
                         va="bottom",
                         fontsize=8,
@@ -378,9 +552,7 @@ def _bars_by_lambda(
     ax.set_xticks(base)
 
     if show_ticks:
-        ax.set_xticklabels(
-            [f"{x:.2g}" for x in xs],
-        )
+        ax.set_xticklabels([f"{x:.2g}" for x in xs])
     else:
         ax.set_xticklabels([])
 
@@ -399,8 +571,8 @@ def _bars_by_lambda(
             fontweight="bold",
         )
 
-    if show_legend and len(modes) > 1:
-        ax.legend(title="pde_mode", frameon=False)
+    if show_legend:
+        ax.legend(title="physics", frameon=False)
 
     _axes_cleanup(ax)
 
@@ -416,12 +588,15 @@ def _heatmap(
     show_ticks: bool,
     show_title: bool,
 ) -> Optional[plt.AxesImage]:
-    sub = df[
-        _city_mask(df, city)
-        & df.get("pde_mode", "both").eq("both")
-    ].copy()
+    sub = df.loc[df["city"].astype(str).eq(str(city))].copy()
+    sub = sub.loc[sub["pde_bucket"].eq("both")].copy()
 
     if sub.empty or metric not in sub.columns:
+        ax.set_axis_off()
+        return None
+
+    sub = sub.dropna(subset=["lambda_cons", "lambda_prior"])
+    if sub.empty:
         ax.set_axis_off()
         return None
 
@@ -437,23 +612,14 @@ def _heatmap(
 
     piv = piv.sort_index().sort_index(axis=1)
 
-    im = ax.imshow(
-        piv.values,
-        aspect="auto",
-        cmap=cmap,
-    )
+    im = ax.imshow(piv.values, aspect="auto", cmap=cmap)
 
     ax.set_xticks(range(piv.shape[1]))
     ax.set_yticks(range(piv.shape[0]))
 
     if show_ticks:
-        ax.set_xticklabels(
-            [f"{c:.2g}" for c in piv.columns],
-            rotation=0,
-        )
-        ax.set_yticklabels(
-            [f"{r:.2g}" for r in piv.index],
-        )
+        ax.set_xticklabels([f"{c:.2g}" for c in piv.columns])
+        ax.set_yticklabels([f"{r:.2g}" for r in piv.index])
     else:
         ax.set_xticklabels([])
         ax.set_yticklabels([])
@@ -490,11 +656,7 @@ def _heatmap(
     return im
 
 
-def _resolve_out(
-    *,
-    out: str,
-    out_dir: Optional[str],
-) -> Path:
+def _resolve_out(*, out: str, out_dir: Optional[str]) -> Path:
     if out_dir:
         base = Path(out_dir).expanduser()
         return (base / Path(out).expanduser()).resolve()
@@ -504,65 +666,52 @@ def _resolve_out(
 # ---------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------
-def figS6_ablations_main(
-    argv: List[str] | None = None,
-) -> None:
+def plot_ablations_sensivity_main(argv: List[str] | None = None) -> None:
     args = _parse_args(argv)
 
-    utils.set_paper_style(
-        fontsize=int(args.font),
-        dpi=int(args.dpi),
-    )
+    utils.set_paper_style(fontsize=int(args.font), dpi=int(args.dpi))
 
-    show_legend = utils.str_to_bool(
-        args.show_legend,
-        default=True,
-    )
-    show_labels = utils.str_to_bool(
-        args.show_labels,
-        default=True,
-    )
-    show_ticks = utils.str_to_bool(
-        args.show_ticklabels,
-        default=True,
-    )
-    show_title = utils.str_to_bool(
-        args.show_title,
-        default=True,
-    )
+    show_legend = utils.str_to_bool(args.show_legend, default=True)
+    show_labels = utils.str_to_bool(args.show_labels, default=True)
+    show_ticks = utils.str_to_bool(args.show_ticklabels, default=True)
+    show_title = utils.str_to_bool(args.show_title, default=True)
     show_pan_t = utils.str_to_bool(
         args.show_panel_titles,
         default=True,
     )
 
-    annotate = not utils.str_to_bool(
-        args.mute_values,
-        default=False,
-    )
-    show_cbar = not utils.str_to_bool(
-        args.no_colorbar,
-        default=False,
-    )
+    annotate = not utils.str_to_bool(args.mute_values, default=False)
+    show_cbar = not utils.str_to_bool(args.no_colorbar, default=False)
 
-    root = utils.as_path(args.root)
-    df = _read_records(root)
-
+    df = _load_records(args)
     if df.empty:
+        root = utils.as_path(args.root)
         raise SystemExit(
             "No ablation_record*.jsonl found under:\n"
             f"  {root.resolve()}\n"
             "Run ablations with the logger enabled first."
         )
 
-    city_a = utils.canonical_city(args.city_a)
-    city_b = utils.canonical_city(args.city_b)
+    df = _canon_cols(df)
+    df = _harmonize_units(df)
+    df = _dedupe_prefer_best(df)
+    df = _filter_models(df, args.models)
+
+    cities = _resolve_cities(args)
+    if not cities:
+        raise SystemExit("No cities selected.")
 
     out = _resolve_out(out=args.out, out_dir=args.out_dir)
     utils.ensure_dir(out.parent)
 
-    tidy_csv = out.parent / "tableS6_ablations_tidy.csv"
+    tidy_csv = out.parent / "tableS6_ablations_used.csv"
     df.to_csv(tidy_csv, index=False)
     print(f"[OK] table -> {tidy_csv}")
+
+    if len(cities) == 1:
+        cities = [cities[0], cities[0]]
+
+    city_a, city_b = cities[0], cities[1]
 
     fig = plt.figure(figsize=(8.6, 7.0))
     gs = fig.add_gridspec(
@@ -576,7 +725,7 @@ def figS6_ablations_main(
         wspace=0.30,
     )
 
-    # Top row: bars (skill metric vs lambda_prior)
+    # Top row: bars (metric vs lambda_prior)
     ax11 = fig.add_subplot(gs[0, 0])
     _bars_by_lambda(
         ax11,
@@ -605,7 +754,7 @@ def figS6_ablations_main(
         show_title=show_pan_t,
     )
 
-    # Bottom row: heatmaps (metric vs lambda_cons/lambda_prior)
+    # Bottom row: heatmaps (physics-on bucket)
     ax21 = fig.add_subplot(gs[1, 0])
     im_a = _heatmap(
         ax21,
@@ -630,7 +779,6 @@ def figS6_ablations_main(
         show_title=show_pan_t,
     )
 
-    # Shared colourbar (optional)
     if show_legend and show_cbar:
         cax = fig.add_axes([0.92, 0.12, 0.015, 0.30])
         im_for = im_a or im_b
@@ -645,18 +793,9 @@ def figS6_ablations_main(
             cax.set_axis_off()
 
     if show_title:
-        default = (
-            "Supplement S6 • Extended ablations & sensitivities"
-        )
-        ttl = utils.resolve_title(
-            default=default,
-            title=args.title,
-        )
-        fig.suptitle(
-            ttl,
-            fontsize=11,
-            fontweight="bold",
-        )
+        default = "Supplement S6 • Extended ablations & sensitivities"
+        ttl = utils.resolve_title(default=default, title=args.title)
+        fig.suptitle(ttl, fontsize=11, fontweight="bold")
 
     png = out.with_suffix(".png")
     pdf = out.with_suffix(".pdf")
@@ -666,7 +805,7 @@ def figS6_ablations_main(
 
 
 def main(argv: List[str] | None = None) -> None:
-    figS6_ablations_main(argv)
+    plot_ablations_sensivity_main(argv)
 
 
 if __name__ == "__main__":

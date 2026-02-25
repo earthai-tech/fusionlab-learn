@@ -88,8 +88,8 @@ PATTERNS = {
     ),
     # Ablation records (Supplement S6/S7)
     "ablation_record_jsonl": (
-        "ablation_records/ablation_record*.jsonl",
         "ablation_records/ablation_record.updated*.jsonl",
+        "ablation_records/ablation_record*.jsonl",
         "ablation_record*.jsonl",
         "ablation_record.updated*.jsonl",
     ),

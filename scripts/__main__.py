@@ -76,13 +76,13 @@ _CMD: Dict[str, _CmdSpec] = {
     ),
     "plot-ablations-sensitivity": _CmdSpec(
         "plot_ablations_sensitivity",
-        "figS6_ablations_main",
+        "plot_ablations_sensivity_main",
         "Ablations sensitivity.",
     ),
-    "plot-residual-sensitivity": _CmdSpec(
-        "plot_residual_sensitivity",
-        "figS7_physics_sensitivity_main",
-        "Physics residual sensitivity.",
+    "plot-physics-sensitivity": _CmdSpec(
+        "plot_physics_sensitivity",
+        "plot_physics_sensitivity_main",
+        "Physics sensitivity.",
     ),
     "plot-sm3-identifiability": _CmdSpec(
         "plot_sm3_identifiability",
@@ -126,6 +126,18 @@ _CMD: Dict[str, _CmdSpec] = {
         "summarize_hotspots_main",
         "Summarize hotspot outputs.",
     ),
+    "update-ablation-records": _CmdSpec(
+        "update_ablation_records",
+        "update_ablation_records_main",
+        "Patch ablation_record.jsonl with post-hoc metrics.",
+    ),
+
+    "build-model-metrics": _CmdSpec(
+        "build_model_metrics",
+        "build_model_metrics_main",
+        "Build unified metrics tables (CSV/JSON).",
+    ),
+ 
 }
 
 
@@ -155,7 +167,7 @@ _GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
             "plot-physics-profiles",
             "plot-uncertainty-extras",
             "plot-ablations-sensitivity",
-            "plot-residual-sensitivity",
+            "plot-physics-sensitivity",
             "plot-sm3-identifiability",
             "plot-sm3-bounds-ridge-summary",
             "plot-sm3-log-offsets",
@@ -169,6 +181,8 @@ _GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         (
             "compute-brier-exceedance",
             "summarize-hotspots",
+            "update-ablation-records", 
+            "build-model-metrics"
         ),
     ),
 )

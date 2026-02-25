@@ -132,6 +132,81 @@ def add_plot_text_args(
         help="Override suptitle text.",
     )
     
+def add_render_args(
+    ap,
+    *,
+    default: str = "heatmap",
+) -> None:
+    """
+    Common render args for 2D sensitivity plots.
+
+    render:
+      - heatmap: pivot->imshow (discrete grid)
+      - tricontour: smooth contourf on scattered points
+      - pcolormesh: grid-aware shading using real coords
+    """
+    ap.add_argument(
+        "--render",
+        type=str,
+        default=default,
+        choices=[
+            "heatmap",
+            "tricontour",
+            "pcolormesh",
+        ],
+        help="Render style (heatmap/tricontour/pcolormesh).",
+    )
+    ap.add_argument(
+        "--levels",
+        type=int,
+        default=14,
+        help="Levels for tricontour render.",
+    )
+    ap.add_argument(
+        "--clip",
+        type=str,
+        default="2,98",
+        help="Color scale clip percentiles (lo,hi).",
+    )
+    ap.add_argument(
+        "--agg",
+        type=str,
+        default="mean",
+        choices=["mean", "median"],
+        help="Aggregation for duplicate (λc, λp).",
+    )
+    ap.add_argument(
+        "--show-points",
+        type=str,
+        default="true",
+        help="Overlay sampled points (true/false).",
+    )
+
+    ap.add_argument(
+        "--trend-arrow",
+        type=str,
+        default="false",
+        help="Overlay a trend arrow (true/false).",
+    )
+    ap.add_argument(
+        "--trend-arrow-len",
+        type=float,
+        default=0.22,
+        help="Arrow length in axes fraction.",
+    )
+    ap.add_argument(
+        "--trend-arrow-pos",
+        type=str,
+        default="0.78,0.14",
+        help="Arrow anchor in axes frac: x,y",
+    )
+    ap.add_argument(
+        "--trend-arrow-min-n",
+        type=int,
+        default=4,
+        help="Min points needed to fit trend.",
+    )
+    
 def find_all(
     src: Any,
     patterns: Sequence[str],

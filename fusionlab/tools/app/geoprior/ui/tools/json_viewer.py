@@ -131,7 +131,7 @@ class JsonViewerTool(QWidget):
         v = self._settings.value("json_viewer.pins", None)
         if v is None and self._settings.contains("json_viewer.pins"):
             self._settings.remove("json_viewer.pins")
-        self._pins = self._as_str_list(v)
+        self._pins = _as_str_list(v)
 
     def _save_pins(self) -> None:
         self._settings.setValue("json_viewer.pins", self._pins)
@@ -140,7 +140,7 @@ class JsonViewerTool(QWidget):
         v = self._settings.value("json_viewer.recents", None)
         if v is None and self._settings.contains("json_viewer.recents"):
             self._settings.remove("json_viewer.recents")
-        xs = self._as_str_list(v)
+        xs = _as_str_list(v)
     
         out: List[str] = []
         seen = set()
