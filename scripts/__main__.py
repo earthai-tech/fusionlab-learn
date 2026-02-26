@@ -104,10 +104,20 @@ _CMD: Dict[str, _CmdSpec] = {
         "figSx_xfer_transferability_main",
         "Cross-city transferability.",
     ),
+    "plot-xfer-impact": _CmdSpec(
+        "plot_xfer_impact",
+        "figSx_xfer_impact_main",
+        "Transfer impact (retention + risk).",
+    ),
     "plot-transfer": _CmdSpec(
         "plot_transfer",
         "figSx_xfer_transferability_main",
         "Alias of transferability plot.",
+    ),
+    "plot-transfer-impact": _CmdSpec(
+        "plot_xfer_impact",
+        "figSx_xfer_impact_main",
+        "Alias of transfer impact plot.",
     ),
     "plot-geo-cumulative": _CmdSpec(
         "plot_geo_cumulative",
@@ -158,6 +168,7 @@ _GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
             "plot-litho-parity",
             "plot-uncertainty",
             "plot-spatial-forecasts",
+            "plot-transfer-impact",
         ),
     ),
     (
@@ -173,6 +184,7 @@ _GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
             "plot-sm3-log-offsets",
             "plot-xfer-transferability",
             "plot-transfer",
+            "plot-xfer-impact",
             "plot-geo-cumulative",
         ),
     ),

@@ -22,3 +22,11 @@ $ python -m scripts.plot_uncertainty_extras --ns-forecast "J:\nature\results\nan
 $ python -m scripts plot-physics-sensitivity --results-root "J:\nature\results" --render tricontour --trend-arrow true --trend-arrow-len 0.22 --trend-arrow-pos 0.78,0.14 --cities ns,zh --clip 2,98
 
 $ python -m scripts build-model-metrics --results-root "J:\nature\results" --out model_metrics_all
+
+$ python -m scripts plot-xfer-impact --src "F:\repositories\fusionlab-learn\results\xfer\nansha__zhongshan" --split val --calib source
+
+$ python -m scripts plot-xfer-impact --src "F:\repositories\fusionlab-learn\results\xfer\nansha__zhongshan" --split val 
+
+$ python -m scripts.fix_xfer_interval_metrics --src results/xfer
+
+$ python -m scripts.plot_geo_cumulative --ns-val "J:\nature\results\nansha_GeoPriorSubsNet_stage1\train_20260222-141331\nansha_GeoPriorSubsNet_forecast_TestSet_H3_eval_calibrated.csv" --zh-val "J:\nature\results\zhongshan_GeoPriorSubsNet_stage1\train_20260218-175001\zhongshan_GeoPriorSubsNet_forecast_TestSet_H3_eval_calibrated.csv" --ns-future "J:\nature\results\nansha_GeoPriorSubsNet_stage1\train_20260222-141331\nansha_GeoPriorSubsNet_forecast_TestSet_H3_future_calibrated.csv" --zh-future "J:\nature\results\zhongshan_GeoPriorSubsNet_stage1\train_20260218-175001\zhongshan_GeoPriorSubsNet_forecast_TestSet_H3_future_calibrated.csv"

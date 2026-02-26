@@ -1,4 +1,4 @@
-# figureS_xfer_transferability.py
+# scripts/plot_transfer.py
 # -*- coding: utf-8 -*-
 # License: BSD-3-Clause
 # Author: LKouadio <etanoyau@gmail.com>
@@ -23,13 +23,10 @@ Panels summarise:
 
 Run (module form required)
 -------------------------
-python -m scripts.figureS_xfer_transferability \
+python -m scripts.plot_transfer \
   --src results/xfer/nansha__zhongshan \
   --split val
 
-Or explicit CSV:
-python -m scripts.figureS_xfer_transferability \
-  --xfer-csv results/xfer/.../xfer_results.csv
 """
 
 from __future__ import annotations
@@ -76,7 +73,7 @@ class TextFlags:
 
 def _canon_dir(x: Any) -> str:
     s = str(x).strip()
-    k = s.lower()
+    k = s#.lower()
     return _DIR_CANON.get(k, s)
 
 

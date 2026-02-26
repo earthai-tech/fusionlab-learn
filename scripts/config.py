@@ -412,6 +412,17 @@ _STRAT_EDGE = {
     "warm": "#111111",
 }
 
+_STRAT_LINESTYLE = {
+    "baseline": ":",
+    "xfer": "--",
+    "warm": "-",
+}
+_STRAT_MARKER = {
+    "baseline": "o",
+    "xfer": "^",
+    "warm": "s",
+}
+
 _BASELINE_MAP = {
     "A_to_B": "B_to_B",
     "B_to_A": "A_to_A",
