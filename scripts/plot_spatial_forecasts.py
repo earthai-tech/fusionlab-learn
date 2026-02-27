@@ -25,57 +25,100 @@ from . import config as cfg
 from . import utils
 
 
+_CITY_A = cfg.CITY_CANON.get("ns", "Nansha")
+_CITY_B = cfg.CITY_CANON.get("zh", "Zhongshan")
 
 # ---------------------------------------------------------------------
 # IO helpers
 # ---------------------------------------------------------------------
-def _load_calib_df(path: str) -> pd.DataFrame:
-    """
-    Load calibrated validation/test CSV.
+def _require_cols(
+    df: pd.DataFrame,
+    cols: List[str],
+    *,
+    where: str,
+) -> None:
+    miss = [c for c in cols if c not in df.columns]
+    if miss:
+        raise KeyError(f"{where}: missing {miss}")
 
-    We prefer utils.load_forecast_csv() because it already enforces
-    the core schema (q10/q50/q90/actual) used elsewhere.
-    """
-    df = utils.load_forecast_csv(path)
-    df = utils.ensure_columns(
-        df,
-        cfg._CALIB_REQUIRED,
-        aliases=cfg._BASE_ALIASES,
-        where="calibrated-forecast",
-    )
+
+def _canonize(
+    df: pd.DataFrame,
+    *,
+    where: str,
+    required: List[str],
+) -> pd.DataFrame:
+    # NOTE: ensure_columns returns a mapping;
+    # it mutates df in-place.
+    utils.ensure_columns(df, aliases=cfg._BASE_ALIASES)
+    _require_cols(df, required, where=where)
     return df
 
-
-def _load_future_df(path: str) -> pd.DataFrame:
-    """
-    Load future forecast CSV (no actual required).
-
-    Must contain coord_x/coord_y/coord_t and subsidence_q50.
-    """
+def _load_calib_df(path: str) -> pd.DataFrame:
     p = utils.as_path(path)
     df = pd.read_csv(p)
 
-    df = utils.ensure_columns(
+    _canonize(
         df,
-        cfg._FUT_REQUIRED,
-        aliases=cfg._BASE_ALIASES,
-        where="future-forecast",
+        where="calibrated-forecast",
+        required=list(cfg._CALIB_REQUIRED),
     )
 
     for c in [
+        "sample_idx",
+        "forecast_step",
+        "coord_t",
         "coord_x",
         "coord_y",
-        "coord_t",
+        "subsidence_actual",
         "subsidence_q50",
     ]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
     df = df.dropna(
-        subset=["coord_x", "coord_y", "coord_t", "subsidence_q50"]
+        subset=[
+            "sample_idx",
+            "coord_t",
+            "coord_x",
+            "coord_y",
+            "subsidence_actual",
+            "subsidence_q50",
+        ]
     ).copy()
 
     return df
 
+def _load_future_df(path: str) -> pd.DataFrame:
+    p = utils.as_path(path)
+    df = pd.read_csv(p)
+
+    _canonize(
+        df,
+        where="future-forecast",
+        required=list(cfg._FUT_REQUIRED),
+    )
+
+    for c in [
+        "sample_idx",
+        "forecast_step",
+        "coord_t",
+        "coord_x",
+        "coord_y",
+        "subsidence_q50",
+    ]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    df = df.dropna(
+        subset=[
+            "sample_idx",
+            "coord_t",
+            "coord_x",
+            "coord_y",
+            "subsidence_q50",
+        ]
+    ).copy()
+
+    return df
 
 def _pick_calib_path(
     art: utils.Artifacts,
@@ -186,16 +229,48 @@ def _subset_year(df: pd.DataFrame, year: int) -> pd.DataFrame:
     return df.loc[df["coord_t"].astype(int).eq(int(year))].copy()
 
 
-def _compute_cum_q50(df: pd.DataFrame) -> pd.DataFrame:
+def _compute_cum_calib(
+    df: pd.DataFrame,
+    *,
+    kind: str,
+) -> pd.DataFrame:
     df2 = df.sort_values(["sample_idx", "coord_t"]).copy()
-    # No need to use cumsum() since the when subsidence_cum, it is 
-    # predicted in cumulative already
-    df2["subs_cum_q50"] = (
-        # df2.groupby("sample_idx")["subsidence_q50"].cumsum()
-        df2.groupby("sample_idx")["subsidence_q50"] # .cumsum()
-    )
+    k = str(kind).strip().lower()
+
+    if k in ("rate", "increment"):
+        df2["subs_cum_actual"] = (
+            df2.groupby("sample_idx")["subsidence_actual"]
+            .cumsum()
+        )
+        df2["subs_cum_q50"] = (
+            df2.groupby("sample_idx")["subsidence_q50"]
+            .cumsum()
+        )
+    else:
+        # already cumulative
+        df2["subs_cum_actual"] = df2["subsidence_actual"]
+        df2["subs_cum_q50"] = df2["subsidence_q50"]
+
     return df2
 
+
+def _compute_cum_q50(
+    df: pd.DataFrame,
+    *,
+    kind: str,
+) -> pd.DataFrame:
+    df2 = df.sort_values(["sample_idx", "coord_t"]).copy()
+    k = str(kind).strip().lower()
+
+    if k in ("rate", "increment"):
+        df2["subs_cum_q50"] = (
+            df2.groupby("sample_idx")["subsidence_q50"]
+            .cumsum()
+        )
+    else:
+        df2["subs_cum_q50"] = df2["subsidence_q50"]
+
+    return df2
 
 def _extent_from_panels(
     panels: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]],
@@ -302,6 +377,7 @@ def plot_fig6_spatial_forecasts(
     year_val: int,
     years_fore: List[int],
     cumulative: bool,
+    subsidence_kind: str, 
     grid_res: int,
     clip: float,
     cmap_name: str,
@@ -334,43 +410,55 @@ def plot_fig6_spatial_forecasts(
     utils.set_paper_style(fontsize=int(font), dpi=int(dpi))
 
     unit = _infer_unit(cities)
+    subs_kind = str(subsidence_kind).strip().lower()
+    plot_cum = bool(cumulative) or (subs_kind == "cumulative")
+
     cmap = plt.get_cmap(cmap_name)
+    
 
     # Build per-city panel dictionaries and extents
     for c in cities:
         calib_df = c["calib_df"]
         fut_df = c["future_df"]
 
-        obs = _subset_year(calib_df, year_val)
+        calib_use = calib_df
+        fut_use = fut_df
+        
+        if plot_cum:
+            calib_use = _compute_cum_calib(calib_df, kind=subs_kind)
+            fut_use = _compute_cum_q50(fut_df, kind=subs_kind)
+        
+        obs = _subset_year(calib_use, year_val)
         pred = obs.copy()
-
+        
         panels: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
-
+        
         x = obs["coord_x"].to_numpy()
         y = obs["coord_y"].to_numpy()
-        v0 = obs["subsidence_actual"].to_numpy()
+        
+        if plot_cum:
+            v0 = obs["subs_cum_actual"].to_numpy()
+            v1 = pred["subs_cum_q50"].to_numpy()
+        else:
+            v0 = obs["subsidence_actual"].to_numpy()
+            v1 = pred["subsidence_q50"].to_numpy()
+        
         panels["obs"] = (x, y, v0)
-
-        v1 = pred["subsidence_q50"].to_numpy()
         panels["pred"] = (x, y, v1)
-
-        fut_use = fut_df
-        if cumulative:
-            fut_use = _compute_cum_q50(fut_df)
-
+        
         for yy in years_fore:
             dyy = _subset_year(fut_use, int(yy))
             if dyy.empty:
                 continue
-
+        
             xf = dyy["coord_x"].to_numpy()
             yf = dyy["coord_y"].to_numpy()
-
-            if cumulative:
+        
+            if plot_cum:
                 vf = dyy["subs_cum_q50"].to_numpy()
             else:
                 vf = dyy["subsidence_q50"].to_numpy()
-
+        
             panels[f"Y{int(yy)}"] = (xf, yf, vf)
 
         c["panels"] = panels
@@ -595,7 +683,7 @@ def plot_fig6_spatial_forecasts(
                 t = f"{name} • {year_val} predicted"
             else:
                 yy = int(k[1:])
-                tag = "cumulative" if cumulative else "q50"
+                tag = "cumulative" if plot_cum else "q50"
                 t = f"{name} • {yy} {tag}"
 
             db = baselines.get(name)
@@ -623,7 +711,8 @@ def plot_fig6_spatial_forecasts(
         )
         cax = fig.add_axes([0.92, 0.20, 0.02, 0.60])
         cb = fig.colorbar(sm, cax=cax)
-        cb.set_label(f"Subsidence ({unit})")
+        key = "subsidence_cum" if plot_cum else "subsidence"
+        cb.set_label(utils.label(key))
 
     # Suptitle
     if show_title:
@@ -734,7 +823,17 @@ def _add_fig6_args(ap: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Use cumulative q50 for forecast years.",
     )
-
+    
+    ap.add_argument(
+        "--subsidence-kind",
+        type=str,
+        default="cumulative",
+        choices=["cumulative", "rate", "increment"],
+        help=(
+            "Meaning of subsidence columns in CSVs. "
+            "Default: cumulative."
+        ),
+    )
     ap.add_argument(
         "--grid-res",
         type=int,
@@ -797,16 +896,16 @@ def plot_fig6_spatial_forecasts_main(
     _add_fig6_args(ap)
     args = ap.parse_args(argv)
 
-    show_legend = utils.str_to_bool(args.show_legend, True)
-    show_title = utils.str_to_bool(args.show_title, True)
-    show_pt = utils.str_to_bool(args.show_panel_titles, True)
+    show_legend = utils.str_to_bool(args.show_legend, default=True)
+    show_title = utils.str_to_bool(args.show_title, default=True)
+    show_pt = utils.str_to_bool(args.show_panel_titles, default=True)
 
     cities0 = utils.resolve_cities(args)
     if not cities0:
-        cities0 = ["Nansha", "Zhongshan"]
-
-    want_ns = "Nansha" in cities0
-    want_zh = "Zhongshan" in cities0
+        cities0 = [_CITY_A, _CITY_B]
+    
+    want_ns = _CITY_A in cities0
+    want_zh = _CITY_B in cities0
 
     if not want_ns and not want_zh:
         want_ns = True
@@ -816,7 +915,7 @@ def plot_fig6_spatial_forecasts_main(
     if want_ns:
         cities.append(
             _resolve_city(
-                city="Nansha",
+                city=_CITY_A,
                 src=args.ns_src,
                 calib=args.ns_calib,
                 future=args.ns_future,
@@ -826,7 +925,7 @@ def plot_fig6_spatial_forecasts_main(
     if want_zh:
         cities.append(
             _resolve_city(
-                city="Zhongshan",
+                city=_CITY_B,
                 src=args.zh_src,
                 calib=args.zh_calib,
                 future=args.zh_future,
@@ -839,6 +938,7 @@ def plot_fig6_spatial_forecasts_main(
         year_val=int(args.year_val),
         years_fore=list(args.years_forecast),
         cumulative=bool(args.cumulative),
+        subsidence_kind=str(args.subsidence_kind),
         grid_res=int(args.grid_res),
         clip=float(args.clip),
         cmap_name=str(args.cmap),

@@ -512,6 +512,8 @@ def render(
     cov_target: float,
     out: Path,
     text: TextFlags,
+    metric_top: str = "mae",
+    metric_bottom: str = "rmse",
 ) -> Tuple[Path, Path]:
     u.set_paper_style()
 
@@ -536,7 +538,7 @@ def render(
     _plot_bars(
         ax_mae,
         df,
-        metric_key="mae",
+        metric_key=str(metric_top).lower(),
         split=split,
         directions=directions,
         strategies=strategies,
@@ -551,7 +553,7 @@ def render(
     _plot_bars(
         ax_r2,
         df,
-        metric_key="r2",
+        metric_key=str(metric_bottom).lower(),
         split=split,
         directions=directions,
         strategies=strategies,
@@ -590,10 +592,14 @@ def render(
         cov_target=cov_target,
         text=text,
     )
-
+    top_title = str(metric_top).upper() 
+    bottom_title = ( 
+        "$R^2$" if str(metric_bottom).lower() =="r2" 
+        else str(metric_bottom).upper() 
+    )
     if text.show_panel_titles:
-        ax_mae.set_title("(a) MAE vs calibration")
-        ax_r2.set_title("(a) $R^2$ vs calibration")
+        ax_mae.set_title(f"(a) {top_title} vs calibration")
+        ax_r2.set_title(f"(a) {bottom_title} vs calibration")
         ax_ab.set_title(
             "(b) Coverage–sharpness: " + _dir_label(df, "A_to_B")
         )
@@ -718,6 +724,21 @@ def parse_args(argv: List[str] | None = None) -> Any:
         help="Target coverage reference",
     )
 
+    ap.add_argument(
+        "--metric-top",
+        type=str,
+        default="mae",
+        choices=tuple(cfg._METRIC_DEF.keys()),
+        help="Metric for the top-left bar panel.",
+    )
+    ap.add_argument(
+        "--metric-bottom",
+        type=str,
+        default="rmse",
+        choices=tuple(cfg._METRIC_DEF.keys()),
+        help="Metric for the bottom-left bar panel.",
+    )
+
     u.add_plot_text_args(
         ap,
         default_out="figureS_xfer_transferability",
@@ -784,6 +805,8 @@ def figSx_xfer_transferability_main(
         cov_target=float(args.cov_target),
         out=out,
         text=text,
+        metric_top=str(args.metric_top).lower(),
+        metric_bottom=str(args.metric_bottom).lower(),
     )
 
     print(f"[OK] Wrote {png}")

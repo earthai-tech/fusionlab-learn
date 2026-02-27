@@ -121,9 +121,8 @@ _CMD: Dict[str, _CmdSpec] = {
     ),
     "plot-geo-cumulative": _CmdSpec(
         "plot_geo_cumulative",
-        "main",
+        "plot_geo_cumulative_main",
         "Cumulative geo curves.",
-        mode="sysargv",
     ),
     # Tables / summaries
     "compute-brier-exceedance": _CmdSpec(
@@ -135,6 +134,16 @@ _CMD: Dict[str, _CmdSpec] = {
         "summarize_hotspots",
         "summarize_hotspots_main",
         "Summarize hotspot outputs.",
+    ),
+    "compute-hotspots": _CmdSpec(
+        "compute_hotspots",
+        "compute_hotspots_main",
+        "Compute hotspot outputs.",
+    ),
+    "extend-forecast": _CmdSpec(
+        "extend_forecast",
+        "extend_forecast_main",
+        "Extend future forecast CSV by extrapolation.",
     ),
     "update-ablation-records": _CmdSpec(
         "update_ablation_records",
@@ -192,9 +201,11 @@ _GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         "Tables & summaries",
         (
             "compute-brier-exceedance",
+            "compute-hotspots",
             "summarize-hotspots",
             "update-ablation-records", 
-            "build-model-metrics"
+            "build-model-metrics", 
+            "extend-forecast"
         ),
     ),
 )

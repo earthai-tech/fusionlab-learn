@@ -432,5 +432,6 @@ _BASELINE_MAP = {
 _METRIC_DEF = {
     "mae": ("overall_mae", "MAE (mm)", "min"),
     "mse": ("overall_mse", "MSE (mm^2)", "min"),
+    "rmse": ("overall_rmse", "RMSE (mm)", "min"),
     "r2": ("overall_r2", r"$R^2$", "max"),
 }

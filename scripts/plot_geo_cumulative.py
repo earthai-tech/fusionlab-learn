@@ -18,15 +18,19 @@ Optional: hotspot overlay from Fig.6 hotspot points CSV.
 
 Cumulative definition
 ---------------------
-For each point (sample_idx) and each year t >= start_year:
+This script always plots *cumulative since start_year*, but the
+input CSV can be:
 
-  cum_actual(t) = sum_{y=start_year..t} subsidence_actual(y)
-  cum_pred(t)   = sum_{y=start_year..t} subsidence_q50(y)
+1) --subsidence-kind=cumulative (default)
+   Values are already cumulative. We rebase at the first year
+   >= start_year:
 
-Panels:
-- "Observed year_val":  cum_actual(year_val) (validation only)
-- "Predicted year_val": cum_pred(year_val) (val + future)
-- "Forecast years":     cum_pred(Y) for each Y in years_forecast
+     cum(t) = value(t) - value(first)
+
+2) --subsidence-kind=increment (or rate)
+   Values are yearly increments. We accumulate:
+
+     cum(t) = sum_{y} increment(y)
 
 CRS handling (lat/lon vs UTM)
 -----------------------------
@@ -53,7 +57,6 @@ Notes
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import contextily as cx
@@ -70,13 +73,13 @@ from . import utils
 # ---------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------
-def parse_args() -> argparse.Namespace:
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="plot-geo-cumulative",
         description=(
             "Cumulative subsidence maps on a satellite "
             "basemap (GeoPrior)."
-        )
+        ),
     )
 
     p.add_argument(
@@ -119,7 +122,16 @@ def parse_args() -> argparse.Namespace:
         default=[2024, 2025],
         help="Forecast years (cumulative q50).",
     )
-
+    p.add_argument(
+        "--subsidence-kind",
+        default="cumulative",
+        choices=("cumulative", "increment", "rate"),
+        help=(
+            "Meaning of subsidence values in CSVs. "
+            "cumulative=already cumulative (rebase at start_year); "
+            "increment/rate=per-year increments (cumsum)."
+        ),
+    )
     p.add_argument(
         "--clip",
         type=float,
@@ -200,8 +212,13 @@ def parse_args() -> argparse.Namespace:
         default_out="spatial_satellite_cumulative",
     )
 
-    return p.parse_args()
+    return p
 
+def parse_args(
+    argv: Optional[List[str]] = None,
+) -> argparse.Namespace:
+    p = build_parser()
+    return p.parse_args(argv)
 
 # ---------------------------------------------------------------------
 # Loading / schema
@@ -325,6 +342,33 @@ def _panel_df(
     out = df[["coord_x", "coord_y", value_col]].copy()
     return out.rename(columns={value_col: "value"})
 
+def _cum_from_input(
+    df: pd.DataFrame,
+    *,
+    value_col: str,
+    kind: str,
+) -> pd.Series:
+    kind = str(kind).strip().lower()
+    g = df.groupby("sample_idx")[value_col]
+
+    if kind in ("increment", "rate"):
+        return g.cumsum()
+
+    # kind == "cumulative" (default): rebase at first available year
+    return df[value_col] - g.transform("first")
+
+def _cum_title_tag(kind: str) -> str:
+    k = str(kind).strip().lower()
+    if k in ("increment", "rate"):
+        return "cum (from increments)"
+    return "cum (rebased)"
+
+
+def _cum_note(kind: str) -> str:
+    k = str(kind).strip().lower()
+    if k in ("increment", "rate"):
+        return "from increments"
+    return "rebased"
 
 def build_city_panels(
     val_df: pd.DataFrame,
@@ -333,7 +377,9 @@ def build_city_panels(
     start_year: int,
     year_val: int,
     years_forecast: List[int],
+    subs_kind: str = "cumulative"
 ) -> Dict[str, pd.DataFrame]:
+    
     val = val_df.copy()
     fut = fut_df.copy()
 
@@ -351,10 +397,12 @@ def build_city_panels(
     )
     # currently our data collected are cumlative so no need 
     # since the prediction should be made on cumulative 
-    v0["cum_actual"] = v0.groupby("sample_idx")[
-        "subsidence_actual"
-    ] # .cumsum()
-
+    v0["cum_actual"] = _cum_from_input(
+        v0,
+        value_col="subsidence_actual",
+        kind=subs_kind,
+    )
+    
     obs = v0[v0["coord_t"] == int(year_val)]
     obs_panel = _panel_df(obs, "cum_actual") if not obs.empty else (
         pd.DataFrame()
@@ -378,9 +426,11 @@ def build_city_panels(
         subset=["sample_idx", "coord_t"],
         keep="last",
     )
-    comb["cum_pred"] = comb.groupby("sample_idx")[
-        "subsidence_q50"
-    ] # .cumsum()
+    comb["cum_pred"] = _cum_from_input(
+        comb,
+        value_col="subsidence_q50",
+        kind=subs_kind,
+    )
 
     pred = comb[comb["coord_t"] == int(year_val)]
     pred_panel = _panel_df(pred, "cum_pred") if not pred.empty else (
@@ -446,6 +496,7 @@ def draw_city_row(
     panels_3857: Dict[str, gpd.GeoDataFrame],
     col_keys: List[str],
     cmap: mpl.colors.Colormap,
+    cum_tag: str,
     vmin: float,
     vmax: float,
     args: argparse.Namespace,
@@ -522,11 +573,11 @@ def draw_city_row(
             continue
 
         if key == "obs":
-            ttl = f"{city} • {args.year_val} obs (cum.)"
+            ttl = f"{city} • {args.year_val} obs {cum_tag}"
         elif key == "pred":
-            ttl = f"{city} • {args.year_val} pred (cum.)"
+            ttl = f"{city} • {args.year_val} pred {cum_tag}"
         else:
-            ttl = f"{city} • {key[1:]} fcst (cum.)"
+            ttl = f"{city} • {key[1:]} fcst {cum_tag}"
 
         ax.set_title(
             ttl,
@@ -539,9 +590,14 @@ def draw_city_row(
 # ---------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------
-def main() -> None:
-    args = parse_args()
+def plot_geo_cumulative_main(
+    argv: Optional[List[str]] = None,
+) -> None:
+    args = parse_args(argv)
     utils.set_paper_style(fontsize=args.font, dpi=args.dpi)
+
+    cum_tag = _cum_title_tag(args.subsidence_kind)
+    note = _cum_note(args.subsidence_kind)
 
     show_legend = utils.str_to_bool(args.show_legend, default=True)
     show_title = utils.str_to_bool(args.show_title, default=True)
@@ -562,6 +618,7 @@ def main() -> None:
         start_year=args.start_year,
         year_val=args.year_val,
         years_forecast=list(args.years_forecast),
+        subs_kind=args.subsidence_kind,
     )
     zh_pan = build_city_panels(
         zh_val,
@@ -569,6 +626,7 @@ def main() -> None:
         start_year=args.start_year,
         year_val=args.year_val,
         years_forecast=list(args.years_forecast),
+        subs_kind=args.subsidence_kind,
     )
 
     col_keys: List[str] = []
@@ -655,6 +713,7 @@ def main() -> None:
         panels_3857=ns_3857,
         col_keys=col_keys,
         cmap=cmap,
+        cum_tag=cum_tag,
         vmin=vmin,
         vmax=vmax,
         args=args,
@@ -667,6 +726,7 @@ def main() -> None:
         city="Zhongshan",
         panels_3857=zh_3857,
         col_keys=col_keys,
+        cum_tag=cum_tag,
         cmap=cmap,
         vmin=vmin,
         vmax=vmax,
@@ -687,7 +747,21 @@ def main() -> None:
         if show_labels:
             lab = utils.label("subsidence_cum")
             cb.set_label(f"{lab} since {int(args.start_year)}")
+            
+    if show_legend and show_labels:
+        lab = utils.label("subsidence_cum")
+        cb.set_label(
+            f"{lab} since {int(args.start_year)} "
+            f"({note})"
+        )
 
+    if show_title:
+        default = (
+            f"Cumulative subsidence since "
+            f"{int(args.start_year)} "
+            f"({note}) on satellite basemap"
+        )
+        
     # Suptitle
     if show_title:
         default = (
@@ -714,6 +788,11 @@ def main() -> None:
     print(f"[OK] Saved: {png}")
     print(f"[OK] Saved: {pdf}")
 
+def main() -> None:
+    plot_geo_cumulative_main()
+
 
 if __name__ == "__main__":
     main()
+    
+

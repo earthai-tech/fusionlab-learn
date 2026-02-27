@@ -118,6 +118,8 @@ def _canon_cols(df: pd.DataFrame) -> pd.DataFrame:
         "split": ("split",),
         "calibration": ("calibration",),
         "overall_mae": ("overall_mae",),
+        "overall_mse": ("overall_mse",),
+        "overall_rmse": ("overall_rmse",),
         "overall_r2": ("overall_r2",),
         "coverage80": ("coverage80",),
         "sharpness80": ("sharpness80",),
@@ -144,6 +146,8 @@ def _canon_cols(df: pd.DataFrame) -> pd.DataFrame:
 
     for c in (
         "overall_mae",
+        "overall_rmse", 
+        "overall_rmse", 
         "overall_r2",
         "coverage80",
         "sharpness80",
@@ -552,6 +556,7 @@ def _plot_horizon_ret(
     df: pd.DataFrame,
     *,
     direction: str,
+    metric: str,
     split: str,
     calib: str,
     strategies: List[str],
@@ -559,13 +564,16 @@ def _plot_horizon_ret(
     baseline_rescale: str,
     text: TextFlags,
 ) -> None:
-    hs = _pick_horizons(df, metric="r2", max_n=3)
+    # hs = _pick_horizons(df, metric="r2", max_n=3)
+    metric = str(metric).lower()
+    hs = _pick_horizons(df, metric=metric, max_n=3)
     x = np.arange(len(hs), dtype=float)
 
     # baseline per-horizon values
     base: list[float] = []
     for h in hs:
-        col = f"per_horizon_r2.{h}"
+        # col = f"per_horizon_r2.{h}"
+        col = f"per_horizon_{metric}.{h}"
         b = _pick_metric(
             df,
             direction=direction,
@@ -587,7 +595,8 @@ def _plot_horizon_ret(
 
         ys: list[float] = []
         for i, h in enumerate(hs):
-            col = f"per_horizon_r2.{h}"
+            # col = f"per_horizon_r2.{h}"
+            col = f"per_horizon_{metric}.{h}"
             v = _pick_metric(
                 df,
                 direction=direction,
@@ -623,7 +632,12 @@ def _plot_horizon_ret(
     ax.set_ylim(0.0, 1.25)
 
     if text.show_labels:
-        ax.set_ylabel("R² retention")
+        # ax.set_ylabel("R² retention")
+        try:
+            _, ylab0, _ = cfg._METRIC_DEF[metric]
+        except:
+            ylab0 = metric.upper()
+        ax.set_ylabel(f"{ylab0} retention (× baseline)")
         ax.set_xlabel("Horizon")
     else:
         ax.set_ylabel("")
@@ -1386,6 +1400,7 @@ def render(
     directions: List[str],
     rescale_mode: Optional[str],
     baseline_rescale: str,
+    horizon_metric: str,
     cov_target: float,
     threshold: float,
     xfer_rows: List[Dict[str, Any]],
@@ -1497,6 +1512,7 @@ def render(
         ax_b1,
         df,
         direction="A_to_B",
+        metric=horizon_metric,
         split=split,
         calib=calib,
         strategies=strategies,
@@ -1508,6 +1524,7 @@ def render(
         ax_b2,
         df,
         direction="B_to_A",
+        metric=horizon_metric,
         split=split,
         calib=calib,
         strategies=strategies,
@@ -1686,8 +1703,8 @@ def render(
     elif has_ttl:
         fig.subplots_adjust(top=0.93)
         
-    top = 0.86 if (has_leg and has_ttl) else (
-        0.90 if has_leg else (0.93 if has_ttl else 0.98))
+    # top = 0.86 if (has_leg and has_ttl) else (
+    #     0.90 if has_leg else (0.93 if has_ttl else 0.98))
     # fig.tight_layout(rect=[0.0, 0.0, 1.0, top])
 
     stem = out
@@ -1763,6 +1780,16 @@ def parse_args(argv: List[str] | None = None) -> Any:
         default="as_is",
         choices=("strict", "as_is"),
         help="Rescale mode for baseline fetch",
+    )
+    ap.add_argument(
+        "--horizon-metric",
+        type=str,
+        default="rmse",
+        choices=("r2", "mae", "mse", "rmse"),
+        help=(
+            "Metric for the horizon-retention panels "
+            "(default: rmse)."
+        ),
     )
     ap.add_argument(
         "--cov-target",
@@ -1934,6 +1961,7 @@ def figSx_xfer_impact_main(
         directions=directions,
         rescale_mode=rm,
         baseline_rescale=brm,
+        horizon_metric=str(args.horizon_metric).lower(),
         cov_target=float(args.cov_target),
         threshold=float(args.threshold),
         xfer_rows=rows,
