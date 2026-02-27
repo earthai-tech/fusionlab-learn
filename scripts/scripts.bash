@@ -30,3 +30,108 @@ $ python -m scripts plot-xfer-impact --src "F:\repositories\fusionlab-learn\resu
 $ python -m scripts.fix_xfer_interval_metrics --src results/xfer
 
 $ python -m scripts.plot_geo_cumulative --ns-val "J:\nature\results\nansha_GeoPriorSubsNet_stage1\train_20260222-141331\nansha_GeoPriorSubsNet_forecast_TestSet_H3_eval_calibrated.csv" --zh-val "J:\nature\results\zhongshan_GeoPriorSubsNet_stage1\train_20260218-175001\zhongshan_GeoPriorSubsNet_forecast_TestSet_H3_eval_calibrated.csv" --ns-future "J:\nature\results\nansha_GeoPriorSubsNet_stage1\train_20260222-141331\nansha_GeoPriorSubsNet_forecast_TestSet_H3_future_calibrated.csv" --zh-future "J:\nature\results\zhongshan_GeoPriorSubsNet_stage1\train_20260218-175001\zhongshan_GeoPriorSubsNet_forecast_TestSet_H3_future_calibrated.csv"
+
+python -m scripts extend-forecast \
+  --ns-src "J:\nature\results\nansha_GeoPriorSubsNet_stage1\train_20260222-141331" \
+  --zh-src "J:\nature\results\zhongshan_GeoPriorSubsNet_stage1\train_20260218-175001" \
+  --split test \
+  --add-years 1 \
+  --out future_plus1
+  
+$ python -m scripts summarize-hotspots   --hotspot-csv "F:\repositories\fusionlab-learn\scripts\out\fig6_hotspot_points.csv"
+
+$ python -m scripts plot-spatial-forecasts   --ns-src "J:\nature\results\nansha_GeoPriorSubsNet_stage1\train_20260222-141331"   --zh-src "J:\nature\results\zhongshan_GeoPriorSubsNet_stage1\train_20260218-175001"   --split test   --year-val 2022   --years-forecast 2025 2026   --cumulative   --hotspot delta   --hotspot-quantile 0.90   --hotspot-out "scripts/out/fig6_hotspot_points.csv"   --out fig6-spatial-forecasts
+
+python -m scripts plot-hotspot-analytics \
+  --ns-src "J:\nature\results\nansha_GeoPriorSubsNet_stage1\train_20260222-141331" \
+  --zh-src "J:\nature\results\zhongshan_GeoPriorSubsNet_stage1\train_20260218-175001" \
+  --split test \
+  --subsidence-kind cumulative \
+  --base-year 2022 \
+  --years 2023 2024 2025 \
+  --risk-threshold 50 \
+  --hotspot-quantile 0.90 \
+  --out fig7-hotspot-analytics 
+
+python -m scripts plot-hotspot-analytics \
+  --ns-src "J:\nature\results\nansha_GeoPriorSubsNet_stage1\train_20260222-141331" \
+  --zh-src "J:\nature\results\zhongshan_GeoPriorSubsNet_stage1\train_20260218-175001" \
+  --split test \
+  --subsidence-kind cumulative \
+  --base-year 2022 \
+  --years 2023 2024 2025 \
+  --focus-year 2025 \
+  --risk-threshold 50 \
+  --hotspot-rule combo \
+  --hotspot-abs 20 \
+  --risk-min 0.7 \
+  --exposure "scripts/out/exposure.csv" \
+  --cluster-rank risk \
+  --add-persistence \
+  --boundary "scripts/out/nansha_boundary.geojson" \
+  --out fig7-hotspot-analytics_policy 
+  
+
+python -m scripts plot-hotspot-analytics \
+  --ns-src "J:\nature\results\nansha_GeoPriorSubsNet_stage1\train_20260222-141331" \
+  --zh-src "J:\nature\results\zhongshan_GeoPriorSubsNet_stage1\train_20260218-175001" \
+  --split test \
+  --subsidence-kind cumulative \
+  --base-year 2022 \
+  --years 2024 2025 \
+  --focus-year 2025 \
+  --risk-threshold 50 \
+  --hotspot-rule combo \
+  --hotspot-abs 20 \
+  --risk-min 0.7 \
+  --cluster-rank risk \
+  --out fig7-hotspot-analytics_policy
+  
+python -m scripts make-boundary \
+  --ns-src "J:\nature\results\nansha_GeoPriorSubsNet_stage1\train_20260222-141331" \
+  --zh-src "J:\nature\results\zhongshan_GeoPriorSubsNet_stage1\train_20260218-175001" \
+  --split test \
+  --method concave \
+  --alpha 0.25 \
+  --format geojson \
+  --out boundary 
+  
+python -m scripts make-exposure \
+  --ns-src "J:\nature\results\nansha_GeoPriorSubsNet_stage1\train_20260222-141331" \
+  --zh-src "J:\nature\results\zhongshan_GeoPriorSubsNet_stage1\train_20260218-175001" \
+  --split test \
+  --mode density \
+  --k 30 \
+  --out exposure 
+  
+python -m scripts make-district-grid \
+  --ns-src "J:\nature\results\nansha_GeoPriorSubsNet_stage1\train_20260222-141331" \
+  --split test \
+  --nx 12 --ny 12 \
+  --boundary "scripts/out/boundary_nansha.geojson" \
+  --clip-boundary \
+  --format geojson \
+  --assign-samples \
+  --out district_grid_clipped 
+  
+  
+python -m scripts tag-clusters-with-zones \
+  --clusters "scripts/out/hotspot_clusters.csv" \
+  --grid "scripts/out/district_grid_nansha.geojson" \
+  --out cluster_zones_nansha
+  
+# If your grid is clipped and some centroids fall outside, use nearest:
+
+python -m scripts tag-clusters-with-zones \
+  --clusters "scripts/out/hotspot_clusters.csv" \
+  --grid "scripts/out/district_grid_nansha.geojson" \
+  --nearest \
+  --out cluster_zones_nansha
+  
+# If the clusters file contains both cities, filter:
+
+python -m scripts tag-clusters-with-zones \
+  --clusters "scripts/out/hotspot_clusters.csv" \
+  --grid "scripts/out/district_grid_zhongshan.geojson" \
+  --city "Zhongshan" \
+  --out cluster_zones_zhongshan

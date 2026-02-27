@@ -124,6 +124,11 @@ _CMD: Dict[str, _CmdSpec] = {
         "plot_geo_cumulative_main",
         "Cumulative geo curves.",
     ),
+    "plot-hotspot-analytics": _CmdSpec(
+        "plot_hotspot_analytics",
+        "plot_hotspot_analytics_main",
+        "Hotspot analytics (maps + timeline).",
+    ),
     # Tables / summaries
     "compute-brier-exceedance": _CmdSpec(
         "compute_brier_exceedance",
@@ -156,7 +161,27 @@ _CMD: Dict[str, _CmdSpec] = {
         "build_model_metrics_main",
         "Build unified metrics tables (CSV/JSON).",
     ),
- 
+    "make-boundary": _CmdSpec(
+        "make_boundary",
+        "make_boundary_main",
+        "Create boundary polygon from points.",
+    ),
+    "make-exposure": _CmdSpec(
+        "make_exposure",
+        "make_exposure_main",
+        "Create exposure.csv (proxy) from points.",
+    ),
+    "make-district-grid": _CmdSpec(
+        "make_district_grid",
+        "make_district_grid_main",
+        "Create grid-based district (Zone IDs) layer.",
+    ),
+    "tag-clusters-with-zones": _CmdSpec(
+        "tag_clusters_with_zones",
+        "tag_clusters_with_zones_main",
+        "Assign hotspot clusters to Zone IDs.",
+    ),
+    
 }
 
 
@@ -178,6 +203,7 @@ _GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
             "plot-uncertainty",
             "plot-spatial-forecasts",
             "plot-transfer-impact",
+            "plot-hotspot-analytics"
         ),
     ),
     (
@@ -205,7 +231,11 @@ _GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
             "summarize-hotspots",
             "update-ablation-records", 
             "build-model-metrics", 
-            "extend-forecast"
+            "extend-forecast", 
+            "make-boundary", 
+            "make-exposure", 
+            "make-district-grid",
+            "tag-clusters-with-zones"
         ),
     ),
 )

@@ -91,6 +91,17 @@ def _canon_dir(x: Any) -> str:
     k = s.lower()
     return _DIR_CANON.get(k, s)
 
+_BASELINE_INV = {
+    v: k for (k, v) in cfg._BASELINE_MAP.items()
+}
+
+
+def _dir_for_panel(*, direc: Any, strat: str) -> str:
+    d = _canon_dir(direc)
+    s = str(strat).lower()
+    if s == "baseline":
+        return _BASELINE_INV.get(d, d)
+    return d
 
 def _to_num(df: pd.DataFrame, col: str) -> None:
     if col in df.columns:
@@ -567,6 +578,13 @@ def _plot_horizon_ret(
     # hs = _pick_horizons(df, metric="r2", max_n=3)
     metric = str(metric).lower()
     hs = _pick_horizons(df, metric=metric, max_n=3)
+    opt = "max"
+    try:
+        _, _, opt = cfg._METRIC_DEF[metric]
+    except:
+        pass
+    opt = str(opt).lower()
+
     x = np.arange(len(hs), dtype=float)
 
     # baseline per-horizon values
@@ -608,8 +626,16 @@ def _plot_horizon_ret(
                 col=col,
             )
             b = base_arr[i]
-            ok = np.isfinite(v) and np.isfinite(b) and b != 0.0
-            ys.append(v / b if ok else float("nan"))
+            # ok = np.isfinite(v) and np.isfinite(b) and b != 0.0
+            # ys.append(v / b if ok else float("nan"))
+            ok = np.isfinite(v) and np.isfinite(b)
+            if not ok:
+                ys.append(float("nan"))
+            elif opt == "min":
+                ys.append(b / v if v != 0.0 else float("nan"))
+            else:
+                ys.append(v / b if b != 0.0 else float("nan"))
+    
 
         yarr = np.asarray(ys, dtype=float)
         m = np.isfinite(yarr)
@@ -629,7 +655,12 @@ def _plot_horizon_ret(
     ax.axhline(1.0, linestyle="--", linewidth=0.7)
     ax.set_xticks(x)
     ax.set_xticklabels(hs)  # shows H2/H3/H4 if that’s what exists
-    ax.set_ylim(0.0, 1.25)
+    # ax.set_ylim(0.0, 1.25)
+    if opt == "max":
+        ax.set_ylim(-1.0, 1.25)
+    else:
+        ax.set_ylim(0.0, 1.25)
+        
 
     if text.show_labels:
         # ax.set_ylabel("R² retention")
@@ -742,6 +773,8 @@ def _norm_rel_path(s: str) -> Path:
         return p2
     return p
 
+
+
 def _risk_tables(
     rows: List[Dict[str, Any]],
     *,
@@ -761,8 +794,12 @@ def _risk_tables(
         if str(r.get("calibration", "")).lower() != calib:
             continue
 
+        # strat = str(r.get("strategy", "")).lower()
+        # direc = _canon_dir(r.get("direction", ""))
         strat = str(r.get("strategy", "")).lower()
-        direc = _canon_dir(r.get("direction", ""))
+        direc = _dir_for_panel(direc=r.get("direction", ""),
+                               strat=strat)
+
         pth = _norm_rel_path(str(r.get("csv_eval", "")))
         if not pth.exists():
             continue
@@ -1064,8 +1101,11 @@ def _hotspot_series(
         if str(r.get("calibration", "")).lower() != calib:
             continue
 
+        # strat = str(r.get("strategy", "")).lower()
+        # direc = _canon_dir(r.get("direction", ""))
         strat = str(r.get("strategy", "")).lower()
-        direc = _canon_dir(r.get("direction", ""))
+        direc = _dir_for_panel(direc=r.get("direction", ""),
+                               strat=strat)
         pth = _norm_rel_path(str(r.get("csv_eval", "")))
         if not pth.exists():
             continue
