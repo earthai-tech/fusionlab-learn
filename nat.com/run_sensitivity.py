@@ -85,22 +85,22 @@ TRAIN_SCRIPT_DEFAULT = Path(__file__).with_name(
 # 0 0.05 0.2 1.0
 DEFAULT_LCONS: List[float] = [
     0.0,
-    0.01,
-    0.05,
-    0.1,
-    0.2,
-    0.5,
-    1.0,
+#    0.01,
+#    0.05,
+#    0.1,
+#    0.2,
+#    0.5,
+#    1.0,
 ]
 
 DEFAULT_LPRIOR: List[float] = [
-    0.0,
-    0.01,
+#    0.0,
+#    0.01,
     0.05,
-    0.1,
-    0.2,
-    0.5,
-    1.0,
+#    0.1,
+#    0.2,
+#    0.5,
+#    1.0,
 ]
 
 DEFAULT_PDE_MODES: List[str] = ["both"] # ["none", "both" ]

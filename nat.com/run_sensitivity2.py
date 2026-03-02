@@ -2,26 +2,26 @@
 # License: BSD-3-Clause
 # Author: LKouadio <etanoyau@gmail.com>
 """
-run_lambda_sensitivity.py
+run_sensitivity.py
 
 Driver to run a (lambda_cons, lambda_prior) sensitivity grid
 for GeoPriorSubsNet using the existing Stage-2 training script.
 
-This script calls stage2.py multiple times with environment
+This script calls sensitivity.py multiple times with environment
 overrides. Each run should write its own ablation record
 (entry in ablation_records/ablation_record.jsonl), which your
 make_supp_figS6_ablations.py later aggregates.
 
-Core overrides (expected by stage2.py)
--------------------------------------
+Core overrides (expected by sensitivity.py)
+--------------------------------------------
 - EPOCHS_OVERRIDE
 - PDE_MODE_OVERRIDE
 - LAMBDA_CONS_OVERRIDE
 - LAMBDA_PRIOR_OVERRIDE
 
 Optional "deconfounding" overrides (safe to export even if
-stage2.py ignores some of them; you can wire them later)
--------------------------------------------------------
+sensivity.py ignores some of them; you can wire them later)
+-----------------------------------------------------------
 - TRAINING_STRATEGY_OVERRIDE
 - Q_POLICY_OVERRIDE
 - SUBS_RESID_POLICY_OVERRIDE
@@ -49,7 +49,7 @@ A run is considered "done" if an ablation record exists containing:
 (and matching CITY when available).
 
 Usage
------
+------
 set CITY=zhongshan
 python nat.com/run_lambda_sensitivity.py --epochs 20
 
@@ -66,7 +66,11 @@ python nat.com/run_sensitivity.py --epochs 20 \
 python nat.com/run_sensitivity.py --epochs 20 --inprocess --fast
 
 python nat.com/run_sensitivity.py --epochs 20 --gold --eval-max-batches 50 --fast
-    
+
+python nat.com/run_sensitivity.py --epochs 10 --fast --n-jobs -1   
+
+python nat.com/run_sensitivity.py --gold --epochs 10 --fast --threads 20
+
 """
 
 from __future__ import annotations
@@ -82,7 +86,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-from fusionlab.utils import default_results_dir
+from concurrent.futures import (
+    ThreadPoolExecutor,
+    as_completed,
+)
+    
+from fusionlab.utils import (
+    default_results_dir, 
+    resolve_n_jobs,
+    threads_per_job,
+    apply_tf_threading,
+    apply_thread_env,
+    resolve_device,
+    resolve_gpu_ids,
+    pick_gpu_id,
+    apply_gpu_env,
+)
+        
 from sensitivity_lib import (
     build_context,
     run_one as run_one_gold,
@@ -245,6 +265,44 @@ def parse_args() -> argparse.Namespace:
             "(reuses NPZ + tf.data pipelines). Fastest for grids."
         ),
     )
+    p.add_argument(
+        "--n-jobs",
+        type=int,
+        default=1,
+        help="Parallel grid runs; -1=all CPUs.",
+    )
+    p.add_argument(
+        "--threads",
+        type=int,
+        default=0,
+        help="Threads per run (0=auto).",
+    )
+
+    p.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        choices=["auto", "cpu", "gpu"],
+        help="Device policy for runs.",
+    )
+    
+    p.add_argument(
+        "--gpu-ids",
+        type=str,
+        nargs="*",
+        default=None,
+        help=(
+            "Explicit GPU ids, e.g. "
+            "--gpu-ids 0 1"
+        ),
+    )
+    
+    p.add_argument(
+        "--gpu-allow-growth",
+        action="store_true",
+        help="Enable TF GPU allow-growth.",
+    )
+
     # -----------------------------
     # Optional deconfounding knobs
     # -----------------------------
@@ -570,10 +628,36 @@ def _save_state(
             json.dumps(payload, indent=2),
             encoding="utf-8",
         )
-    except Exception:
+    except:
         # State is optional: never fail the run.
         return
-
+    
+def _worker_banner(
+    *,
+    mode: str,
+    job_i: int,
+    n_jobs: int,
+    pool: int,
+    run_tag: str,
+    device: str,
+    gpu_id: Optional[str],
+) -> None:
+    d = str(device).lower().strip()
+    gid = "-" if gpu_id is None else str(gpu_id)
+    prefix = f"[{mode}]"
+    if d == "gpu":
+        msg = (
+            f"{prefix} job {job_i+1}/{n_jobs} | "
+            f"pool={pool} | RUN_TAG={run_tag} | "
+            f"GPU={gid}"
+        )
+    else:
+        msg = (
+            f"{prefix} job {job_i+1}/{n_jobs} | "
+            f"pool={pool} | RUN_TAG={run_tag} | "
+            f"CPU"
+        )
+    print(msg, flush=True)
 
 def make_env(
     base_env: Dict[str, str],
@@ -602,6 +686,8 @@ def make_env(
     env["EPOCHS_OVERRIDE"] = str(int(epochs))
     env["LAMBDA_CONS_OVERRIDE"] = str(spec.lambda_cons)
     env["LAMBDA_PRIOR_OVERRIDE"] = str(spec.lambda_prior)
+    
+    env["SENS_WORKER_BANNER"] = "1"
 
     # Traceability
     env["RUN_TAG"] = spec.run_tag()
@@ -719,7 +805,17 @@ def main() -> None:
 
     base_env = os.environ.copy()
     city = base_env.get("CITY", "<unknown>")
-
+    
+    dev = resolve_device(args.device, env=base_env)
+    gpus = []
+    if dev == "gpu":
+        gpus = resolve_gpu_ids(args.gpu_ids, env=base_env)
+    
+    if dev == "gpu" and not gpus:
+        print("[Warn] device=gpu but no GPUs found.")
+        print("       Falling back to CPU.")
+        dev = "cpu"
+    
     # Build full grid
     grid0 = build_grid(args.pde_modes, args.lcons, args.lprior)
     grid1 = maybe_shuffle(grid0, shuffle=args.shuffle, seed=args.seed)
@@ -808,6 +904,25 @@ def main() -> None:
     # GOLD MODE: cached context + in-process per-point runs
     # ---------------------------------------------------------
     if bool(args.gold):
+        cpu = resolve_n_jobs(-1)
+        t = threads_per_job(
+            n_jobs=1,
+            threads=int(args.threads or 0),
+            reserve=1,
+        )
+        apply_tf_threading(intra=t, inter=max(1, min(4, t // 2)))
+        
+        if dev == "gpu":
+            try:
+                import tensorflow as tf
+        
+                for g in tf.config.list_physical_devices("GPU"):
+                    tf.config.experimental.set_memory_growth(
+                        g, True
+                    )
+            except:
+                pass
+    
         # Build cached context ONCE
         ctx = build_context(city=city, verbose=1)
 
@@ -957,9 +1072,132 @@ def main() -> None:
 
         return  # IMPORTANT: don’t fall through to old runner
     
+    nj = resolve_n_jobs(args.n_jobs)
+    
+    if dev == "gpu":
+        # Single GPU => force n_jobs=1
+        if len(gpus) <= 1 and nj > 1:
+            print("[Warn] Single GPU detected.")
+            print("       Forcing --n-jobs 1.")
+            nj = 1
+    
+        # Multi GPU => cap workers to num GPUs (safe)
+        if len(gpus) >= 2:
+            if nj > len(gpus):
+                print("[Warn] Capping jobs to GPUs.")
+                nj = len(gpus)
+            
+    if nj > 1 and (args.gold or args.inprocess):
+        print(
+            "[Warn] --n-jobs ignored with "
+            "--gold/--inprocess."
+        )
+        nj = 1
+    
+    if nj > 1:
+        def _worker(i: int, spec: RunSpec) -> str:
+            env0 = make_env(
+                base_env,
+                epochs=args.epochs,
+                spec=spec,
+                strategy=args.strategy,
+                disable_q=bool(args.disable_q),
+                disable_subs_resid=bool(
+                    args.disable_subs_resid
+                ),
+                no_physics_ramp=bool(
+                    args.no_physics_ramp
+                ),
+                physics_warmup_steps=(
+                    args.physics_warmup_steps
+                ),
+                physics_ramp_steps=(
+                    args.physics_ramp_steps
+                ),
+                lambda_gw=args.lambda_gw,
+                lambda_smooth=args.lambda_smooth,
+                lambda_bounds=args.lambda_bounds,
+                lambda_mv=args.lambda_mv,
+                lambda_q=args.lambda_q,
+                no_early_stopping=bool(
+                    args.no_early_stopping
+                ),
+                fast=bool(args.fast),
+                eval_max_batches=(
+                    args.eval_max_batches
+                ),
+            )
+    
+            env1 = apply_thread_env(
+                env0,
+                n_jobs=nj,
+                threads=int(args.threads or 0),
+            )
+    
+            if dev == "gpu":
+                gid = pick_gpu_id(i, gpus)
+                env1 = apply_gpu_env(
+                    env1,
+                    gpu_id=gid,
+                    allow_growth=bool(
+                        args.gpu_allow_growth
+                    ),
+                )
+            else:
+                gid = None
+    
+            _worker_banner(
+                mode="Sensitivity",
+                job_i=i,
+                n_jobs=len(grid),
+                pool=nj,
+                run_tag=spec.run_tag(),
+                device=dev,
+                gpu_id=gid,
+            )
+
+            run_one_script(
+                train_script,
+                env=env1,
+                dry_run=bool(args.dry_run),
+                inprocess=False,
+            )
+            return spec.key()
+    
+        failures = []
+        with ThreadPoolExecutor(max_workers=nj) as ex:
+            futs = {
+                ex.submit(_worker, i, s): (i, s)
+                for i, s in enumerate(grid)
+            }
+            
+            for fut in as_completed(futs):
+                i, spec = futs[fut]
+                try:
+                    k = fut.result()
+                    completed.add(k)
+                    _save_state(
+                        state_path,
+                        city=city,
+                        scan_root=scan_root,
+                        completed_n=len(completed),
+                        last_key=k,
+                    )
+                except Exception as e:
+                    msg = f"failed: worker={i} {spec.tag()} ({e})"
+                    failures.append(msg)
+                    print("[Sensitivity] ERROR:", msg)
+                    if not args.continue_on_error:
+                        raise
+    
+        if failures:
+            raise SystemExit(1)
+    
+        return
+
     failures: List[Tuple[int, str]] = []
     last_done: Optional[str] = None
-
+    
     for i, spec in enumerate(grid):
         tag = spec.tag()
         print("\n" + "=" * 62)
@@ -987,6 +1225,21 @@ def main() -> None:
             ),
             fast=bool(args.fast),
             eval_max_batches=args.eval_max_batches,
+        )
+
+        gid = None
+        if dev == "gpu":
+            # sequential case: pick first visible GPU for clarity
+            gid = pick_gpu_id(0, gpus)
+        
+        _worker_banner(
+            mode="Sensitivity",
+            job_i=i,
+            n_jobs=len(grid),
+            pool=1,
+            run_tag=spec.run_tag(),
+            device=dev,
+            gpu_id=gid,
         )
 
         try:

@@ -28,14 +28,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import tensorflow as tf
-
-from tensorflow.keras.callbacks import (
-    CSVLogger,
-    EarlyStopping,
-    ModelCheckpoint,
-    TerminateOnNaN,
-)
 
 from fusionlab.api.util import get_table_size
 from fusionlab.backends.devices import configure_tf_from_cfg
@@ -113,6 +105,48 @@ from fusionlab.params import (
     FixedHRef, 
     LearnableKappa, 
     LearnableMV
+)
+
+def _startup_device_banner() -> None:
+    if os.environ.get("SENS_WORKER_BANNER", "1") == "0":
+        return
+
+    run_tag = os.environ.get("RUN_TAG", "<unset>")
+    city = os.environ.get("CITY", "<unset>")
+
+    cvd = os.environ.get("CUDA_VISIBLE_DEVICES", None)
+    if cvd is None:
+        cvd_s = "<unset>"
+    elif str(cvd) == "":
+        cvd_s = "<disabled>"
+    else:
+        cvd_s = str(cvd)
+
+    omp = os.environ.get("OMP_NUM_THREADS", "<unset>")
+    intra = os.environ.get("TF_NUM_INTRAOP_THREADS", "<unset>")
+    inter = os.environ.get("TF_NUM_INTEROP_THREADS", "<unset>")
+
+    print(
+        "[Sensitivity2] "
+        f"pid={os.getpid()} "
+        f"RUN_TAG={run_tag} "
+        f"CITY={city} "
+        f"CUDA_VISIBLE_DEVICES={cvd_s} "
+        f"OMP={omp} "
+        f"TF_INTRA={intra} "
+        f"TF_INTER={inter}",
+        flush=True,
+    )
+
+
+_startup_device_banner()
+
+import tensorflow as tf
+from tensorflow.keras.callbacks import (
+    CSVLogger,
+    EarlyStopping,
+    ModelCheckpoint,
+    TerminateOnNaN,
 )
 
 # Global runtime settings (warnings / TF logs)

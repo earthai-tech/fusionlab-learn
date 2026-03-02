@@ -72,7 +72,6 @@ from .nat_utils import (
     serialize_subs_params, 
     save_ablation_record, 
 )
-
 from .geo_utils import unpack_frames_from_file
 from .holdout_utils import (
     compute_group_masks,
@@ -80,6 +79,16 @@ from .holdout_utils import (
     filter_df_by_groups,
 )
 from .sequence_utils import build_future_sequences_npz
+from .parallel_utils import (
+    resolve_n_jobs,
+    threads_per_job,
+    apply_tf_threading,
+    apply_thread_env,
+    resolve_device,
+    resolve_gpu_ids,
+    pick_gpu_id,
+    apply_gpu_env,
+)
 
 __all__ = [
     'spatial_sampling', 
@@ -138,5 +147,13 @@ __all__ = [
     'compute_group_masks',
     'split_groups_holdout',
     'filter_df_by_groups',
-    'build_future_sequences_npz'
+    'build_future_sequences_npz', 
+    'resolve_n_jobs',
+    'threads_per_job',
+    'apply_tf_threading',
+    'apply_thread_env',
+    'resolve_device',
+    'resolve_gpu_ids',
+    'pick_gpu_id',
+    'apply_gpu_env',
 ]
