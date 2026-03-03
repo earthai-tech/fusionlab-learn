@@ -28,14 +28,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import tensorflow as tf
-
-from tensorflow.keras.callbacks import (
-    CSVLogger,
-    EarlyStopping,
-    ModelCheckpoint,
-    TerminateOnNaN,
-)
 
 from fusionlab.api.util import get_table_size
 from fusionlab.backends.devices import configure_tf_from_cfg
@@ -113,6 +105,48 @@ from fusionlab.params import (
     FixedHRef, 
     LearnableKappa, 
     LearnableMV
+)
+
+def _startup_device_banner() -> None:
+    if os.environ.get("SENS_WORKER_BANNER", "1") == "0":
+        return
+
+    run_tag = os.environ.get("RUN_TAG", "<unset>")
+    city = os.environ.get("CITY", "<unset>")
+
+    cvd = os.environ.get("CUDA_VISIBLE_DEVICES", None)
+    if cvd is None:
+        cvd_s = "<unset>"
+    elif str(cvd) == "":
+        cvd_s = "<disabled>"
+    else:
+        cvd_s = str(cvd)
+
+    omp = os.environ.get("OMP_NUM_THREADS", "<unset>")
+    intra = os.environ.get("TF_NUM_INTRAOP_THREADS", "<unset>")
+    inter = os.environ.get("TF_NUM_INTEROP_THREADS", "<unset>")
+
+    print(
+        "[Sensitivity2] "
+        f"pid={os.getpid()} "
+        f"RUN_TAG={run_tag} "
+        f"CITY={city} "
+        f"CUDA_VISIBLE_DEVICES={cvd_s} "
+        f"OMP={omp} "
+        f"TF_INTRA={intra} "
+        f"TF_INTER={inter}",
+        flush=True,
+    )
+
+
+_startup_device_banner()
+
+import tensorflow as tf
+from tensorflow.keras.callbacks import (
+    CSVLogger,
+    EarlyStopping,
+    ModelCheckpoint,
+    TerminateOnNaN,
 )
 
 # Global runtime settings (warnings / TF logs)
@@ -272,6 +306,12 @@ def _apply_env_overrides(cfg: dict) -> tuple[dict, dict]:
 
     # --- exactly what run_lambda_sensitivity.py sets ---
     set_if("EPOCHS_OVERRIDE", "EPOCHS", lambda x: int(float(x)))
+    set_if(
+            "BATCH_SIZE_OVERRIDE",
+            "BATCH_SIZE",
+            lambda x: int(float(x)),
+        )
+    
     set_if("PDE_MODE_OVERRIDE", "PDE_MODE_CONFIG",
            lambda x: str(x).strip().lower())
     set_if("LAMBDA_CONS_OVERRIDE", "LAMBDA_CONS", float)
@@ -367,6 +407,32 @@ if ENV_OVERRIDES:
     print("\n[ENV OVERRIDES APPLIED]")
     for k, v in ENV_OVERRIDES.items():
         print(f"  - {k} = {v}")
+
+
+def _env_int(name: str, default=None):
+    v = os.getenv(name)
+    if v is None:
+        return default
+    try:
+        n = int(float(str(v).strip()))
+    except Exception:
+        return default
+    return n if n > 0 else default
+
+SENS_EVAL_MAX_BATCHES = _env_int("SENS_EVAL_MAX_BATCHES", None)
+SENS_CAL_MAX_BATCHES = _env_int(
+    "SENS_CAL_MAX_BATCHES",
+    SENS_EVAL_MAX_BATCHES,
+)
+
+if SENS_EVAL_MAX_BATCHES:
+    print(
+        f"[SENS] eval/export max batches = {SENS_EVAL_MAX_BATCHES}"
+    )
+if SENS_CAL_MAX_BATCHES:
+    print(
+        f"[SENS] calibrator max batches = {SENS_CAL_MAX_BATCHES}"
+    )
 
 FAST_SENS = bool(cfg.get("FAST_SENSITIVITY", False))
 if FAST_SENS:
@@ -2340,16 +2406,12 @@ if DEBUG and (model_inf is not subs_model_inst):
 # =============================================================================
 # Calibrate on validation set (BEFORE formatting)
 # =============================================================================
-# print("\nFitting interval calibrator (target 80%) on validation set...")
-# cal80 = fit_interval_calibrator_on_val(
-#     model_inf, 
-#     val_dataset, 
-#     target=0.80, 
-#     q_values = QUANTILES, 
-# )
-# np.save(os.path.join(RUN_OUTPUT_PATH, "interval_factors_80.npy"), cal80.factors_)
-# print("Calibrator saved.")
 cal80 = None
+_val_for_cal = val_dataset
+
+if SENS_CAL_MAX_BATCHES:
+    _val_for_cal = val_dataset.take(SENS_CAL_MAX_BATCHES)
+
 # if QUANTILES and (not FAST_SENS):
 # let take this part to calibrate as well 
 if QUANTILES:
@@ -2360,7 +2422,7 @@ if QUANTILES:
     )
     cal80 = fit_interval_calibrator_on_val(
         model_inf,
-        val_dataset,
+        _val_for_cal,
         target=0.80,
         q_values=QUANTILES,
     )
@@ -2379,6 +2441,19 @@ elif QUANTILES and FAST_SENS:
 # Forecasting (Test NPZ if available, otherwise validation fallback)
 # =============================================================================
 
+def _slice_any(x, n: int):
+    if x is None:
+        return None
+    if isinstance(x, dict):
+        return {k: _slice_any(v, n) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return type(x)(_slice_any(v, n) for v in x)
+    try:
+        return x[:n]
+    except Exception:
+        return x
+    
+    
 forecast_df = None
 dataset_name_for_forecast = "ValidationSet_Fallback"
 
@@ -2393,6 +2468,15 @@ X_fore = ensure_input_shapes(
     mode=MODE,
     forecast_horizon=FORECAST_HORIZON_YEARS,
 )
+
+if SENS_EVAL_MAX_BATCHES:
+    n_take = int(SENS_EVAL_MAX_BATCHES) * int(BATCH_SIZE)
+    X_fore = _slice_any(X_fore, n_take)
+    y_fore = _slice_any(y_fore, n_take)
+    dataset_name_for_forecast += (
+        f"_Take{int(SENS_EVAL_MAX_BATCHES)}B"
+    )
+    
 y_fore_fmt = map_targets_for_training(y_fore)
 
 
@@ -2687,6 +2771,7 @@ phys = {}
 #     - shapes match the model signature,
 #     - no silent differences vs from_tensor_slices().
 # -------------------------------------------------------------------------
+
 ds_eval = make_tf_dataset(
     X_fore,
     y_fore,
@@ -2696,6 +2781,10 @@ ds_eval = make_tf_dataset(
     forecast_horizon=FORECAST_HORIZON_YEARS,
 )
 
+# ds_eval_full = ds_eval
+# if SENS_EVAL_MAX_BATCHES:
+#     ds_eval = ds_eval_full.take(SENS_EVAL_MAX_BATCHES)
+ 
 # -------------------------------------------------------------------------
 # Optional debug:
 #   Inspect one batch end-to-end to confirm:
@@ -2797,7 +2886,7 @@ phys_npz_path = os.path.join(
 try:
     _ = model_inf.export_physics_payload(
         ds_eval,
-        max_batches=None,
+        # max_batches=SENS_EVAL_MAX_BATCHES,
         save_path=phys_npz_path,
         format="npz",
         overwrite=True,
@@ -2875,6 +2964,8 @@ else:
 # -------------------------------------------------------------------------
 # Optional: build censor mask ONLY (no model calls).
 # -------------------------------------------------------------------------
+# XXX TODO : RECHECK MASK SHAPE 
+
 mask = None
 if CENSOR_FLAG_IDX is not None:
     mask_list = []

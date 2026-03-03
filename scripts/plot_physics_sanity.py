@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.ticker import ScalarFormatter
 from matplotlib.gridspec import GridSpec
 
 from . import config as cfg
@@ -21,6 +22,7 @@ from . import utils
 #    - Prefer fusionlab loader if available
 #    - Fallback to raw NPZ + optional sidecar meta JSON
 # ================================================================
+
 def _load_payload(path: str) -> Tuple[dict, dict]:
     try:
         from fusionlab.nn.pinn.io import (  # type: ignore
@@ -92,7 +94,36 @@ def _finite_mask(*arrs: np.ndarray) -> np.ndarray:
         m &= np.isfinite(a)
     return m
 
+def _apply_paper_axis_format(
+    ax,
+    *,
+    axis: str = "both",
+    scilimits: Tuple[int, int] = (-2, 2),
+    use_offset: bool = True,
+) -> None:
+    """
+    Force scientific notation with mathtext (×10^k) on axes.
 
+    - This replaces '1e-5' with '×10^{-5}'.
+    - With scilimits=(-2,2), values like 2e-4 show as scientific.
+    """
+    fmt = ScalarFormatter(useMathText=True)
+    fmt.set_powerlimits(tuple(int(x) for x in scilimits))
+    fmt.set_scientific(True)
+    fmt.set_useOffset(bool(use_offset))
+
+    if axis in ("x", "both"):
+        ax.xaxis.set_major_formatter(fmt)
+    if axis in ("y", "both"):
+        ax.yaxis.set_major_formatter(fmt)
+
+    # Make the offset text (×10^k) look consistent and not huge
+    try:
+        ax.xaxis.get_offset_text().set_size(9)
+        ax.yaxis.get_offset_text().set_size(9)
+    except Exception:
+        pass
+    
 def _subsample_idx(
     n: int,
     frac: Optional[float],
@@ -134,17 +165,153 @@ def _tau_prior_symbol(meta: dict) -> str:
     return r"\tau_{\mathrm{prior}}"
 
 
+# def _tau_prior_formula(meta: dict) -> str:
+#     f = (meta or {}).get("tau_closure_formula", None)
+#     if f:
+#         if "kappa_bar" in str(f):
+#             return r"\kappa\,H^2S_s/(\pi^2K)"
+        
+#         return r"H_d^2S_s/(\pi^2\kappa K)"
+
+#     # Single source (config)
+#     return cfg.CLOSURES.get("tau_prior", r"\tau_{\mathrm{prior}}")
+
+def _strip_math(s: str) -> str:
+    # Remove outer $...$ if present (config strings often include $)
+    s = str(s).strip()
+    if s.startswith("$") and s.endswith("$") and len(s) >= 2:
+        return s[1:-1]
+    return s
+
+def _sci_tex(x: float, sig: int = 3) -> str:
+    """
+    Return mantissa×10^{exp} as a LaTeX snippet (no surrounding $).
+    """
+    if x is None:
+        return r"\mathrm{NA}"
+    x = float(x)
+    if not np.isfinite(x):
+        return r"\mathrm{nan}"
+    if x == 0.0:
+        return "0"
+    exp = int(np.floor(np.log10(abs(x))))
+    mant = x / (10.0**exp)
+    mant_s = f"{mant:.{sig}g}"
+    return rf"{mant_s}\times 10^{{{exp}}}"
+
+
+def _strip_dollars(s: str) -> str:
+    s = str(s).strip()
+    if s.startswith("$") and s.endswith("$") and len(s) >= 2:
+        return s[1:-1]
+    return s
+
+
+def _unit_to_tex(unit: Optional[str]) -> str:
+    if not unit:
+        return r"\mathrm{m\,s^{-1}}"
+    u = str(unit).strip().lower().replace(" ", "")
+    if u in ("m/s", "ms-1", "m*s^-1", "m*s-1", "m·s-1"):
+        return r"\mathrm{m\,s^{-1}}"
+    if u in ("mm",):
+        return r"\mathrm{mm}"
+    if u in ("m",):
+        return r"\mathrm{m}"
+    # fallback: keep as plain text in roman
+    return rf"\mathrm{{{unit}}}"
+
+
+def _axis_offset_inner(ax, axis: str) -> str:
+    """
+    Return offset text without $...$, e.g. '\\times 10^{-11}'.
+    Empty string if none.
+    """
+    if axis == "x":
+        t = ax.xaxis.get_offset_text().get_text()
+    else:
+        t = ax.yaxis.get_offset_text().get_text()
+    t = str(t).strip()
+    if not t:
+        return ""
+    return _strip_dollars(t)
+
+
+def _embed_offsets_into_labels(
+    ax,
+    *,
+    x_base: str,
+    x_unit_tex: Optional[str],
+    y_base: Optional[str] = None,
+) -> None:
+    """
+    Hide axis offset texts and embed them into labels.
+    """
+    ox = _axis_offset_inner(ax, "x")
+    oy = _axis_offset_inner(ax, "y")
+
+    # X label
+    if ox:
+        ut = _unit_to_tex(x_unit_tex)
+        ax.set_xlabel(rf"${x_base}\,({ox}\ {ut})$")
+        ax.xaxis.get_offset_text().set_visible(False)
+
+    # Y label
+    if y_base and oy:
+        ax.set_ylabel(rf"${y_base}\,({oy})$")
+        ax.yaxis.get_offset_text().set_visible(False)
+        
 def _tau_prior_formula(meta: dict) -> str:
+    """
+    Return a LaTeX math expression (NO surrounding $) describing
+    the tau closure used in titles/captions.
+    """
+    # 1) Meta override (if present)
     f = (meta or {}).get("tau_closure_formula", None)
     if f:
-        if "kappa_bar" in str(f):
-            return r"\kappa\,H^2S_s/(\pi^2K)"
-        return r"H_d^2S_s/(\pi^2\kappa K)"
+        sf = str(f).strip()
+        lo = sf.lower()
 
-    # Single source (config)
-    return cfg.CLOSURES.get("tau_prior", r"\tau_{\mathrm{prior}}")
+        # Special variant signaled in meta
+        if "kappa_bar" in lo or r"\bar{\kappa}" in sf:
+            return (
+                r"\frac{H_d^2\,S_s}"
+                r"{\pi^2\,\bar{\kappa}\,K}"
+            )
 
+        # If meta already contains LaTeX, pass-through (strip $ if any)
+        if "\\" in sf or r"\frac" in sf:
+            return _strip_math(sf)
 
+        # If meta provides a plain-text-like closure, map to a nice fraction
+        # (best-effort for your known patterns)
+        if "hd" in lo and "ss" in lo and "kappa" in lo and "pi" in lo:
+            # decide whether it's κ_b or κ
+            ksym = r"\kappa_b" if ("kappa_b" in lo or "κ_b" in sf) else r"\kappa"
+            return (
+                r"\frac{H_d^2\,S_s}"
+                rf"{{\pi^2\,{ksym}\,K}}"
+            )
+
+        # last resort: show it as-is (but make it math-safe)
+        return _strip_math(sf)
+
+    # 2) Single source from config
+    # cfg.CLOSURES["tau_prior"] includes full "$...$" with "tau_prior ≈ .../..."
+    # We extract the RHS and format it as a fraction.
+    cfg_expr = _strip_math(cfg.CLOSURES.get("tau_prior", r"\tau_{\mathrm{prior}}"))
+
+    # If config already contains a fraction, just return it
+    if r"\frac" in cfg_expr:
+        return cfg_expr
+
+    # Your canonical config RHS: H_d^2 S_s / (pi^2 kappa_b K)
+    # Return a clean fraction RHS only.
+    return (
+        r"\frac{H_d^2\,S_s}"
+        r"{\pi^2\,\kappa_b\,K}"
+    )
+
+    # return r"\frac{\kappa\,H^2\,S_s}{\pi^2\,K}"
 # ================================================================
 # 3) Stats
 # ================================================================
@@ -460,6 +627,8 @@ def render_physics_sanity(
     show_ticklabels: bool,
     show_legend: bool,
     title: Optional[str],
+    paper_format: bool, 
+    paper_no_offset: bool
 ) -> Dict[str, dict]:
     utils.set_paper_style(dpi=dpi, fontsize=fontsize)
 
@@ -532,12 +701,14 @@ def render_physics_sanity(
 
     letters = ["a", "b", "c", "d"]
     stats: Dict[str, dict] = {}
-
+    hist_axes = []
+    
     for i, case in enumerate(cases):
         x, y, r2, ep, dlt, cst = _prep_xy(case)
 
         axL = fig.add_subplot(gs[i, 0])
         axR = fig.add_subplot(gs[i, 1])
+        hist_axes.append(axR)
 
         _panel_label(axL, letters[2 * i], show_panel_labels)
         _panel_label(axR, letters[2 * i + 1], show_panel_labels)
@@ -621,10 +792,17 @@ def render_physics_sanity(
         )
 
         if show_panel_titles:
-            axR.set_title(
-                fr"{case['city']}  "
-                fr"$\varepsilon_{{cons}}={eps_cons:.3g}$"
-            )
+            if paper_format:
+                eps_tex = _sci_tex(eps_cons, sig=3)
+                axR.set_title(
+                    fr"{case['city']}  "
+                    fr"$\varepsilon_{{cons}}={eps_tex}$"
+                )
+            else:
+                axR.set_title(
+                    fr"{case['city']}  "
+                    fr"$\varepsilon_{{cons}}={eps_cons:.3g}$"
+                )
 
         if not show_ticklabels:
             axR.tick_params(labelbottom=False, labelleft=False)
@@ -637,31 +815,59 @@ def render_physics_sanity(
             "payload": str(case["path"]),
         }
 
+        # --- Nature axis formatting (optional) ---
+        if paper_format:
+            # Left panels: residual axis can have tiny numbers (e.g., 2e-4)
+            # Hist panels: x can be 1e-5 scale; y can be 1e5..1e6 scale
+            _apply_paper_axis_format(axL, axis="y", scilimits=(-2, 2))
+            _apply_paper_axis_format(axR, axis="both", scilimits=(-2, 2))
+            
     if show_title:
         if title:
             st = str(title)
         else:
             if plot_mode == "joint":
-                st = (
-                    "Physics sanity: "
-                    r"$\tau$ vs "
-                    f"{tau_form}; "
-                    r"$R_{\mathrm{cons}}$ distribution"
-                )
+                if tau_scale == "log10":
+                    st = (
+                        r"Physics sanity: "
+                        rf"$\log_{{10}}(\tau)$ vs "
+                        rf"$\log_{{10}}({tau_sym})$; "
+                        r"$R_{\mathrm{cons}}$ distribution"
+                    )
+                else:
+                    st = (
+                        r"Physics sanity: "
+                        rf"$\tau$ vs ${tau_sym}$; "
+                        r"$R_{\mathrm{cons}}$ distribution"
+                    )
             else:
+                # residual mode
                 st = (
-                    "Physics sanity: "
-                    r"$\log_{10}(\tau/\tau_{\mathrm{prior}})$ "
-                    "vs "
-                    f"{tau_form}; "
+                    r"Physics sanity: "
+                    rf"$\log_{{10}}\!\left(\tau/{tau_sym}\right)$ "
+                    r"vs "
+                    rf"${tau_sym}={tau_form}$; "
                     r"$R_{\mathrm{cons}}$ distribution"
                 )
+    
         fig.suptitle(st, x=0.02, y=0.99, ha="left")
 
+    if paper_format and paper_no_offset:
+        # Need a draw so ScalarFormatter computes offset text
+        fig.canvas.draw()
+    
+        unit_tex = cons_u or "m/s"   # what you already inferred
+        for axR in hist_axes:
+            # x: R_cons with units; y: Density
+            _embed_offsets_into_labels(
+                axR,
+                x_base=r"R_{\mathrm{cons}}",
+                x_unit_tex=unit_tex,
+                y_base=r"\mathrm{Density}",
+            )
+        
     outbase.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(str(outbase) + ".png", bbox_inches="tight")
-    fig.savefig(str(outbase) + ".svg", bbox_inches="tight")
-    plt.close(fig)
+    utils.save_figure(fig, outbase, dpi=int(dpi))
 
     return stats
 
@@ -874,7 +1080,25 @@ def _add_args(ap) -> None:
         default="none",
         help="Comma list: none,k-from-tau,closure",
     )
+    
+    ap.add_argument(
+        "--paper-format",
+        action="store_true",
+        help=(
+            "Paper-style axis formatting: use mathtext "
+            "scientific notation (×10^k) instead of 1e±k, "
+            "and force sci formatting on small/large axes."
+        ),
+    )
 
+    ap.add_argument(
+        "--paper-no-offset",
+        action="store_true",
+        help=(
+            "If set, hide ×10^k offset text and embed the multiplier "
+            "into axis labels (Nature-style). Requires --paper-format."
+        ),
+    )
 
 def plot_physics_sanity_main(argv: Optional[List[str]] = None) -> None:
     ap = argparse.ArgumentParser(
@@ -895,6 +1119,9 @@ def plot_physics_sanity_main(argv: Optional[List[str]] = None) -> None:
     show_panel_labels = utils.str_to_bool(args.show_panel_labels)
     show_ticklabels = utils.str_to_bool(args.show_ticklabels)
     show_legend = utils.str_to_bool(args.show_legend)
+    
+    paper_format=bool(args.paper_format),
+    paper_no_offset=bool(args.paper_no_offset),
 
     srcs = list(args.src or [])
     if len(srcs) != 2:
@@ -938,6 +1165,8 @@ def plot_physics_sanity_main(argv: Optional[List[str]] = None) -> None:
         show_ticklabels=show_ticklabels,
         show_legend=show_legend,
         title=args.title,
+        paper_format=paper_format, 
+        paper_no_offset= paper_no_offset
     )
 
     extras = _parse_csv_list(args.extra)

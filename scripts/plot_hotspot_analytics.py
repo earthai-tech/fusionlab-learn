@@ -135,41 +135,67 @@ def _canonize(
     _require_cols(df, list(required), where=where)
     return df
 
-def _load_exposure(
-    path: str,
-    *,
-    col: str,
-) -> pd.DataFrame:
+# def _load_exposure(
+#     path: str,
+#     *,
+#     col: str,
+# ) -> pd.DataFrame:
+#     p = utils.as_path(path)
+#     df = pd.read_csv(p)
+
+#     utils.ensure_columns(
+#         df,
+#         aliases={
+#             "sample_idx": ("sample_idx", "sample_id"),
+#             col: (col,),
+#         },
+#     )
+
+#     if "sample_idx" not in df.columns:
+#         raise KeyError("exposure: missing sample_idx")
+
+#     if col not in df.columns:
+#         raise KeyError(f"exposure: missing {col}")
+
+#     df["sample_idx"] = pd.to_numeric(
+#         df["sample_idx"],
+#         errors="coerce",
+#     )
+#     df[col] = pd.to_numeric(
+#         df[col],
+#         errors="coerce",
+#     )
+
+#     df = df.dropna(subset=["sample_idx", col]).copy()
+#     df["sample_idx"] = df["sample_idx"].astype(int)
+#     return df[["sample_idx", col]].copy()
+
+def _load_exposure(path: str, *, col: str) -> pd.DataFrame:
     p = utils.as_path(path)
     df = pd.read_csv(p)
 
     utils.ensure_columns(
         df,
-        aliases={
-            "sample_idx": ("sample_idx", "sample_id"),
-            col: (col,),
-        },
+        aliases={"sample_idx": ("sample_idx", "sample_id"), col: (col,)},
     )
 
     if "sample_idx" not in df.columns:
         raise KeyError("exposure: missing sample_idx")
-
     if col not in df.columns:
         raise KeyError(f"exposure: missing {col}")
 
-    df["sample_idx"] = pd.to_numeric(
-        df["sample_idx"],
-        errors="coerce",
-    )
-    df[col] = pd.to_numeric(
-        df[col],
-        errors="coerce",
-    )
-
+    df["sample_idx"] = pd.to_numeric(df["sample_idx"], errors="coerce")
+    df[col] = pd.to_numeric(df[col], errors="coerce")
     df = df.dropna(subset=["sample_idx", col]).copy()
     df["sample_idx"] = df["sample_idx"].astype(int)
-    return df[["sample_idx", col]].copy()
 
+    # CRITICAL: avoid duplicates that explode rows after merge
+    df = (
+        df.groupby("sample_idx", as_index=False)[col]
+        .mean()
+        .copy()
+    )
+    return df[["sample_idx", col]]
 
 def _attach_exposure(
     pts: pd.DataFrame,
@@ -1047,41 +1073,138 @@ def build_hotspot_tables(
     pts["city"] = str(city)
 
     # ---- per-year summary (requested years only)
+    # rows_y: List[Dict[str, Any]] = []
+    # for yy in years_req:
+    #     g = pts.loc[pts["coord_t"].eq(int(yy))].copy()
+    #     if g.empty:
+    #         continue
+
+    #     a = pd.to_numeric(g["delta_abs"], errors="coerce").to_numpy(float)
+    #     p = pd.to_numeric(g["p_exceed"], errors="coerce").to_numpy(float)
+
+    #     a2 = a[np.isfinite(a)]
+    #     p2 = p[np.isfinite(p)]
+
+    #     h_sel = g["is_hotspot"].to_numpy(bool)
+    #     h_pct = g["is_hotspot_pct"].to_numpy(bool)
+
+    #     n_abs = -1
+    #     if "is_hotspot_abs" in g.columns:
+    #         n_abs = int(np.sum(g["is_hotspot_abs"].to_numpy(bool)))
+
+    #     n_rsk = -1
+    #     if "is_hotspot_risk" in g.columns:
+    #         n_rsk = int(np.sum(g["is_hotspot_risk"].to_numpy(bool)))
+
+    #     rows_y.append(
+    #         {
+    #             "city": str(city),
+    #             "year": int(yy),
+    #             "T_q": float(thr_map.get(int(yy), np.nan)),
+    #             "n_hotspots": int(np.sum(h_sel)),
+    #             "n_hotspots_pct": int(np.sum(h_pct)),
+    #             "n_hotspots_abs": n_abs,
+    #             "n_hotspots_risk": n_rsk,
+    #             "delta_mean": float(np.nanmean(a2)) if a2.size else float("nan"),
+    #             "delta_max": float(np.nanmax(a2)) if a2.size else float("nan"),
+    #             "p_mean": float(np.nanmean(p2)) if p2.size else float("nan"),
+    #             "risk_sum": float(
+    #                 np.nansum(
+    #                     pd.to_numeric(
+    #                         g["risk_score"],
+    #                         errors="coerce",
+    #                     ).to_numpy(float)
+    #                 )
+    #             ),
+    #         }
+    #     )
+    # ---- per-year summary (requested years only)
     rows_y: List[Dict[str, Any]] = []
+    ever_set: set[int] = set()
+    
     for yy in years_req:
         g = pts.loc[pts["coord_t"].eq(int(yy))].copy()
         if g.empty:
             continue
-
+    
+        # robust unique sets (never sum booleans)
+        sel_ids = set(
+            pd.to_numeric(
+                g.loc[g["is_hotspot"], "sample_idx"],
+                errors="coerce",
+            )
+            .dropna()
+            .astype(int)
+            .unique()
+            .tolist()
+        )
+    
+        pct_ids = set(
+            pd.to_numeric(
+                g.loc[g["is_hotspot_pct"], "sample_idx"],
+                errors="coerce",
+            )
+            .dropna()
+            .astype(int)
+            .unique()
+            .tolist()
+        )
+    
+        abs_ids = None
+        if "is_hotspot_abs" in g.columns:
+            abs_ids = set(
+                pd.to_numeric(
+                    g.loc[g["is_hotspot_abs"], "sample_idx"],
+                    errors="coerce",
+                )
+                .dropna()
+                .astype(int)
+                .unique()
+                .tolist()
+            )
+    
+        rsk_ids = None
+        if "is_hotspot_risk" in g.columns:
+            rsk_ids = set(
+                pd.to_numeric(
+                    g.loc[g["is_hotspot_risk"], "sample_idx"],
+                    errors="coerce",
+                )
+                .dropna()
+                .astype(int)
+                .unique()
+                .tolist()
+            )
+    
+        # ever/new based on SELECTED rule
+        new_ids = sel_ids - ever_set
+        ever_set |= sel_ids
+    
         a = pd.to_numeric(g["delta_abs"], errors="coerce").to_numpy(float)
         p = pd.to_numeric(g["p_exceed"], errors="coerce").to_numpy(float)
-
         a2 = a[np.isfinite(a)]
         p2 = p[np.isfinite(p)]
-
-        h_sel = g["is_hotspot"].to_numpy(bool)
-        h_pct = g["is_hotspot_pct"].to_numpy(bool)
-
-        n_abs = -1
-        if "is_hotspot_abs" in g.columns:
-            n_abs = int(np.sum(g["is_hotspot_abs"].to_numpy(bool)))
-
-        n_rsk = -1
-        if "is_hotspot_risk" in g.columns:
-            n_rsk = int(np.sum(g["is_hotspot_risk"].to_numpy(bool)))
-
+    
         rows_y.append(
             {
                 "city": str(city),
                 "year": int(yy),
                 "T_q": float(thr_map.get(int(yy), np.nan)),
-                "n_hotspots": int(np.sum(h_sel)),
-                "n_hotspots_pct": int(np.sum(h_pct)),
-                "n_hotspots_abs": n_abs,
-                "n_hotspots_risk": n_rsk,
+    
+                # timeline variants
+                "n_hotspots": int(len(sel_ids)),           # current
+                "n_hotspots_ever": int(len(ever_set)),     # monotone
+                "n_hotspots_new": int(len(new_ids)),       # additions
+    
+                # keep rule-specific counts for transparency
+                "n_hotspots_pct": int(len(pct_ids)),
+                "n_hotspots_abs": int(len(abs_ids)) if abs_ids is not None else -1,
+                "n_hotspots_risk": int(len(rsk_ids)) if rsk_ids is not None else -1,
+    
                 "delta_mean": float(np.nanmean(a2)) if a2.size else float("nan"),
                 "delta_max": float(np.nanmax(a2)) if a2.size else float("nan"),
                 "p_mean": float(np.nanmean(p2)) if p2.size else float("nan"),
+    
                 "risk_sum": float(
                     np.nansum(
                         pd.to_numeric(
@@ -1092,7 +1215,7 @@ def build_hotspot_tables(
                 ),
             }
         )
-
+        
     df_years = pd.DataFrame(rows_y)
     ext = _extent(pts)
 
@@ -1153,6 +1276,8 @@ def plot_hotspot_analytics(
     out_points: Optional[str],
     out_years: Optional[str],
     out_clusters: Optional[str],
+    timeline_mode: str,
+    timeline_overlay_current: bool,
     dpi: int,
     font: int,
     cluster_rank: str, 
@@ -1160,8 +1285,8 @@ def plot_hotspot_analytics(
     add_compare: bool, 
     compare_metric: str,
     hotspot_rule:str, 
-    hotspot_abs:str, 
-    risk_min: float, 
+    hotspot_abs:Optional[float],
+    risk_min: Optional[float], 
     ns_future_b: Optional[str] = None, 
     zh_future_b: Optional[str] = None, 
     gdf: Optional[Union[GeoDF, Dict[str, GeoDF]]] = None,
@@ -1458,25 +1583,80 @@ def plot_hotspot_analytics(
         ax2 = ax_arr[r, 2]
         t = dfy.sort_values("year")
         yrs = t["year"].to_numpy(int)
-        nh = pd.to_numeric(t["n_hotspots"], errors="coerce").to_numpy(float)
-        # ax2.bar(yrs, nh, alpha=0.35, color=col)
-        rgba = mpl.colors.to_rgba(col, 0.25)
+
+        mode = str(timeline_mode).strip().lower()
+        
+        col_map = {
+            "current": "n_hotspots",
+            "ever": "n_hotspots_ever",
+            "new": "n_hotspots_new",
+        }
+        k = col_map.get(mode, "n_hotspots")
+        if k not in t.columns:
+            k = "n_hotspots"
+        
+        nh = pd.to_numeric(t[k], errors="coerce").to_numpy(float)
+        nh_cur = pd.to_numeric(
+            t.get("n_hotspots", np.nan),
+            errors="coerce",
+        ).to_numpy(float)
+        
+        rgba_bar = mpl.colors.to_rgba(col, 0.25)
+        bar_lab = mode if mode in ("ever", "new") else "current"
+        
         ax2.bar(
             yrs,
             nh,
             width=0.72,
-            color=rgba,
+            color=rgba_bar,
             edgecolor=col,
             linewidth=1.0,
             zorder=2,
+            label=bar_lab,
         )
         
         ax2.set_axisbelow(True)
         ax2.grid(True, axis="y", alpha=0.20, zorder=0)
-        
         for s in ("top", "right"):
             ax2.spines[s].set_visible(False)
-    
+        
+        if mode == "ever":
+            yl = "# hotspots (ever)"
+        elif mode == "new":
+            yl = "# hotspots (new)"
+        else:
+            yl = "# hotspots (current)"
+        ax2.set_ylabel(yl)
+        
+        # ---- optional overlay: dashed current line
+        do_overlay = (
+            bool(timeline_overlay_current)
+            and mode in ("ever", "new")
+            and np.any(np.isfinite(nh_cur))
+        )
+        
+        if do_overlay:
+            rgba_line = mpl.colors.to_rgba(col, 0.90)
+            ax2.plot(
+                yrs,
+                nh_cur,
+                linestyle="--",
+                marker="o",
+                linewidth=1.2,
+                markersize=4.0,
+                color=rgba_line,
+                zorder=3,
+                label="current",
+            )
+        
+            # light, local legend (only for this axis)
+            ax2.legend(
+                loc="upper right",
+                frameon=False,
+                fontsize=max(7, int(font) - 1),
+                handlelength=2.0,
+            )
+
 
         ax2b = ax2.twinx()
         tq = pd.to_numeric(t["T_q"], errors="coerce").to_numpy(float)
@@ -1497,7 +1677,7 @@ def plot_hotspot_analytics(
         )
 
         ax2.set_xlabel("Year")
-        ax2.set_ylabel("# hotspots")
+        # ax2.set_ylabel("# hotspots")
         # ax2b.set_ylabel("T0.9 / max|Δs|")
         ax2b.set_ylabel(
             r"T$_{0.9}$ / max|Δs|",
@@ -1623,8 +1803,9 @@ def plot_hotspot_analytics(
                 fontweight="bold",
                 pad=4,
             )
+            tag = mode if mode in ("current", "ever", "new") else "current"
             ax2.set_title(
-                f"{city} • hotspot evolution",
+                f"{city} • hotspot evolution ({tag})",
                 loc="left",
                 fontweight="bold",
                 pad=4,
@@ -1645,53 +1826,7 @@ def plot_hotspot_analytics(
                     pad=4,
                 )
 
-    # if show_legend:
-    #     # cax1 = fig.add_axes([0.93, 0.56, 0.015, 0.30])
-    #     if add_persistence:
-    #         cax1 = fig.add_axes([0.93, 0.70, 0.015, 0.20])
-    #     else:
-    #         cax1 = fig.add_axes([0.93, 0.56, 0.015, 0.30])
 
-    #     cb1 = fig.colorbar(
-    #         mpl.cm.ScalarMappable(
-    #             norm=mpl.colors.Normalize(vmin=dmin, vmax=dmax),
-    #             cmap=cmap1,
-    #         ),
-    #         cax=cax1,
-    #     )
-    #     cb1.set_label(r"|Δs| (mm yr$^{-1}$)")
-
-    #     cax2 = fig.add_axes([0.93, 0.16, 0.015, 0.30])
-    #     if add_persistence:
-    #         caxp = fig.add_axes([0.93, 0.40, 0.015, 0.20])
-    #         mm = str(persistence_mode).strip().lower()
-    #         vmaxp = float(max(1, len(cities[0].years))) if mm == "count" else 1.0
-    #         cbp = fig.colorbar(
-    #             mpl.cm.ScalarMappable(
-    #                 norm=mpl.colors.Normalize(vmin=0.0, vmax=vmaxp),
-    #                 cmap=cmap2,
-    #             ),
-    #             cax=caxp,
-    #         )
-    #         cbp.set_label(
-    #             "Hotspot persistence (years)"
-    #             if mm == "count"
-    #             else "Hotspot persistence (fraction)"
-    #         )
-
-    #         cax2 = fig.add_axes([0.93, 0.10, 0.015, 0.20])
-    #     else:
-    #         cax2 = fig.add_axes([0.93, 0.16, 0.015, 0.30])
-
-    #     cb2 = fig.colorbar(
-    #         mpl.cm.ScalarMappable(
-    #             norm=mpl.colors.Normalize(vmin=0.0, vmax=1.0),
-    #             cmap=cmap2,
-    #         ),
-    #         cax=cax2,
-    #     )
-    #     cb2.set_label(r"P(|s| ≥ T)")
-    
     if show_legend:
         # Colorbar strip starts just to the right of the subplot grid
         cbar_x = plot_right + 0.02
@@ -1750,23 +1885,8 @@ def plot_hotspot_analytics(
         )
         fig.suptitle(ttl, x=0.02, ha="left")
 
-    fig_p = utils.resolve_fig_out(out)
-    if fig_p.suffix:
-        fig_p = fig_p.with_suffix("")
-
-    fig.savefig(
-        str(fig_p) + ".png",
-        dpi=int(dpi),
-        bbox_inches="tight",
-    )
-    fig.savefig(
-        str(fig_p) + ".svg",
-        bbox_inches="tight",
-    )
-    plt.close(fig)
-
-    print(f"[OK] wrote {fig_p}.png/.svg")
-
+    utils.save_figure(fig, out, dpi=int(dpi))
+ 
     p_pts = utils.as_path(out_points) if out_points else \
         utils.resolve_out_out("hotspot_points.csv")
     pd.concat(all_points, ignore_index=True).to_csv(p_pts, index=False)
@@ -1889,7 +2009,27 @@ def _add_args(ap: argparse.ArgumentParser) -> None:
         type=float,
         default=1.0,
     )
-    
+    ap.add_argument(
+        "--timeline-mode",
+        type=str,
+        default="current",
+        choices=["current", "ever", "new"],
+        help=(
+            "Timeline bars show: "
+            "current hotspots (per-year), "
+            "ever hotspots (union up to year), "
+            "or new hotspots (yearly additions)."
+        ),
+    )
+    ap.add_argument(
+        "--timeline-overlay-current",
+        type=str,
+        default="true",
+        help=(
+            "Overlay dashed line for current hotspots "
+            "on top of ever/new bars."
+        ),
+    )
     ap.add_argument(
         "--cluster-rank",
         type=str,
@@ -1985,6 +2125,11 @@ def plot_hotspot_analytics_main(
     show_legend = utils.str_to_bool(args.show_legend, default=True)
     show_title = utils.str_to_bool(args.show_title, default=True)
     show_pt = utils.str_to_bool(args.show_panel_titles, default=True)
+    
+    overlay_cur = utils.str_to_bool(
+        args.timeline_overlay_current,
+        default=True,
+    )
 
     years = [int(y) for y in (args.years or [])]
     if not years:
@@ -2089,7 +2234,8 @@ def plot_hotspot_analytics_main(
         hotspot_abs=args.hotspot_abs,
         risk_min=args.risk_min,
         # boundary=args.boundary,
-        # boundary_name_field=args.boundary_name_field,
+        timeline_mode=str(args.timeline_mode),
+        timeline_overlay_current=bool(overlay_cur),
         add_compare=bool(args.add_compare),
         ns_future_b=args.ns_future_b,
         zh_future_b=args.zh_future_b,

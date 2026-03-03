@@ -855,21 +855,26 @@ def plot_fig5_uncertainty(
     # -----------------------------
     # Save figure
     # -----------------------------
-    fig_p = utils.resolve_fig_out(out)
-    if fig_p.suffix:
-        fig_p = fig_p.with_suffix("")
+    # fig_p = utils.resolve_fig_out(out)
+    # if fig_p.suffix:
+    #     fig_p = fig_p.with_suffix("")
 
-    fig.savefig(
-        str(fig_p) + ".png",
-        dpi=dpi,
-        bbox_inches="tight",
+    # fig.savefig(
+    #     str(fig_p) + ".png",
+    #     dpi=dpi,
+    #     bbox_inches="tight",
+    # )
+    # fig.savefig(
+    #     str(fig_p) + ".svg",
+    #     bbox_inches="tight",
+    # )
+    # plt.close(fig)
+    
+    utils.save_figure(
+        fig,
+        out,
+        dpi=int(dpi),
     )
-    fig.savefig(
-        str(fig_p) + ".svg",
-        bbox_inches="tight",
-    )
-    plt.close(fig)
-
     # -----------------------------
     # Export metrics table
     # -----------------------------
@@ -891,8 +896,6 @@ def plot_fig5_uncertainty(
     out_csv_p = utils.resolve_out_out(out_csv)
     tbl.to_csv(out_csv_p, index=False)
 
-    print(f"[OK] wrote {fig_p}.png/.svg")
-    print(f"[OK] wrote {out_csv_p}")
 
 
 # ---------------------------------------------------------------------

@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 import json
-# import os
+import matplotlib.pyplot as plt
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ( 
@@ -297,6 +297,119 @@ def resolve_fig_out(out: str) -> Path:
     if not p.is_absolute():
         p = cfg.FIG_DIR / p
     return p
+
+
+def _norm_fig_formats(
+    formats: Optional[Sequence[str]],
+) -> Tuple[str, ...]:
+    if not formats:
+        return ("png", "svg", "pdf", "eps")
+
+    out: list[str] = []
+    for f in formats:
+        s = str(f).strip().lower().lstrip(".")
+        if not s:
+            continue
+        if s not in out:
+            out.append(s)
+    return tuple(out)
+
+
+def resolve_fig_stem(out: Any) -> Path:
+    """
+    Resolve an output stem under scripts/figs/ if relative.
+
+    If user passes a filename with suffix (e.g. foo.png),
+    we treat it as a stem and strip the suffix.
+    """
+    p = resolve_fig_out(str(out))
+    if p.suffix:
+        p = p.with_suffix("")
+    return p
+
+
+def save_figure(
+    fig: Any,
+    out: Any,
+    *,
+    formats: Optional[Sequence[str]] = None,
+    dpi: Optional[int] = None,
+    bbox_inches: str = "tight",
+    pad_inches: float = 0.02,
+    transparent: bool = False,
+    close: bool = True,
+    verbose: bool = True,
+    strict: bool = False,
+) -> Dict[str, Path]:
+    """
+    Save a Matplotlib figure to multiple formats.
+
+    Parameters
+    ----------
+    fig:
+        Matplotlib Figure.
+    out:
+        Output stem or path. If relative, saved under scripts/figs/.
+        If has suffix, suffix is stripped and treated as stem.
+    formats:
+        Iterable of extensions (png/svg/pdf/eps). Default exports all 4.
+    dpi:
+        DPI for raster formats (png). If None, uses current rcParams.
+    bbox_inches, pad_inches, transparent:
+        Passed through to fig.savefig.
+    close:
+        Close the figure after saving.
+    verbose:
+        Print a compact "[OK]" line with what was written.
+    strict:
+        If True, any save failure raises immediately.
+        If False, failures are warned and other formats continue.
+
+    Returns
+    -------
+    written:
+        Mapping ext -> output Path for successfully written files.
+    """
+    fmts = _norm_fig_formats(formats)
+    stem = resolve_fig_stem(out)
+    ensure_dir(stem.parent)
+
+    raster = {"png", "jpg", "jpeg", "tif", "tiff"}
+
+    written: Dict[str, Path] = {}
+    failed: Dict[str, str] = {}
+
+    for ext in fmts:
+        p = stem.with_suffix("." + ext)
+
+        kw: Dict[str, Any] = dict(
+            bbox_inches=bbox_inches,
+            pad_inches=float(pad_inches),
+            transparent=bool(transparent),
+        )
+        if ext in raster and dpi is not None:
+            kw["dpi"] = int(dpi)
+
+        try:
+            fig.savefig(str(p), **kw)
+            written[ext] = p
+        except Exception as e:
+            if strict:
+                raise
+            failed[ext] = repr(e)
+
+    if close:
+        plt.close(fig)
+
+    if verbose:
+        ok_exts = ",".join(sorted(written.keys()))
+        msg = f"[OK] wrote {stem} ({ok_exts})"
+        print(msg)
+        if failed:
+            bad = ", ".join(sorted(failed.keys()))
+            print(f"[WARN] failed formats: {bad}")
+
+    return written
 
 def ensure_columns(
     df: pd.DataFrame,

@@ -1752,9 +1752,11 @@ def render(
         stem = stem.with_suffix("")
     png = stem.with_suffix(".png")
     svg = stem.with_suffix(".svg")
+    eps = stem.with_suffix(".eps")
 
     fig.savefig(png, bbox_inches="tight")
     fig.savefig(svg, bbox_inches="tight")
+    fig.savefig(eps, bbox_inches="tight")
     plt.close(fig)
 
     return png, svg

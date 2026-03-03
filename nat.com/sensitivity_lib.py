@@ -445,7 +445,24 @@ def run_one(
 
     # Training
     EPOCHS = int(cfg.get("EPOCHS", 50))
-    BATCH_SIZE = int(cfg.get("BATCH_SIZE", 32))
+
+    BATCH_SIZE_CFG = int(cfg.get("BATCH_SIZE", 32))
+    if hasattr(ctx, "batch_size"):
+        if int(ctx.batch_size) != int(BATCH_SIZE_CFG):
+            print(
+                "[Warn] Gold mode uses cached tf.data datasets "
+                f"built with BATCH_SIZE={int(ctx.batch_size)}; "
+                f"ignoring override BATCH_SIZE={int(BATCH_SIZE_CFG)}. "
+                "Rebuild context to change batch size."
+            )
+        BATCH_SIZE = int(ctx.batch_size)
+        cfg["BATCH_SIZE"] = BATCH_SIZE
+    else:
+        BATCH_SIZE = int(BATCH_SIZE_CFG)
+    
+    LEARNING_RATE = float(cfg.get("LEARNING_RATE", 1e-4))
+    VERBOSE = int(cfg.get("VERBOSE", 1))
+
     LEARNING_RATE = float(cfg.get("LEARNING_RATE", 1e-4))
     VERBOSE = int(cfg.get("VERBOSE", 1))
 
@@ -1725,6 +1742,29 @@ def run_one(
         mode=MODE,
         forecast_horizon=FORECAST_H,
     )
+    # y_fore_fmt = map_targets_for_training(y_fore)
+    
+    def _slice_any(x: Any, n: int) -> Any:
+        """Slice nested inputs/targets along the sample axis."""
+        if x is None:
+            return None
+        if isinstance(x, dict):
+            return {k: _slice_any(v, n) for k, v in x.items()}
+        if isinstance(x, (list, tuple)):
+            return type(x)(_slice_any(v, n) for v in x)
+        try:
+            return x[:n]
+        except Exception:
+            return x
+    
+    # Keep forecasting tensors and ds_eval consistent when we
+    # limit evaluation/export to a subset of batches.
+    if eval_max_batches is not None:
+        n_take = int(eval_max_batches) * int(BATCH_SIZE)
+        X_fore = _slice_any(X_fore, n_take)
+        y_fore = _slice_any(y_fore, n_take)
+        dataset_name_for_forecast += f"_Take{int(eval_max_batches)}B"
+    
     y_fore_fmt = map_targets_for_training(y_fore)
 
     print(f"\nPredicting on {dataset_name_for_forecast}...")
@@ -1932,10 +1972,24 @@ def run_one(
     # ---------------------------
     # Evaluate() + physics payload
     # ---------------------------
-    ds_eval_full = test_dataset or val_dataset
-    ds_eval = ds_eval_full
-    if eval_max_batches is not None:
-        ds_eval = ds_eval_full.take(int(eval_max_batches))
+    # ds_eval_full = test_dataset or val_dataset
+    # ds_eval = ds_eval_full
+    # if eval_max_batches is not None:
+    #     ds_eval = ds_eval_full.take(int(eval_max_batches))
+
+    ds_eval = make_tf_dataset(
+        X_fore,
+        y_fore,
+        batch_size=BATCH_SIZE,
+        shuffle=False,
+        mode=MODE,
+        forecast_horizon=FORECAST_H,
+        check_npz_finite=True,
+        check_finite=True,
+        scan_finite_batches=None,
+        dynamic_feature_names=DYN_NAMES,
+        future_feature_names=FUT_NAMES,
+    )
 
     if DEBUG and (not FAST_SENS):
         _ = debug_val_interval(
@@ -1978,7 +2032,7 @@ def run_one(
     try:
         _ = model_inf.export_physics_payload(
             ds_eval,
-            max_batches=eval_max_batches,
+            # max_batches=eval_max_batches,
             save_path=phys_npz_path,
             format="npz",
             overwrite=True,
@@ -2104,29 +2158,38 @@ def run_one(
             )
             mask_list.append(mask_b)
         mask = tf.concat(mask_list, axis=0) if mask_list else None
-
+        
     if (mask is not None) and QUANTILES:
         med_idx = int(
             np.argmin(
                 np.abs(np.asarray(QUANTILES, float) - 0.5)
             )
         )
+    
+        # Median prediction in model (scaled) space
         s_med = tf.convert_to_tensor(
             predictions_for_formatter["subs_pred"],
             dtype=tf.float32,
         )[..., med_idx, :]
-
+    
+        # --- IMPORTANT: align to ds_eval subset length -----------
+        n_mask = tf.shape(mask)[0]
+        y_true_sub = y_true[:n_mask]
+        s_med_sub = s_med[:n_mask]
+        mask_sub = mask[:n_mask]  # (N,H,1) bool
+    
+        # Inverse-scale only the subset (faster + consistent)
         y_true_phys_np = inverse_scale_target(
-            y_true.numpy(),
+            y_true_sub.numpy(),
             scaler_info=scaler_info_dict,
             target_name=SUBS_SCALER_KEY,
         )
         s_med_phys_np = inverse_scale_target(
-            s_med.numpy(),
+            s_med_sub.numpy(),
             scaler_info=scaler_info_dict,
             target_name=SUBS_SCALER_KEY,
         )
-
+    
         y_true_phys = tf.convert_to_tensor(
             y_true_phys_np,
             dtype=tf.float32,
@@ -2135,13 +2198,61 @@ def run_one(
             s_med_phys_np,
             dtype=tf.float32,
         )
-
-        mask_f = tf.cast(mask, tf.float32)
+    
+        mask_f = tf.cast(mask_sub, tf.float32)
         num_cens = tf.reduce_sum(mask_f) + 1e-8
         num_unc = tf.reduce_sum(1.0 - mask_f) + 1e-8
-
+    
         abs_err = tf.abs(y_true_phys - s_med_phys)
         mae_cens = tf.reduce_sum(abs_err * mask_f) / num_cens
+        mae_unc = tf.reduce_sum(abs_err * (1.0 - mask_f)) / num_unc
+    
+        censor_metrics = {
+            "flag_name": CENSOR_FLAG_NAME,
+            "threshold": float(CENSOR_THRESH),
+            "mae_censored": float(mae_cens.numpy()),
+            "mae_uncensored": float(mae_unc.numpy()),
+            "subset_batches": int(eval_max_batches)
+            if eval_max_batches is not None
+            else None,
+        }
+    # if (mask is not None) and QUANTILES:
+    #     med_idx = int(
+    #         np.argmin(
+    #             np.abs(np.asarray(QUANTILES, float) - 0.5)
+    #         )
+    #     )
+    #     s_med = tf.convert_to_tensor(
+    #         predictions_for_formatter["subs_pred"],
+    #         dtype=tf.float32,
+    #     )[..., med_idx, :]
+
+    #     y_true_phys_np = inverse_scale_target(
+    #         y_true.numpy(),
+    #         scaler_info=scaler_info_dict,
+    #         target_name=SUBS_SCALER_KEY,
+    #     )
+    #     s_med_phys_np = inverse_scale_target(
+    #         s_med.numpy(),
+    #         scaler_info=scaler_info_dict,
+    #         target_name=SUBS_SCALER_KEY,
+    #     )
+
+    #     y_true_phys = tf.convert_to_tensor(
+    #         y_true_phys_np,
+    #         dtype=tf.float32,
+    #     )
+    #     s_med_phys = tf.convert_to_tensor(
+    #         s_med_phys_np,
+    #         dtype=tf.float32,
+    #     )
+
+    #     mask_f = tf.cast(mask, tf.float32)
+    #     num_cens = tf.reduce_sum(mask_f) + 1e-8
+    #     num_unc = tf.reduce_sum(1.0 - mask_f) + 1e-8
+
+    #     abs_err = tf.abs(y_true_phys - s_med_phys)
+    #     mae_cens = tf.reduce_sum(abs_err * mask_f) / num_cens
         mae_unc = tf.reduce_sum(abs_err * (1.0 - mask_f)) / num_unc
 
         censor_metrics = {

@@ -775,18 +775,23 @@ def plot_geo_cumulative_main(
             fontsize=11,
             fontweight="bold",
         )
-
+    
     out = utils.resolve_fig_out(args.out)
-    utils.ensure_dir(out.parent)
+    utils.save_figure(
+        fig,
+        out,
+        dpi=int(args.dpi),
+    )
+    # utils.ensure_dir(out.parent)
 
-    png = out.with_suffix(".png")
-    pdf = out.with_suffix(".pdf")
+    # png = out.with_suffix(".png")
+    # pdf = out.with_suffix(".pdf") 
 
-    fig.savefig(png, bbox_inches="tight")
-    fig.savefig(pdf, bbox_inches="tight")
+    # fig.savefig(png, bbox_inches="tight")
+    # fig.savefig(pdf, bbox_inches="tight")
 
-    print(f"[OK] Saved: {png}")
-    print(f"[OK] Saved: {pdf}")
+    # print(f"[OK] Saved: {png}")
+    # print(f"[OK] Saved: {pdf}")
 
 def main() -> None:
     plot_geo_cumulative_main()

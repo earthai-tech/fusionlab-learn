@@ -547,13 +547,14 @@ def plot_sm3_bounds_ridge_summary(
         )
         fig.suptitle(ttl, x=0.02, ha="left")
 
-    fig_p = utils.resolve_fig_out(out)
-    if fig_p.suffix:
-        fig_p = fig_p.with_suffix("")
+    # fig_p = utils.resolve_fig_out(out)
+    # if fig_p.suffix:
+    #     fig_p = fig_p.with_suffix("")
 
-    fig.savefig(str(fig_p) + ".png", dpi=int(dpi), bbox_inches="tight")
-    fig.savefig(str(fig_p) + ".svg", bbox_inches="tight")
-    plt.close(fig)
+    # fig.savefig(str(fig_p) + ".png", dpi=int(dpi), bbox_inches="tight")
+    # fig.savefig(str(fig_p) + ".svg", bbox_inches="tight")
+    # plt.close(fig)
+    utils.save_figure(fig, out, dpi = int(dpi))
 
     # -------------------------
     # Exports: JSON + CSV
@@ -590,7 +591,7 @@ def plot_sm3_bounds_ridge_summary(
         encoding="utf-8",
     )
 
-    print(f"[OK] wrote {fig_p}.png/.svg")
+    # print(f"[OK] wrote {fig_p}.png/.svg")
     print(f"[OK] wrote {out_csv_p}")
     print(f"[OK] wrote {out_json_p}")
 

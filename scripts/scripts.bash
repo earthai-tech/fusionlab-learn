@@ -69,7 +69,9 @@ python -m scripts plot-hotspot-analytics \
   --cluster-rank risk \
   --add-persistence \
   --boundary "scripts/out/nansha_boundary.geojson" \
-  --out fig7-hotspot-analytics_policy 
+  --timeline-mode ever \
+  --timeline-overlay-current true \
+  --out fig7-hotspot-analytics_ever_overlay
   
 
 python -m scripts plot-hotspot-analytics \

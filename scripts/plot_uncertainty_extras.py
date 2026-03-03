@@ -739,9 +739,10 @@ def plot_s5(
             y=0.995,
             fontweight="bold",
         )
-
-    fig.savefig(str(out_stem) + ".png", bbox_inches="tight")
-    fig.savefig(str(out_stem) + ".pdf", bbox_inches="tight")
+    
+    utils.save_figure(fig, str(out_stem), dpi=int(dpi))
+    # fig.savefig(str(out_stem) + ".png", bbox_inches="tight")
+    # fig.savefig(str(out_stem) + ".pdf", bbox_inches="tight")
     plt.close(fig)
 
 
