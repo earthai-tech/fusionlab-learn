@@ -1138,6 +1138,7 @@ def main() -> None:
                 eval_max_batches=(
                     args.eval_max_batches
                 ),
+                batch_size=args.batch_size
             )
     
             env1 = apply_thread_env(
@@ -1237,6 +1238,7 @@ def main() -> None:
             ),
             fast=bool(args.fast),
             eval_max_batches=args.eval_max_batches,
+            batch_size = args.batch_size 
         )
 
         gid = None
