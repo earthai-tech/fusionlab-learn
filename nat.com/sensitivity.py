@@ -28,14 +28,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import tensorflow as tf
-
-from tensorflow.keras.callbacks import (
-    CSVLogger,
-    EarlyStopping,
-    ModelCheckpoint,
-    TerminateOnNaN,
-)
 
 from fusionlab.api.util import get_table_size
 from fusionlab.backends.devices import configure_tf_from_cfg
@@ -113,6 +105,48 @@ from fusionlab.params import (
     FixedHRef, 
     LearnableKappa, 
     LearnableMV
+)
+
+def _startup_device_banner() -> None:
+    if os.environ.get("SENS_WORKER_BANNER", "1") == "0":
+        return
+
+    run_tag = os.environ.get("RUN_TAG", "<unset>")
+    city = os.environ.get("CITY", "<unset>")
+
+    cvd = os.environ.get("CUDA_VISIBLE_DEVICES", None)
+    if cvd is None:
+        cvd_s = "<unset>"
+    elif str(cvd) == "":
+        cvd_s = "<disabled>"
+    else:
+        cvd_s = str(cvd)
+
+    omp = os.environ.get("OMP_NUM_THREADS", "<unset>")
+    intra = os.environ.get("TF_NUM_INTRAOP_THREADS", "<unset>")
+    inter = os.environ.get("TF_NUM_INTEROP_THREADS", "<unset>")
+
+    print(
+        "[Sensitivity2] "
+        f"pid={os.getpid()} "
+        f"RUN_TAG={run_tag} "
+        f"CITY={city} "
+        f"CUDA_VISIBLE_DEVICES={cvd_s} "
+        f"OMP={omp} "
+        f"TF_INTRA={intra} "
+        f"TF_INTER={inter}",
+        flush=True,
+    )
+
+
+_startup_device_banner()
+
+import tensorflow as tf
+from tensorflow.keras.callbacks import (
+    CSVLogger,
+    EarlyStopping,
+    ModelCheckpoint,
+    TerminateOnNaN,
 )
 
 # Global runtime settings (warnings / TF logs)
@@ -272,6 +306,12 @@ def _apply_env_overrides(cfg: dict) -> tuple[dict, dict]:
 
     # --- exactly what run_lambda_sensitivity.py sets ---
     set_if("EPOCHS_OVERRIDE", "EPOCHS", lambda x: int(float(x)))
+    set_if(
+            "BATCH_SIZE_OVERRIDE",
+            "BATCH_SIZE",
+            lambda x: int(float(x)),
+        )
+    
     set_if("PDE_MODE_OVERRIDE", "PDE_MODE_CONFIG",
            lambda x: str(x).strip().lower())
     set_if("LAMBDA_CONS_OVERRIDE", "LAMBDA_CONS", float)
@@ -293,8 +333,13 @@ def _apply_env_overrides(cfg: dict) -> tuple[dict, dict]:
     set_if("PHYSICS_RAMP_STEPS_OVERRIDE", "PHYSICS_RAMP_STEPS",
            lambda x: int(float(x)))
 
+    set_if(
+        "FAST_SENSITIVITY",
+        "FAST_SENSITIVITY",
+        _as_bool,
+    )
     set_if("DISABLE_EARLY_STOPPING", "DISABLE_EARLY_STOPPING", _as_bool)
-
+    
     # Optional run tag for folder naming
     set_if("RUN_TAG", "RUN_TAG", lambda x: str(x).strip())
 
@@ -363,6 +408,39 @@ if ENV_OVERRIDES:
     for k, v in ENV_OVERRIDES.items():
         print(f"  - {k} = {v}")
 
+
+def _env_int(name: str, default=None):
+    v = os.getenv(name)
+    if v is None:
+        return default
+    try:
+        n = int(float(str(v).strip()))
+    except Exception:
+        return default
+    return n if n > 0 else default
+
+SENS_EVAL_MAX_BATCHES = _env_int("SENS_EVAL_MAX_BATCHES", None)
+SENS_CAL_MAX_BATCHES = _env_int(
+    "SENS_CAL_MAX_BATCHES",
+    SENS_EVAL_MAX_BATCHES,
+)
+
+if SENS_EVAL_MAX_BATCHES:
+    print(
+        f"[SENS] eval/export max batches = {SENS_EVAL_MAX_BATCHES}"
+    )
+if SENS_CAL_MAX_BATCHES:
+    print(
+        f"[SENS] calibrator max batches = {SENS_CAL_MAX_BATCHES}"
+    )
+
+FAST_SENS = bool(cfg.get("FAST_SENSITIVITY", False))
+if FAST_SENS:
+    print(
+        "[FAST] skipping interval calibration, "
+        "plots, and CSV calibration."
+    )
+    
 # cfg = dict(cfg_global)
 # cfg.update(cfg_manifest)  # manifest wins on overlapping keys
 device_info = configure_tf_from_cfg(cfg)
@@ -2185,25 +2263,28 @@ yscales = {
     "GWL MAE": "linear",
 }
 
-plot_history_in(
-    history.history,
-    metrics=history_groups,
-    title=f"{MODEL_NAME} Training History",
-    yscale_settings=yscales,
-    layout="subplots",
-    savefig=os.path.join(
-        RUN_OUTPUT_PATH,
-        f"{CITY_NAME}_{MODEL_NAME.lower()}_training_history_plot.png",  
-    ),
-)
+if not FAST_SENS:
+    plot_history_in(
+        history.history,
+        metrics=history_groups,
+        title=f"{MODEL_NAME} Training History",
+        yscale_settings=yscales,
+        layout="subplots",
+        savefig=os.path.join(
+            RUN_OUTPUT_PATH,
+            f"{CITY_NAME}_{MODEL_NAME.lower()}_training_history_plot.png",
+        ),
+    )
 
-autoplot_geoprior_history(
-    history,
-    outdir=RUN_OUTPUT_PATH,
-    prefix=f"{CITY_NAME}_{MODEL_NAME}_H{FORECAST_HORIZON_YEARS}",
-    style="default",
-    log_fn=print,
-)
+    autoplot_geoprior_history(
+        history,
+        outdir=RUN_OUTPUT_PATH,
+        prefix=f"{CITY_NAME}_{MODEL_NAME}_H{FORECAST_HORIZON_YEARS}",
+        style="default",
+        log_fn=print,
+    )
+else:
+    print("[FAST] skip training plots")
 
 # Extract physical parameters
 
@@ -2325,20 +2406,54 @@ if DEBUG and (model_inf is not subs_model_inst):
 # =============================================================================
 # Calibrate on validation set (BEFORE formatting)
 # =============================================================================
-print("\nFitting interval calibrator (target 80%) on validation set...")
-cal80 = fit_interval_calibrator_on_val(
-    model_inf, 
-    val_dataset, 
-    target=0.80, 
-    q_values = QUANTILES, 
-)
-np.save(os.path.join(RUN_OUTPUT_PATH, "interval_factors_80.npy"), cal80.factors_)
-print("Calibrator saved.")
+cal80 = None
+_val_for_cal = val_dataset
 
+if SENS_CAL_MAX_BATCHES:
+    _val_for_cal = val_dataset.take(SENS_CAL_MAX_BATCHES)
+
+# if QUANTILES and (not FAST_SENS):
+# let take this part to calibrate as well 
+if QUANTILES:
+    print(
+        "\nFitting interval calibrator "
+        "(target 80%) on "
+        "validation set..."
+    )
+    cal80 = fit_interval_calibrator_on_val(
+        model_inf,
+        _val_for_cal,
+        target=0.80,
+        q_values=QUANTILES,
+    )
+    np.save(
+        os.path.join(
+            RUN_OUTPUT_PATH,
+            "interval_factors_80.npy",
+        ),
+        cal80.factors_,
+    )
+    print("Calibrator saved.")
+elif QUANTILES and FAST_SENS:
+    print("[FAST] skip interval calibrator")
+    
 # =============================================================================
 # Forecasting (Test NPZ if available, otherwise validation fallback)
 # =============================================================================
 
+def _slice_any(x, n: int):
+    if x is None:
+        return None
+    if isinstance(x, dict):
+        return {k: _slice_any(v, n) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return type(x)(_slice_any(v, n) for v in x)
+    try:
+        return x[:n]
+    except Exception:
+        return x
+    
+    
 forecast_df = None
 dataset_name_for_forecast = "ValidationSet_Fallback"
 
@@ -2353,6 +2468,15 @@ X_fore = ensure_input_shapes(
     mode=MODE,
     forecast_horizon=FORECAST_HORIZON_YEARS,
 )
+
+if SENS_EVAL_MAX_BATCHES:
+    n_take = int(SENS_EVAL_MAX_BATCHES) * int(BATCH_SIZE)
+    X_fore = _slice_any(X_fore, n_take)
+    y_fore = _slice_any(y_fore, n_take)
+    dataset_name_for_forecast += (
+        f"_Take{int(SENS_EVAL_MAX_BATCHES)}B"
+    )
+    
 y_fore_fmt = map_targets_for_training(y_fore)
 
 
@@ -2389,99 +2513,20 @@ if QUANTILES:
     y_subs_true = y_fore_fmt.get("subs_pred")
     y_gwl_true = y_fore_fmt.get("gwl_pred")
 
-    # s_pred = canonicalize_BHQO( # model already
-    #     s_pred,
-    #     y_true=y_subs_true,
-    #     q_values=QUANTILES,
-    #     n_q=len(QUANTILES),
-    #     enforce_monotone=False,
-    #     layout="BHQO",
-    #     verbose=1 if DEBUG else 0,
-    #     log_fn=_log,
-    # )
-
-    # h_pred = canonicalize_BHQO(
-    #     h_pred,
-    #     y_true=y_gwl_true,
-    #     q_values=QUANTILES,
-    #     n_q=len(QUANTILES),
-    #     enforce_monotone=False,
-    #     layout="BHQO",
-    #     verbose=1 if DEBUG else 0,
-    #     log_fn=_log,
-    # )
-    
-    # s_pred, s_layout = canonicalize_BHQO(
-    #     s_pred,
-    #     y_true=y_subs_true,
-    #     q_values=QUANTILES,
-    #     n_q=len(QUANTILES),
-    #     layout=None,
-    #     enforce_monotone=False,
-    #     return_layout=True,
-    #     verbose=1 if DEBUG else 0,
-    #     log_fn=_log,
-    # )
-    
-    # h_pred, h_layout = canonicalize_BHQO(
-    #     h_pred,
-    #     y_true=y_gwl_true,
-    #     q_values=QUANTILES,
-    #     n_q=len(QUANTILES),
-    #     layout=None,
-    #     enforce_monotone=False,
-    #     return_layout=True,
-    #     verbose=1 if DEBUG else 0,
-    #     log_fn=_log,
-    # )
-    s_pred_cal = apply_calibrator_to_subs(
+    # s_pred_cal = apply_calibrator_to_subs(
+    #         cal80,
+    #         s_pred,
+    #         q_values=QUANTILES,
+    #     )
+    if cal80 is not None:
+        s_pred_cal = apply_calibrator_to_subs(
             cal80,
             s_pred,
             q_values=QUANTILES,
         )
-
-    # if DEBUG:
-    #     _log(
-    #         f"[canon] subs_layout={s_layout} "
-    #         f"gwl_layout={h_layout}"
-    #     )
-
-    # Calibrate subsidence quantiles only.
-    # s_pred_cal = apply_calibrator_to_subs(
-    #     cal80,
-    #     s_pred,
-    # )
-    
-    # s_pred_cal = canonicalize_BHQO(
-    #     s_pred_cal,
-    #     y_true=y_subs_true,
-    #     q_values=QUANTILES,
-    #     n_q=len(QUANTILES),
-    #     layout=None,
-    #     enforce_monotone=True,
-    #     verbose=0,
-    #     log_fn=_silent,
-    # )
-    
-
-    # s_pred_cal = canonicalize_BHQO(
-    #     s_pred_cal,
-    #     y_true=y_subs_true,
-    #     q_values=QUANTILES,
-    #     n_q=len(QUANTILES),
-    #     enforce_monotone=True,
-    #     layout="BHQO",
-    #     verbose=0,
-    #     log_fn=_silent,
-    # )
-
-    # q50_i = int(np.argmin(
-    #     np.abs(np.asarray(QUANTILES) - 0.5)
-    # ))
-
-    # s_q50 = s_pred_cal[:, :, q50_i, 0]
-    # h_q50 = h_pred[:, :, q50_i, 0]
-
+    else:
+        s_pred_cal = s_pred
+        
     predictions_for_formatter = {
         "subs_pred": s_pred_cal,
         "gwl_pred": h_pred,
@@ -2492,13 +2537,6 @@ else:
         "gwl_pred": h_pred,
     }
 
-# if DEBUG and QUANTILES:
-#     debug_quantile_crossing_np(
-#         predictions_for_formatter["subs_pred"],
-#         n_q=len(QUANTILES),
-#         name="subs_pred",
-#         verbose=1,
-#     )
 
 ev_point = evaluate_point_forecast(
     model_inf,
@@ -2636,52 +2674,78 @@ if df_future is not None and not df_future.empty:
 else:
     print("[Warn] Empty future forecast DF.")
     
-# --- calibrate (auto: no-op if already done) ---
 
-df_eval_cal, df_future_cal, cal_stats = calibrate_quantile_forecasts(
-    df_eval=df_eval,
-    df_future=df_future,
-    target_name="subsidence",   # IMPORTANT: base name for *_qXX columns
-    interval=(0.1, 0.9),
-    target_coverage=0.8,
-    use="auto",
-    tol=0.02,
-    f_max=5.0,
-    enforce_monotonic="cummax",
-    save_eval=csv_eval_cal,
-    save_future=csv_future_cal,
-    save_stats=cal_stats_path,
-    verbose=2,
-)
+# --- optional CSV calibration (slow) ---
+# Notes:
+# - Used mainly for paper-grade calibrated CSVs.
+# - In FAST_SENS mode we skip it.
+cal_stats = {
+    "skipped": True,
+    "reason": "fast_sensitivity",
+}
 
-# --- keep using calibrated outputs downstream ---
-if df_eval_cal is not None:
-    df_eval = df_eval_cal
-if df_future_cal is not None:
-    df_future = df_future_cal
+if not FAST_SENS:
+    df_eval_cal, df_future_cal, cal_stats = (
+        calibrate_quantile_forecasts(
+            df_eval=df_eval,
+            df_future=df_future,
+            target_name="subsidence",
+            interval=(0.1, 0.9),
+            target_coverage=0.8,
+            use="auto",
+            tol=0.02,
+            f_max=5.0,
+            enforce_monotonic="cummax",
+            save_eval=csv_eval_cal,
+            save_future=csv_future_cal,
+            save_stats=cal_stats_path,
+            verbose=2,
+        )
+    )
 
-if cal_stats.get("skipped", False):
-    print("[OK] calibration skipped:", cal_stats.get("reason"))
+    # --- keep using calibrated outputs downstream ---
+    if df_eval_cal is not None:
+        df_eval = df_eval_cal
+    if df_future_cal is not None:
+        df_future = df_future_cal
+
+    if cal_stats.get("skipped", False):
+        print(
+            "[OK] calibration skipped:",
+            cal_stats.get("reason"),
+        )
+    else:
+        print("[OK] calibration applied")
+
+    print("[OK] calib stats ->", cal_stats_path)
 else:
-    print("[OK] calibration applied")
+    print("[FAST] skip CSV calibration")
 
-print("[OK] calib stats ->", cal_stats_path)
+diag_suffix = "calibrated"
+if FAST_SENS:
+    diag_suffix = "uncalibrated"
 
 if df_eval is not None and not df_eval.empty:
+    diag_path = os.path.join(
+        RUN_OUTPUT_PATH,
+        (
+            f"{CITY_NAME}_{MODEL_NAME}_"
+            "eval_diagnostics_"
+            f"{dataset_name_for_forecast}_"
+            f"H{FORECAST_HORIZON_YEARS}_"
+            f"{diag_suffix}.json"
+        ),
+    )
     _ = evaluate_forecast(
         df_eval,
         target_name="subsidence",
         quantile_interval=(0.1, 0.9),
         per_horizon=True,
         extra_metrics=["pss"],
-        savefile=os.path.join(
-            RUN_OUTPUT_PATH,
-            f"{CITY_NAME}_{MODEL_NAME}_eval_diagnostics_"
-            f"{dataset_name_for_forecast}_H{FORECAST_HORIZON_YEARS}_calibrated.json",
-        ),
+        savefile=diag_path,
         verbose=1,
     )
-#
+
 # =============================================================================
 # Evaluate metrics & physics on the forecasting split
 # (+ optional censoring + interval calibration diagnostics)
@@ -2707,6 +2771,7 @@ phys = {}
 #     - shapes match the model signature,
 #     - no silent differences vs from_tensor_slices().
 # -------------------------------------------------------------------------
+
 ds_eval = make_tf_dataset(
     X_fore,
     y_fore,
@@ -2716,6 +2781,10 @@ ds_eval = make_tf_dataset(
     forecast_horizon=FORECAST_HORIZON_YEARS,
 )
 
+# ds_eval_full = ds_eval
+# if SENS_EVAL_MAX_BATCHES:
+#     ds_eval = ds_eval_full.take(SENS_EVAL_MAX_BATCHES)
+ 
 # -------------------------------------------------------------------------
 # Optional debug:
 #   Inspect one batch end-to-end to confirm:
@@ -2737,14 +2806,14 @@ if DEBUG:
 #     - ds_eval yields what evaluate()/call expects,
 #     - quantile axes look sane on a couple of batches.
 # -------------------------------------------------------------------------
-_ = debug_val_interval(
-    model_inf,
-    ds_eval,
-    n_q=len(QUANTILES),
-    max_batches=2,
-    verbose=1,
-)
-
+if DEBUG and (not FAST_SENS):
+    _ = debug_val_interval(
+        model_inf,
+        ds_eval,
+        n_q=len(QUANTILES),
+        max_batches=2,
+        verbose=1,
+    )
 # -------------------------------------------------------------------------
 # (Re)compile after loading with compile=False.
 #
@@ -2817,7 +2886,7 @@ phys_npz_path = os.path.join(
 try:
     _ = model_inf.export_physics_payload(
         ds_eval,
-        max_batches=None,
+        # max_batches=SENS_EVAL_MAX_BATCHES,
         save_path=phys_npz_path,
         format="npz",
         overwrite=True,
@@ -2895,6 +2964,8 @@ else:
 # -------------------------------------------------------------------------
 # Optional: build censor mask ONLY (no model calls).
 # -------------------------------------------------------------------------
+# XXX TODO : RECHECK MASK SHAPE 
+
 mask = None
 if CENSOR_FLAG_IDX is not None:
     mask_list = []
@@ -3253,7 +3324,7 @@ if QUANTILES:
         "target": 0.80,
         "factors_per_horizon": (
             getattr(cal80, "factors_", None).tolist()
-            if hasattr(cal80, "factors_")
+            if ( cal80 is not None and hasattr(cal80, "factors_"))
             else None
         ),
         "factors_per_horizon_from_cal_stats": cal_stats, 
@@ -3378,23 +3449,55 @@ _p_hor = (
     else {}
 )
 
-eval_mae = _m_eval.get(
-    "subs_pred_mae",
-    _p_point.get("mae"),
+_ival = (
+    payload.get("interval_calibration", {})
+    if isinstance(payload, dict)
+    else {}
 )
-eval_mse = _m_eval.get(
-    "subs_pred_mse",
-    _p_point.get("mse"),
+_cal_stats = _ival.get("factors_per_horizon_from_cal_stats", {}) or {}
+_ev_after = _cal_stats.get("eval_after", {}) or {}
+_ev_before = _cal_stats.get("eval_before", {}) or {}
+
+def _pick_first(*vals):
+    for v in vals:
+        if v is not None:
+            return v
+    return None
+
+# --- Post-hoc calibrated interval metrics (preferred) ---
+abl_coverage80 = _pick_first(
+    _ev_after.get("coverage"),
+    _ival.get("coverage80_calibrated_phys"),
+    _ival.get("coverage80_calibrated"),
+)
+abl_sharpness80 = _pick_first(
+    _ev_after.get("sharpness"),
+    _ival.get("sharpness80_calibrated_phys"),
+    _ival.get("sharpness80_calibrated"),
 )
 
-abl_coverage80 = _m_eval.get(
-    "subs_pred_coverage80",
-    coverage80_for_abl,
+# --- Post-hoc UNcalibrated interval metrics (for transparency) ---
+uncal_coverage80 = _pick_first(
+    _ev_before.get("coverage"),
+    _ival.get("coverage80_uncalibrated_phys"),
+    _ival.get("coverage80_uncalibrated"),
 )
-abl_sharpness80 = _m_eval.get(
-    "subs_pred_sharpness80",
-    sharpness80_for_abl,
+uncal_sharpness80 = _pick_first(
+    _ev_before.get("sharpness"),
+    _ival.get("sharpness80_uncalibrated_phys"),
+    _ival.get("sharpness80_uncalibrated"),
 )
+
+# --- Post-hoc point metrics (real units; consistent with CSV diagnostics) ---
+eval_mae = _p_point.get("mae")
+eval_mse = _p_point.get("mse")
+eval_r2 = _p_point.get("r2")
+eval_rmse = _p_point.get("rmse")
+if (eval_rmse is None) and (eval_mse is not None):
+    try:
+        eval_rmse = float(np.sqrt(float(eval_mse)))
+    except Exception:
+        eval_rmse = None
 
 per_h_mae_for_abl = (
     (_p_hor.get("mae") if isinstance(_p_hor, dict)
@@ -3407,23 +3510,23 @@ per_h_r2_for_abl = (
     or per_h_r2_dict
 )
 
-if ENV_OVERRIDES:
-    ABLCFG["env_overrides"] = dict(ENV_OVERRIDES)
-
 save_ablation_record(
     outdir=RUN_OUTPUT_PATH,
     city=CITY_NAME,
     model_name=MODEL_NAME,
     cfg=ABLCFG,
     eval_dict={
-        "r2": (_p_point or {}).get("r2"),
+        # "r2": (_p_point or {}).get("r2"),
+        # --- headline metrics (post-hoc, paper-consistent) ---
+        "r2": (float(eval_r2) if eval_r2 is not None else None),
         "mse": (
-            float(eval_mse) if eval_mse is not None
-            else None
+            float(eval_mse) if eval_mse is not None else None
         ),
         "mae": (
-            float(eval_mae) if eval_mae is not None
-            else None
+            float(eval_mae) if eval_mae is not None else None
+        ),
+        "rmse": (
+            float(eval_rmse) if eval_rmse is not None else None
         ),
         "coverage80": (
             float(abl_coverage80)
@@ -3435,6 +3538,29 @@ save_ablation_record(
             if abl_sharpness80 is not None
             else None
         ),
+        
+        # --- extra blocks for transparency/debug ---
+        "units": (
+            payload.get("units", {})
+            if isinstance(payload, dict)
+            else {}
+        ),
+        "interval_uncalibrated": {
+            "coverage80": (
+                float(uncal_coverage80)
+                if uncal_coverage80 is not None
+                else None
+            ),
+            "sharpness80": (
+                float(uncal_sharpness80)
+                if uncal_sharpness80 is not None
+                else None
+            ),
+        },
+        "interval_calibration_block": _ival,
+        "point_metrics_block": _p_point,
+        "per_horizon_block": _p_hor,
+        "metrics_evaluate_block": _m_eval,
     },
     phys_diag=(phys or {}),
     per_h_mae=per_h_mae_for_abl,
@@ -3472,7 +3598,7 @@ def _write_done_marker(
 
 
 _write_done_marker(
-    RUN_OUTPUT_PATH,
+    Path(RUN_OUTPUT_PATH),
     city=CITY_NAME,
     pde_mode=PDE_MODE_CONFIG,
     lambda_cons=LAMBDA_CONS,
@@ -3543,47 +3669,50 @@ except:
 # Visualization (optional)
 # =============================================================================
 
-print("\nPlotting forecast views...")
+if not FAST_SENS:
+    print("\nPlotting forecast views...")
+    try:
+        plot_eval_future(
+            df_eval=df_eval,
+            df_future=df_future,
+            target_name=SUBSIDENCE_COL,
+            quantiles=QUANTILES,
+            spatial_cols=("coord_x", "coord_y"),
+            time_col="coord_t",
+            # Eval: show last eval year (e.g. 2022)
+            eval_years=[FORECAST_START_YEAR - 1],
+            # Future: use the same grid you passed to format_and_forecast
+            future_years=future_grid,
+            # For eval: compare [actual] vs [q50] only
+            eval_view_quantiles=[0.5],
+            # For future: show full [q10, q50, q90]
+            future_view_quantiles=QUANTILES,
+            spatial_mode="hexbin",      # hotspot view
+            hexbin_gridsize=40,
+            savefig_prefix=os.path.join(
+                RUN_OUTPUT_PATH,
+                f"{CITY_NAME}_subsidence_view",
+            ),
+            save_fmts=[".png", ".pdf"],
+            show=False,
+            verbose=1,
+        )
+    except Exception as e:
+        print(f"[Warn] plot_eval_future failed: {e}")
+    
+    try:
+        save_all_figures(
+            output_dir=RUN_OUTPUT_PATH,
+            prefix=f"{CITY_NAME}_{MODEL_NAME}_plot_",
+            fmts=[".png", ".pdf"],
+        )
+        print(f"Saved all open Matplotlib figures in: {RUN_OUTPUT_PATH}")
+    except Exception as e:
+        print(f"[Warn] save_all_figures failed: {e}")
 
-try:
-    plot_eval_future(
-        df_eval=df_eval,
-        df_future=df_future,
-        target_name=SUBSIDENCE_COL,
-        quantiles=QUANTILES,
-        spatial_cols=("coord_x", "coord_y"),
-        time_col="coord_t",
-        # Eval: show last eval year (e.g. 2022)
-        eval_years=[FORECAST_START_YEAR - 1],
-        # Future: use the same grid you passed to format_and_forecast
-        future_years=future_grid,
-        # For eval: compare [actual] vs [q50] only
-        eval_view_quantiles=[0.5],
-        # For future: show full [q10, q50, q90]
-        future_view_quantiles=QUANTILES,
-        spatial_mode="hexbin",      # hotspot view
-        hexbin_gridsize=40,
-        savefig_prefix=os.path.join(
-            RUN_OUTPUT_PATH,
-            f"{CITY_NAME}_subsidence_view",
-        ),
-        save_fmts=[".png", ".pdf"],
-        show=False,
-        verbose=1,
-    )
-except Exception as e:
-    print(f"[Warn] plot_eval_future failed: {e}")
-
-try:
-    save_all_figures(
-        output_dir=RUN_OUTPUT_PATH,
-        prefix=f"{CITY_NAME}_{MODEL_NAME}_plot_",
-        fmts=[".png", ".pdf"],
-    )
-    print(f"Saved all open Matplotlib figures in: {RUN_OUTPUT_PATH}")
-except Exception as e:
-    print(f"[Warn] save_all_figures failed: {e}")
-
+else:
+    print("[FAST] skip plots")
+    
 print(f"\n---- {CITY_NAME.upper()} {MODEL_NAME} TRAINING COMPLETE ----\n"
       f"Artifacts -> {RUN_OUTPUT_PATH}\n")
 

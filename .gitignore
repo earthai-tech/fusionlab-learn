@@ -171,6 +171,7 @@ cython_debug/
 # Ruff stuff:
 .ruff_cache/
 
+
 # PyPI configuration file
 .pypirc
 
@@ -200,3 +201,5 @@ results*/
 
 # keep out config 
 /nat.com/config.json 
+/scripts/figs/
+/scripts/out/

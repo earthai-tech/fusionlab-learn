@@ -1,0 +1,58 @@
+{
+  "city": "Zhongshan",
+  "payload_keys": [
+    "H",
+    "Hd",
+    "K",
+    "Ss",
+    "cons_res_scaled",
+    "cons_res_vals",
+    "log10_tau",
+    "log10_tau_closure",
+    "log10_tau_prior",
+    "tau",
+    "tau_closure",
+    "tau_prior"
+  ],
+  "units": {
+    "H": "m",
+    "Hd": "m",
+    "Ss": "1/m",
+    "K": "m/s",
+    "tau": "s",
+    "tau_prior": "s",
+    "cons_res_vals": "m/s",
+    "kappa": "dimensionless"
+  },
+  "ranges": {
+    "log10_K": [
+      -11.549463098610381,
+      -11.31127585578698
+    ],
+    "log10_Ss": [
+      -4.845746984211794,
+      -3.3614709837108543
+    ],
+    "Hd": [
+      1.8000000715255737,
+      18.0
+    ],
+    "log10_tau": [
+      7.675188255310059,
+      9.595999050140382
+    ],
+    "log10_tau_p": [
+      7.675089311599732,
+      9.595876598358155
+    ],
+    "delta_log10_tau": [
+      -0.0003337860107421875,
+      0.0003337860107421875
+    ]
+  },
+  "figures": [
+    "F:\\repositories\\fusionlab-learn\\scripts\\figs\\fig6_physics_fields_zhongshan-none.png",
+    "F:\\repositories\\fusionlab-learn\\scripts\\figs\\fig6_physics_fields_zhongshan-none.svg",
+    "F:\\repositories\\fusionlab-learn\\scripts\\figs\\fig6_physics_fields_zhongshan-none.pdf"
+  ]
+}

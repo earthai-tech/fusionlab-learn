@@ -1,0 +1,58 @@
+{
+  "city": "Nansha",
+  "payload_keys": [
+    "H",
+    "Hd",
+    "K",
+    "Ss",
+    "cons_res_scaled",
+    "cons_res_vals",
+    "log10_tau",
+    "log10_tau_closure",
+    "log10_tau_prior",
+    "tau",
+    "tau_closure",
+    "tau_prior"
+  ],
+  "units": {
+    "H": "m",
+    "Hd": "m",
+    "Ss": "1/m",
+    "K": "m/s",
+    "tau": "s",
+    "tau_prior": "s",
+    "cons_res_vals": "m/s",
+    "kappa": "dimensionless"
+  },
+  "ranges": {
+    "log10_K": [
+      -11.77094346496249,
+      -11.732753324931252
+    ],
+    "log10_Ss": [
+      -3.325000208820615,
+      -3.182487946396716
+    ],
+    "Hd": [
+      0.09000000357627869,
+      2.921999931335449
+    ],
+    "log10_tau": [
+      6.749423160552978,
+      9.764794502258301
+    ],
+    "log10_tau_p": [
+      6.749567184448242,
+      9.764970016479491
+    ],
+    "delta_log10_tau": [
+      -0.00023174285888671875,
+      0.00023174285888671875
+    ]
+  },
+  "figures": [
+    "F:\\repositories\\fusionlab-learn\\scripts\\figs\\fig6_physics_fields_nansha-none.png",
+    "F:\\repositories\\fusionlab-learn\\scripts\\figs\\fig6_physics_fields_nansha-none.svg",
+    "F:\\repositories\\fusionlab-learn\\scripts\\figs\\fig6_physics_fields_nansha-none.pdf"
+  ]
+}

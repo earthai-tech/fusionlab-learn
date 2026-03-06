@@ -2172,7 +2172,7 @@ print("Calibrator saved.")
 # =============================================================================
 
 forecast_df = None
-dataset_name_for_forecast = "ValidationSet_Fallback"
+dataset_name_for_forecast = "g"
 
 if X_test is not None and y_test is not None:
     X_fore, y_fore = X_test, y_test
@@ -3210,23 +3210,55 @@ _p_hor = (
     else {}
 )
 
-eval_mae = _m_eval.get(
-    "subs_pred_mae",
-    _p_point.get("mae"),
+_ival = (
+    payload.get("interval_calibration", {})
+    if isinstance(payload, dict)
+    else {}
 )
-eval_mse = _m_eval.get(
-    "subs_pred_mse",
-    _p_point.get("mse"),
+_cal_stats = _ival.get("factors_per_horizon_from_cal_stats", {}) or {}
+_ev_after = _cal_stats.get("eval_after", {}) or {}
+_ev_before = _cal_stats.get("eval_before", {}) or {}
+
+def _pick_first(*vals):
+    for v in vals:
+        if v is not None:
+            return v
+    return None
+
+# --- Post-hoc calibrated interval metrics (preferred) ---
+abl_coverage80 = _pick_first(
+    _ev_after.get("coverage"),
+    _ival.get("coverage80_calibrated_phys"),
+    _ival.get("coverage80_calibrated"),
+)
+abl_sharpness80 = _pick_first(
+    _ev_after.get("sharpness"),
+    _ival.get("sharpness80_calibrated_phys"),
+    _ival.get("sharpness80_calibrated"),
 )
 
-abl_coverage80 = _m_eval.get(
-    "subs_pred_coverage80",
-    coverage80_for_abl,
+# --- Post-hoc UNcalibrated interval metrics (for transparency) ---
+uncal_coverage80 = _pick_first(
+    _ev_before.get("coverage"),
+    _ival.get("coverage80_uncalibrated_phys"),
+    _ival.get("coverage80_uncalibrated"),
 )
-abl_sharpness80 = _m_eval.get(
-    "subs_pred_sharpness80",
-    sharpness80_for_abl,
+uncal_sharpness80 = _pick_first(
+    _ev_before.get("sharpness"),
+    _ival.get("sharpness80_uncalibrated_phys"),
+    _ival.get("sharpness80_uncalibrated"),
 )
+
+# --- Post-hoc point metrics (real units; consistent with CSV diagnostics) ---
+eval_mae = _p_point.get("mae")
+eval_mse = _p_point.get("mse")
+eval_r2 = _p_point.get("r2")
+eval_rmse = _p_point.get("rmse")
+if (eval_rmse is None) and (eval_mse is not None):
+    try:
+        eval_rmse = float(np.sqrt(float(eval_mse)))
+    except Exception:
+        eval_rmse = None
 
 per_h_mae_for_abl = (
     (_p_hor.get("mae") if isinstance(_p_hor, dict)
@@ -3245,14 +3277,17 @@ save_ablation_record(
     model_name=MODEL_NAME,
     cfg=ABLCFG,
     eval_dict={
-        "r2": (_p_point or {}).get("r2"),
+        # "r2": (_p_point or {}).get("r2"),
+        # --- headline metrics (post-hoc, paper-consistent) ---
+        "r2": (float(eval_r2) if eval_r2 is not None else None),
         "mse": (
-            float(eval_mse) if eval_mse is not None
-            else None
+            float(eval_mse) if eval_mse is not None else None
         ),
         "mae": (
-            float(eval_mae) if eval_mae is not None
-            else None
+            float(eval_mae) if eval_mae is not None else None
+        ),
+        "rmse": (
+            float(eval_rmse) if eval_rmse is not None else None
         ),
         "coverage80": (
             float(abl_coverage80)
@@ -3264,6 +3299,29 @@ save_ablation_record(
             if abl_sharpness80 is not None
             else None
         ),
+        
+        # --- extra blocks for transparency/debug ---
+        "units": (
+            payload.get("units", {})
+            if isinstance(payload, dict)
+            else {}
+        ),
+        "interval_uncalibrated": {
+            "coverage80": (
+                float(uncal_coverage80)
+                if uncal_coverage80 is not None
+                else None
+            ),
+            "sharpness80": (
+                float(uncal_sharpness80)
+                if uncal_sharpness80 is not None
+                else None
+            ),
+        },
+        "interval_calibration_block": _ival,
+        "point_metrics_block": _p_point,
+        "per_horizon_block": _p_hor,
+        "metrics_evaluate_block": _m_eval,
     },
     phys_diag=(phys or {}),
     per_h_mae=per_h_mae_for_abl,

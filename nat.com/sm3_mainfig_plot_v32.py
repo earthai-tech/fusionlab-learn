@@ -168,6 +168,7 @@ def _bootstrap_pair(
         out[b] = float(fn(x[idx], y[idx]))
 
     return out
+
 def _fmt_ci(
     est: float,
     lo: float,
@@ -188,6 +189,7 @@ def _fmt_ci(
     if not ok:
         return f"{est:.{nd}f}"
     return f"{est:.{nd}f} [{lo:.{nd}f},{hi:.{nd}f}]"
+
 def plot_sm3_identifiability_v32(
     csv_path: str,
     outpath: str,

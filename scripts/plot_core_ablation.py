@@ -225,15 +225,6 @@ def plot_fig3_core_ablation(
         top_key = "mae"
         ab_key = "r2"
 
-    # def _meta(k: str) -> Tuple[str, str, str]:
-    #     if k == "r2":
-    #         return ("R² (↑)", "R²", "{:.2f}")
-    #     if k == "mae":
-    #         t = f"MAE (↓, {unit})"
-    #         y = f"MAE ({unit})"
-    #         return (t, y, "{:.2f}")
-    #     raise KeyError(k)
-
     def _vals(metric: str, variant: str) -> np.ndarray:
         outv: List[float] = []
         for c in cities:

@@ -244,7 +244,45 @@ def _extract_config_dict(module) -> Dict[str, Any]:
 # -------------------------------------------------------------------
 # Public API
 # -------------------------------------------------------------------
-def ensure_config_json(root="nat.com") -> Tuple[Dict[str, Any], str]:
+def _refresh_city_files(cfg: Dict[str, Any]) -> None:
+    city = str(cfg.get("CITY_NAME", "")).strip().lower()
+    var = str(cfg.get("DATASET_VARIANT", "")).strip()
+
+    btmp = cfg.get("BIG_FN_TEMPLATE", None)
+    stmp = cfg.get("SMALL_FN_TEMPLATE", None)
+
+    if city and var and isinstance(btmp, str):
+        cfg["BIG_FN"] = btmp.format(city=city, variant=var)
+
+    if city and var and isinstance(stmp, str):
+        cfg["SMALL_FN"] = stmp.format(city=city, variant=var)
+
+
+def _apply_env_overrides(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    changed = False
+
+    city_env = os.getenv("CITY", "").strip()
+    if city_env:
+        cfg["CITY_NAME"] = city_env.lower()
+        changed = True
+
+    model_env = os.getenv("MODEL_NAME_OVERRIDE", "").strip()
+    if model_env:
+        cfg["MODEL_NAME"] = model_env
+        changed = True
+
+    root_env = os.getenv("JUPYTER_PROJECT_ROOT", "").strip()
+    if root_env:
+        cfg["DATA_DIR"] = root_env
+        changed = True
+
+    if changed:
+        _refresh_city_files(cfg)
+
+    return cfg
+
+
+def ensure_config_json(root: str = "nat.com") -> Tuple[Dict[str, Any], str]:
     """
     Ensure that `nat.com/config.json` exists and is consistent
     with `nat.com/config.py`.
@@ -264,10 +302,11 @@ def ensure_config_json(root="nat.com") -> Tuple[Dict[str, Any], str]:
       changed, it is regenerated.
     - Otherwise the existing JSON file is reused.
     """
+    
     config_py, config_json = get_config_paths(root=root)
     py_hash = _hash_file(config_py)
 
-    payload: Dict[str, Any] | None = None
+    payload: Optional[Dict[str, Any]] = None
     if os.path.exists(config_json):
         try:
             with open(config_json, "r", encoding="utf-8") as f:
@@ -281,27 +320,27 @@ def ensure_config_json(root="nat.com") -> Tuple[Dict[str, Any], str]:
         and meta.get("config_py_hash") == py_hash
         and "config" in payload
     ):
-        # JSON is in sync with config.py; reuse it.
-        return payload["config"], config_json
+        cfg = dict(payload["config"])
+        cfg = _apply_env_overrides(cfg)
+        return cfg, config_json
 
-    # (Re)build configuration from config.py
     module = _import_config_module(config_py)
-    config_dict = _extract_config_dict(module)
+    cfg = _extract_config_dict(module)
+    cfg = _apply_env_overrides(cfg)
 
     payload = {
-        "city": config_dict.get("CITY_NAME"),
-        "model": config_dict.get("MODEL_NAME"),
-        "config": config_dict,
-        "__meta__": {
-            "config_py_hash": py_hash,
-        },
+        "city": cfg.get("CITY_NAME"),
+        "model": cfg.get("MODEL_NAME"),
+        "config": cfg,
+        "__meta__": {"config_py_hash": py_hash},
     }
 
     os.makedirs(os.path.dirname(config_json), exist_ok=True)
     with open(config_json, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
 
-    return config_dict, config_json
+    return cfg, config_json
+
 
 
 def load_nat_config(root="nat.com") -> Dict[str, Any]:

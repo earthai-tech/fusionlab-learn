@@ -54,6 +54,16 @@ _CMD: Dict[str, _CmdSpec] = {
         "plot_physics_sanity_main",
         "Physics sanity plots.",
     ),
+    "plot-physics-maps": _CmdSpec(
+        "plot_physics_maps",
+        "plot_physics_maps_main",
+        "Physics maps plots.",
+    ),
+    "plot-physics-fields": _CmdSpec(
+        "plot_physics_fields",
+        "plot_physics_fields_main",
+        "Physics fields plots.",
+    ),
     "plot-physics-profiles": _CmdSpec(
         "plot_physics_profiles",
         "figA1_phys_profiles_main",
@@ -66,13 +76,13 @@ _CMD: Dict[str, _CmdSpec] = {
     ),
     "plot-ablations-sensitivity": _CmdSpec(
         "plot_ablations_sensitivity",
-        "figS6_ablations_main",
+        "plot_ablations_sensivity_main",
         "Ablations sensitivity.",
     ),
-    "plot-residual-sensitivity": _CmdSpec(
-        "plot_residual_sensitivity",
-        "figS7_physics_sensitivity_main",
-        "Physics residual sensitivity.",
+    "plot-physics-sensitivity": _CmdSpec(
+        "plot_physics_sensitivity",
+        "plot_physics_sensitivity_main",
+        "Physics sensitivity.",
     ),
     "plot-sm3-identifiability": _CmdSpec(
         "plot_sm3_identifiability",
@@ -94,16 +104,30 @@ _CMD: Dict[str, _CmdSpec] = {
         "figSx_xfer_transferability_main",
         "Cross-city transferability.",
     ),
+    "plot-xfer-impact": _CmdSpec(
+        "plot_xfer_impact",
+        "figSx_xfer_impact_main",
+        "Transfer impact (retention + risk).",
+    ),
     "plot-transfer": _CmdSpec(
         "plot_transfer",
         "figSx_xfer_transferability_main",
         "Alias of transferability plot.",
     ),
+    "plot-transfer-impact": _CmdSpec(
+        "plot_xfer_impact",
+        "figSx_xfer_impact_main",
+        "Alias of transfer impact plot.",
+    ),
     "plot-geo-cumulative": _CmdSpec(
         "plot_geo_cumulative",
-        "main",
+        "plot_geo_cumulative_main",
         "Cumulative geo curves.",
-        mode="sysargv",
+    ),
+    "plot-hotspot-analytics": _CmdSpec(
+        "plot_hotspot_analytics",
+        "plot_hotspot_analytics_main",
+        "Hotspot analytics (maps + timeline).",
     ),
     # Tables / summaries
     "compute-brier-exceedance": _CmdSpec(
@@ -116,6 +140,48 @@ _CMD: Dict[str, _CmdSpec] = {
         "summarize_hotspots_main",
         "Summarize hotspot outputs.",
     ),
+    "compute-hotspots": _CmdSpec(
+        "compute_hotspots",
+        "compute_hotspots_main",
+        "Compute hotspot outputs.",
+    ),
+    "extend-forecast": _CmdSpec(
+        "extend_forecast",
+        "extend_forecast_main",
+        "Extend future forecast CSV by extrapolation.",
+    ),
+    "update-ablation-records": _CmdSpec(
+        "update_ablation_records",
+        "update_ablation_records_main",
+        "Patch ablation_record.jsonl with post-hoc metrics.",
+    ),
+
+    "build-model-metrics": _CmdSpec(
+        "build_model_metrics",
+        "build_model_metrics_main",
+        "Build unified metrics tables (CSV/JSON).",
+    ),
+    "make-boundary": _CmdSpec(
+        "make_boundary",
+        "make_boundary_main",
+        "Create boundary polygon from points.",
+    ),
+    "make-exposure": _CmdSpec(
+        "make_exposure",
+        "make_exposure_main",
+        "Create exposure.csv (proxy) from points.",
+    ),
+    "make-district-grid": _CmdSpec(
+        "make_district_grid",
+        "make_district_grid_main",
+        "Create grid-based district (Zone IDs) layer.",
+    ),
+    "tag-clusters-with-zones": _CmdSpec(
+        "tag_clusters_with_zones",
+        "tag_clusters_with_zones_main",
+        "Assign hotspot clusters to Zone IDs.",
+    ),
+    
 }
 
 
@@ -136,6 +202,8 @@ _GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
             "plot-litho-parity",
             "plot-uncertainty",
             "plot-spatial-forecasts",
+            "plot-transfer-impact",
+            "plot-hotspot-analytics"
         ),
     ),
     (
@@ -145,12 +213,13 @@ _GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
             "plot-physics-profiles",
             "plot-uncertainty-extras",
             "plot-ablations-sensitivity",
-            "plot-residual-sensitivity",
+            "plot-physics-sensitivity",
             "plot-sm3-identifiability",
             "plot-sm3-bounds-ridge-summary",
             "plot-sm3-log-offsets",
             "plot-xfer-transferability",
             "plot-transfer",
+            "plot-xfer-impact",
             "plot-geo-cumulative",
         ),
     ),
@@ -158,7 +227,15 @@ _GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         "Tables & summaries",
         (
             "compute-brier-exceedance",
+            "compute-hotspots",
             "summarize-hotspots",
+            "update-ablation-records", 
+            "build-model-metrics", 
+            "extend-forecast", 
+            "make-boundary", 
+            "make-exposure", 
+            "make-district-grid",
+            "tag-clusters-with-zones"
         ),
     ),
 )

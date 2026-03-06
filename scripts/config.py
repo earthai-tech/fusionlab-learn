@@ -42,12 +42,15 @@ PATTERNS = {
         "diagnostics*.json",
         "*eval*diagnostic*.json",
     ),
+    # --- TestSet: EVAL (has subsidence_actual) ---
     "forecast_test_csv": (
-        "*forecast*TestSet*calibrated*.csv",
-        "*forecast_TestSet*_calibrated.csv",
-        "*_forecast_TestSet_*_calibrated.csv",
-        "*TestSet*calibrated*.csv",
+        "*forecast*TestSet*eval_calibrated*.csv",
+        "*forecast_TestSet*_eval_calibrated.csv",
+        "*_forecast_TestSet_*_eval_calibrated.csv",
+        "*TestSet*eval_calibrated*.csv",
     ),
+    
+    # --- TestSet: FUTURE (no subsidence_actual) ---
     "forecast_test_future_csv": (
         "*forecast*TestSet*future*.csv",
         "*forecast_TestSet*_future.csv",
@@ -78,15 +81,28 @@ PATTERNS = {
         "*coords*.npz",
         "*xy*.npz",
         "*lonlat*.npz",
+        "*val_inputs*.npz",
+        "*test_inputs*.npz",
+        "*train_inputs*.npz",
+        "*oos_time_inputs*.npz",
     ),
     # Ablation records (Supplement S6/S7)
     "ablation_record_jsonl": (
-        "ablation_records/ablation_record*.jsonl",
         "ablation_records/ablation_record.updated*.jsonl",
+        "ablation_records/ablation_record*.jsonl",
         "ablation_record*.jsonl",
         "ablation_record.updated*.jsonl",
     ),
+    
 }
+
+PATTERNS["boundary_shp"] = (
+    "*boundary*.shp",
+    "*coast*.shp",
+    "*admin*.shp",
+    "*outline*.shp",
+    "*border*.shp",
+)
 
 # -------------------------------------------------------------------
 # Plot metric metadata (titles / labels / format)
@@ -396,6 +412,17 @@ _STRAT_EDGE = {
     "warm": "#111111",
 }
 
+_STRAT_LINESTYLE = {
+    "baseline": ":",
+    "xfer": "--",
+    "warm": "-",
+}
+_STRAT_MARKER = {
+    "baseline": "o",
+    "xfer": "^",
+    "warm": "s",
+}
+
 _BASELINE_MAP = {
     "A_to_B": "B_to_B",
     "B_to_A": "A_to_A",
@@ -405,5 +432,6 @@ _BASELINE_MAP = {
 _METRIC_DEF = {
     "mae": ("overall_mae", "MAE (mm)", "min"),
     "mse": ("overall_mse", "MSE (mm^2)", "min"),
+    "rmse": ("overall_rmse", "RMSE (mm)", "min"),
     "r2": ("overall_r2", r"$R^2$", "max"),
 }

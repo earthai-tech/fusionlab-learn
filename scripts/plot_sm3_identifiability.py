@@ -1035,18 +1035,19 @@ def plot_sm3_identifiability(
         )
         fig.suptitle(ttl, fontsize=11, fontweight="bold")
 
-    fig_p = utils.resolve_fig_out(out)
-    if fig_p.suffix:
-        fig_p = fig_p.with_suffix("")
+    # fig_p = utils.resolve_fig_out(out)
+    # if fig_p.suffix:
+    #     fig_p = fig_p.with_suffix("")
 
-    fig.savefig(str(fig_p) + ".png", dpi=int(dpi),
-                bbox_inches="tight")
-    fig.savefig(str(fig_p) + ".svg", bbox_inches="tight")
-    plt.close(fig)
+    # fig.savefig(str(fig_p) + ".png", dpi=int(dpi),
+    #             bbox_inches="tight")
+    # fig.savefig(str(fig_p) + ".svg", bbox_inches="tight")
+    # plt.close(fig)
+    utils.save_figure(fig, out, dpi= int(dpi))
 
-    print(f"[OK] figs -> {fig_p}.png/.svg")
-    print(f"[OK] table -> {out_csv_p}")
-    print(f"[OK] json  -> {out_json_p}")
+    # print(f"[OK] figs -> {fig_p}.png/.svg")
+    # print(f"[OK] table -> {out_csv_p}")
+    # print(f"[OK] json  -> {out_json_p}")
 
 
 # -------------------------------------------------------------------

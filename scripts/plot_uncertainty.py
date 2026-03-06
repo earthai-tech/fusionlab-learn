@@ -8,7 +8,7 @@
 # uncertainty summary.
 #
 # Outputs:
-#   - scripts/figs/<out>.png + <out>.svg
+#   - scripts/figs/<outhow.png + <out>.svg
 #   - scripts/out/<out-csv>
 #
 
@@ -21,7 +21,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib.gridspec import GridSpec
 
 from . import config as cfg
 from . import utils
@@ -566,6 +565,7 @@ def _build_metrics_table(
     int_source: str,
 ) -> pd.DataFrame:
     r0 = _pivot_emp(rel_all, by_horizon=False)
+    r0_row = r0.iloc[0] if not r0.empty else pd.Series(dtype=float)
     rh = _pivot_emp(rel_h, by_horizon=True)
 
     if int_all.empty:
@@ -589,9 +589,9 @@ def _build_metrics_table(
             "forecast_step": 0,
             "coverage80": cov0,
             "sharpness80": shp0,
-            "emp_q10": float(r0.get("emp_q10", np.nan)),
-            "emp_q50": float(r0.get("emp_q50", np.nan)),
-            "emp_q90": float(r0.get("emp_q90", np.nan)),
+            "emp_q10": float(r0_row.get("emp_q10", np.nan)),
+            "emp_q50": float(r0_row.get("emp_q50", np.nan)),
+            "emp_q90": float(r0_row.get("emp_q90", np.nan)),
         }
     )
 
@@ -855,21 +855,26 @@ def plot_fig5_uncertainty(
     # -----------------------------
     # Save figure
     # -----------------------------
-    fig_p = utils.resolve_fig_out(out)
-    if fig_p.suffix:
-        fig_p = fig_p.with_suffix("")
+    # fig_p = utils.resolve_fig_out(out)
+    # if fig_p.suffix:
+    #     fig_p = fig_p.with_suffix("")
 
-    fig.savefig(
-        str(fig_p) + ".png",
-        dpi=dpi,
-        bbox_inches="tight",
+    # fig.savefig(
+    #     str(fig_p) + ".png",
+    #     dpi=dpi,
+    #     bbox_inches="tight",
+    # )
+    # fig.savefig(
+    #     str(fig_p) + ".svg",
+    #     bbox_inches="tight",
+    # )
+    # plt.close(fig)
+    
+    utils.save_figure(
+        fig,
+        out,
+        dpi=int(dpi),
     )
-    fig.savefig(
-        str(fig_p) + ".svg",
-        bbox_inches="tight",
-    )
-    plt.close(fig)
-
     # -----------------------------
     # Export metrics table
     # -----------------------------
@@ -891,8 +896,6 @@ def plot_fig5_uncertainty(
     out_csv_p = utils.resolve_out_out(out_csv)
     tbl.to_csv(out_csv_p, index=False)
 
-    print(f"[OK] wrote {fig_p}.png/.svg")
-    print(f"[OK] wrote {out_csv_p}")
 
 
 # ---------------------------------------------------------------------

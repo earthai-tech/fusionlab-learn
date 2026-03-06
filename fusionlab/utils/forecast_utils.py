@@ -634,39 +634,7 @@ def evaluate_forecast(
             metrics_here["per_horizon_r2"] = per_r2
 
         # ---- 5d. Extra metrics ----------------------------------------
-        # for m_name, fn in metric_fns.items():
-        #     kwargs = dict(extra_metric_kwargs.get(m_name, {}) or {})
-        
-        #     sig = inspect.signature(fn)
-        #     param_names = list(sig.parameters.keys())
-        
-        #     # Case 1: standard supervised metric: metric(y_true, y_pred, ...)
-        #     if ("y_true" in param_names) and ("y_pred" in param_names):
-        #         # Prefer explicit kw usage if supported
-        #         try:
-        #             m_val = fn(y_true=y_true, y_pred=y_pred, **kwargs)
-        #         except TypeError:
-        #             # Fall back to positional (y_true, y_pred)
-        #             m_val = fn(y_true, y_pred, **kwargs)
-        
-        #     # Case 2: prediction-only metric: metric(y_pred, sample_weight=..., ...)
-        #     elif param_names and param_names[0] in ("y_pred", "y_forecast", "y_hat"):
-        #         # e.g. prediction_stability_score(y_pred, sample_weight=None, ...)
-        #         m_val = fn(y_pred, **kwargs)
-        
-        #     else:
-        #         # Fallback heuristic: try (y_true, y_pred) then (y_pred,)
-        #         try:
-        #             m_val = fn(y_true, y_pred, **kwargs)
-        #         except TypeError:
-        #             m_val = fn(y_pred, **kwargs)
-        
-        #     # Try to convert scalar arrays to Python floats
-        #     if isinstance(m_val, np.ndarray) and m_val.size == 1:
-        #         m_val = float(m_val.reshape(()))
-        
-        #     metrics_here[m_name] = m_val
-        
+
         apply_extra_metrics(
             dest=metrics_here,
             y_true=y_true,

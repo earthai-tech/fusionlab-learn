@@ -27,7 +27,9 @@ import os
 from typing import Any, Dict, List, Optional, Tuple, Callable, Mapping 
 from pathlib import Path
 import joblib
+
 import numpy as np
+import pandas as pd 
 import tensorflow as tf
 
 from fusionlab.utils.generic_utils import (
@@ -76,9 +78,9 @@ from fusionlab.compat.keras_fit import (
 
 from fusionlab.deps import with_progress
 from fusionlab.utils.generic_utils import vlog
-from fusionlab.utils.xfer_utils import load_stage1_bundle
-from fusionlab.utils.xfer_utils import resolve_artifact_path
-
+from fusionlab.utils.transfer import xfer_utils as xu 
+from fusionlab.utils.transfer import xfer_metrics as xm  
+from fusionlab.utils.transfer import xfer_units as xun
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 tf.get_logger().setLevel("ERROR")
@@ -290,7 +292,39 @@ def parse_args() -> argparse.Namespace:
         choices=["print", "none"],
         help="Logging: print or none.",
     )
-
+    p.add_argument(
+        "--recompute-missing",
+        action="store_true",
+        help=(
+            "Force recompute metrics from the exported "
+            "*_eval.csv via xfer_metrics (coverage/"
+            "sharpness + overall/per-horizon point "
+            "metrics), overriding existing values. "
+            "Useful when scaling/unit/calibration "
+            "conventions changed."
+        ),
+    )
+    p.add_argument(
+        "--subsidence-unit",
+        default="mm",
+        choices=["mm", "m"],
+        help="Unit for exported CSVs (default: mm).",
+    )
+    p.add_argument(
+        "--subsidence-unit-from",
+        default="m",
+        choices=["mm", "m"],
+        help="Unit of model physical outputs (default: m).",
+    )
+    p.add_argument(
+        "--metrics-unit",
+        default=None,
+        choices=["mm", "m"],
+        help=(
+            "Unit for metrics in xfer_results "
+            "(default: subsidence-unit)."
+        ),
+    )
     args = p.parse_args()
 
     if args.rescale_to_source:
@@ -1568,7 +1602,7 @@ def _bundle_scaler_info(b) -> dict:
     # common: enc["scaler_info"] is a joblib path
     si = enc.get("scaler_info", None)
     if isinstance(si, (str, Path)):
-        p = resolve_artifact_path(b.run_dir, si, strict=False)
+        p = xu.resolve_artifact_path(b.run_dir, si, strict=False)
         if p and p.exists():
             try:
                 si = joblib.load(str(p))
@@ -1607,7 +1641,7 @@ def _bundle_y_scaler_info(b) -> dict:
         return _hydrate_si_dict(b, ysi)
 
     if isinstance(ysi, (str, Path)):
-        p = resolve_artifact_path(b.run_dir, ysi, strict=False)
+        p = xu.resolve_artifact_path(b.run_dir, ysi, strict=False)
         if p and p.exists():
             try:
                 ysi = joblib.load(str(p))
@@ -1638,7 +1672,7 @@ def _hydrate_si_dict(b, si: dict) -> dict:
         sp = v.get("scaler_path", None)
         if not sp:
             continue
-        p = resolve_artifact_path(b.run_dir, sp, strict=False)
+        p = xu.resolve_artifact_path(b.run_dir, sp, strict=False)
         if p and p.exists():
             try:
                 v["scaler"] = joblib.load(str(p))
@@ -1801,6 +1835,32 @@ def _make_ds(
     )
     return ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
 
+def _fix_horizon_keys(d: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(d, dict) or not d:
+        return d
+    ks = []
+    for k in d.keys():
+        s = str(k)
+        if s.startswith("H") and s[1:].isdigit():
+            ks.append(int(s[1:]))
+    if not ks:
+        return d
+
+    ks = sorted(set(ks))
+    # detect the common off-by-one pattern: starts at 2 and is consecutive
+    if ks[0] == 2 and ks == list(range(2, 2 + len(ks))):
+        out: Dict[str, Any] = {}
+        for k, v in d.items():
+            s = str(k)
+            if s.startswith("H") and s[1:].isdigit():
+                i = int(s[1:]) - 1
+                out[f"H{i}"] = v
+            else:
+                out[s] = v
+        return out
+
+    return d
+
 def run_one_direction(
     *,
     strategy: str = "xfer",
@@ -1822,6 +1882,10 @@ def run_one_direction(
     prefer_artifact: str = "keras",
     allow_reorder_dynamic: bool = False,
     allow_reorder_future: bool = False,
+    recompute_missing: bool = False,
+    subs_unit: str = "mm",
+    subs_unit_from: str = "m",
+    metrics_unit: str | None = None,
     log_fn: Optional[Callable[[str], Any]] = None,
     verbose: int = 0,
 ) -> Optional[Dict[str, Any]]:
@@ -2069,16 +2133,6 @@ def run_one_direction(
         sp = tf.convert_to_tensor(subs_pred_raw)
         yt = tf.convert_to_tensor(y_true_src)
     
-        # sp = canonicalize_BHQO(
-        #     sp,
-        #     y_true=yt,
-        #     q_values=Q,
-        #     n_q=(len(Q) if Q else None),
-        #     enforce_monotone=True,
-        #     layout="BHQO",
-        #     verbose=(1 if int(verbose) >= 4 else 0),
-        #     log_fn=(log if int(verbose) >= 4 else None),
-        # )
         subs_pred_raw = sp.numpy()
     
     elif (
@@ -2183,7 +2237,24 @@ def run_one_direction(
             yA, yB = y_true_scaled, y_pred_scaled
     
         metrics_overall = point_metrics(yA, yB, use_physical=False)
+        
+        # Backward compatibility: older point_metrics may omit rmse.
+        try:
+            if (
+                isinstance(metrics_overall, dict)
+                and ("rmse" not in metrics_overall)
+                and (metrics_overall.get("mse") is not None)
+            ):
+                metrics_overall["rmse"] = float(
+                    np.sqrt(float(metrics_overall["mse"]))
+                )
+        except Exception:
+            pass
+
         mae_h, r2_h = per_horizon_metrics(yA, yB, use_physical=False)
+        mae_h = _fix_horizon_keys(mae_h)
+        r2_h = _fix_horizon_keys(r2_h)
+
         metrics_h = {"mae": mae_h, "r2": r2_h}
         
         metrics_space = "physical"
@@ -2198,11 +2269,7 @@ def run_one_direction(
     coverage80 = None
     sharpness80 = None
 
-    # if (
-    #     y_true_phys is not None
-    #     and y_si_s
-    #     and int(subs_pred.ndim) == 4
-    # ):
+
     if (
         metrics_space == "physical"
         and y_true_phys is not None
@@ -2322,12 +2389,154 @@ def run_one_direction(
         eval_metrics=False,
         value_mode=subs_kind,
         input_value_mode=subs_kind,
-        output_unit="mm",
-        output_unit_from="m",
+        output_unit=subs_unit,
+        output_unit_from=subs_unit_from,
         output_unit_mode="overwrite",
         output_unit_col="subsidence_unit",
     )
+    
+  
+    def _unit_scale_from_eval(df: pd.DataFrame) -> float:
+        """
+        Return factor to convert eval CSV numbers into meters.
+    
+        Your eval CSV is usually exported as mm.
+        We keep xfer_results metrics in meters (as your current
+        overall_mae values show ~0.01–0.03).
+        """
+        if df is None or "subsidence_unit" not in df.columns:
+            return 1.0
+        s = df["subsidence_unit"].dropna()
+        if s.empty:
+            return 1.0
+        u0 = str(s.astype(str).iloc[0]).strip().lower()
+        if u0.startswith("mm"):
+            return 1.0 / 1000.0
+        return 1.0
+    
 
+    def _eval_metrics_from_df(
+        df_eval: pd.DataFrame,
+        ) -> tuple[
+        xm.EvalSummary | None,
+        dict,
+        dict,
+        dict,
+        dict,
+        str,
+    ]:
+        if df_eval is None:
+            return None, {}, {}, {}, {}, "mm"
+    
+        need = ["subsidence_actual", "subsidence_q50"]
+        if any(c not in df_eval.columns for c in need):
+            return None, {}, {}, {}, {}, "mm"
+    
+        eval_u = xun.infer_unit(df_eval, default=subs_unit)
+        mu = str(metrics_unit or subs_unit).lower()
+        fac = xun.unit_factor(eval_u, mu)
+    
+        cols = [
+            "subsidence_actual",
+            "subsidence_q10",
+            "subsidence_q50",
+            "subsidence_q90",
+        ]
+        dfm = xun.scale_cols(df_eval, cols, fac)
+    
+        summary = xm.summarize_eval_df(dfm)
+    
+        # ph_mae: dict = {}
+        # ph_r2: dict = {}
+        ph_mae: dict = {}
+        ph_mse: dict = {}
+        ph_rmse: dict = {}
+        ph_r2: dict = {}
+
+        if "forecast_step" in dfm.columns:
+            steps = pd.to_numeric(dfm["forecast_step"], errors="coerce")
+            steps = steps[np.isfinite(steps)].to_numpy(float)
+        
+            uniq = np.unique(steps)
+            uniq.sort()
+        
+            step_to_h = {
+                float(s): f"H{i + 1}"
+                for i, s in enumerate(uniq)
+            }
+        
+            for step, g in dfm.groupby("forecast_step", dropna=False):
+                try:
+                    s = float(step)
+                except Exception:
+                    continue
+        
+                h = step_to_h.get(s)
+                if h is None:
+                    continue
+        
+                yy = pd.to_numeric(
+                    g["subsidence_actual"], errors="coerce"
+                ).to_numpy(float)
+                pp = pd.to_numeric(
+                    g["subsidence_q50"], errors="coerce"
+                ).to_numpy(float)
+        
+                ph_mae[h] = float(xm.mae(yy, pp))
+                ph_mse[h] = float(xm.mse(yy, pp))
+                ph_rmse[h] = float(xm.rmse(yy, pp))
+                ph_r2[h] = float(xm.r2_score(yy, pp))
+                
+        return summary, ph_mae, ph_mse, ph_rmse, ph_r2, mu
+    
+    force = bool(recompute_missing)
+    
+    need_any = (
+        force
+        or (coverage80 is None)
+        or (sharpness80 is None)
+        or (metrics_overall.get("mae") is None)
+        or (metrics_overall.get("mse") is None)
+        or (metrics_overall.get("rmse") is None)
+        or (metrics_overall.get("r2") is None)
+        or not bool(metrics_h.get("mae"))
+        or not bool(metrics_h.get("mse"))
+        or not bool(metrics_h.get("rmse"))
+        or not bool(metrics_h.get("r2"))
+    )
+    mu = "" 
+    if need_any:
+        try:
+            summ, ph_mae2, ph_mse2, ph_rmse2, ph_r2_2, mu = (
+                _eval_metrics_from_df(df_eval)
+            )
+            if summ is not None:
+                coverage80 = float(summ.coverage80)
+                sharpness80 = float(summ.sharpness80)
+                metrics_overall["mae"] = float(summ.mae)
+                metrics_overall["mse"] = float(summ.mse)
+                metrics_overall["rmse"] = float(summ.rmse)
+                metrics_overall["r2"] = float(summ.r2)
+                if ph_mae2:
+                    metrics_h["mae"] = ph_mae2
+                if ph_mse2:
+                    metrics_h["mse"] = ph_mse2
+                if ph_rmse2:
+                    metrics_h["rmse"] = ph_rmse2
+                if ph_r2_2:
+                    metrics_h["r2"] = ph_r2_2
+            else:
+                mu = str(metrics_unit or subs_unit).lower()
+    
+                log(
+                    "[stage5] metrics recomputed from eval CSV "
+                    f"(force={force})"
+                )
+        except Exception as e:
+            log(
+                "[stage5] WARN: recompute from eval CSV "
+                f"failed: {e!r}"
+            )
     # ------------------------------
     # Optional physics payload export
     # ------------------------------
@@ -2355,14 +2564,15 @@ def run_one_direction(
             f"min={a.min():.6g} max={a.max():.6g} "
             f"mean={a.mean():.6g} std={a.std():.6g}")
         
-    # if y_true_phys is not None:
-    #     _stat(y_true_phys, "y_true_phys")
-    # if y_pred_phys is not None:
-    #     _stat(y_pred_phys, "y_pred_phys")
-    # Debug stats (keep your _stat, but point it at yA/yB if you want)
+
     if y_true_scaled is not None:
         _stat(y_true_scaled, "y_true_scaled")
         _stat(y_pred_scaled, "y_pred_scaled")
+
+    ph_mae = _fix_horizon_keys(metrics_h.get("mae") or {})
+    ph_mse = _fix_horizon_keys(metrics_h.get("mse") or {})
+    ph_rmse = _fix_horizon_keys(metrics_h.get("rmse") or {})
+    ph_r2 = _fix_horizon_keys(metrics_h.get("r2") or {})
 
     return {
         "strategy": strategy,
@@ -2376,9 +2586,12 @@ def run_one_direction(
         "sharpness80": sharpness80,
         "overall_mae": metrics_overall.get("mae"),
         "overall_mse": metrics_overall.get("mse"),
+        "overall_rmse": metrics_overall.get("rmse"),
         "overall_r2": metrics_overall.get("r2"),
-        "per_horizon_mae": metrics_h.get("mae") or {},
-        "per_horizon_r2": metrics_h.get("r2") or {},
+        "per_horizon_mae": ph_mae,
+        "per_horizon_mse": ph_mse,
+        "per_horizon_rmse": ph_rmse,
+        "per_horizon_r2": ph_r2,
         "csv_eval": csv_eval,
         "csv_future": csv_fut,
         "model_dir": model_dir,
@@ -2388,6 +2601,9 @@ def run_one_direction(
         "hps_mode": hps_pick,
         "model_name": model_name,
         "prefer_artifact": prefer_artifact,
+        "metrics_source": "eval_csv" if bool(recompute_missing) else "mixed",
+        "subsidence_unit": mu,
+        "metrics_unit": (metrics_unit or mu),
     }
 
 def run_warm_start_direction(
@@ -2414,6 +2630,7 @@ def run_warm_start_direction(
     prefer_artifact: str = "keras",
     allow_reorder_dynamic: bool = False,
     allow_reorder_future: bool = False,
+    recompute_missing: bool = False,
     log_fn: Optional[Callable[[str], Any]] = None,
     verbose: int = 0,
 ) -> Optional[Dict[str, Any]]:
@@ -2570,6 +2787,7 @@ def run_warm_start_direction(
         prefer_artifact=prefer_artifact,
         allow_reorder_dynamic=allow_reorder_dynamic,
         allow_reorder_future=allow_reorder_future,
+        recompute_missing=bool(recompute_missing),
         log_fn=log_fn,
         verbose=verbose,
     )
@@ -2593,7 +2811,7 @@ def main() -> None:
 
     root = Path(args.results_dir)
     
-    A = load_stage1_bundle(
+    A = xu.load_stage1_bundle(
         results_root=root,
         city=args.city_a,
         model=args.model_name,
@@ -2602,7 +2820,7 @@ def main() -> None:
         strict=False,
     )
     
-    B = load_stage1_bundle(
+    B = xu.load_stage1_bundle(
         results_root=root,
         city=args.city_b,
         model=args.model_name,
@@ -2720,6 +2938,7 @@ def main() -> None:
                     allow_reorder_future=(
                         args.allow_reorder_future
                     ),
+                    recompute_missing=bool(args.recompute_missing),
                     log_fn=args.log_fn,
                     verbose=kv,
                     **load_kwargs,
@@ -2747,6 +2966,7 @@ def main() -> None:
                     allow_reorder_future=(
                         args.allow_reorder_future
                     ),
+                    recompute_missing=bool(args.recompute_missing),
                     log_fn=args.log_fn,
                     verbose=kv,
                     **load_kwargs,
@@ -2814,6 +3034,7 @@ def main() -> None:
         "calibration",
         "overall_mae",
         "overall_mse",
+        "overall_rmse",
         "overall_r2",
         "coverage80",
         "sharpness80",
@@ -2841,19 +3062,29 @@ def main() -> None:
         return sorted(keys, key=_k)
 
     h_mae_keys = set()
+    h_mse_keys = set()
+    h_rmse_keys = set()
     h_r2_keys = set()
     for r in results:
-        h_mae = r.get("per_horizon_mae") or {}
+        h_mae = _fix_horizon_keys(r.get("per_horizon_mae") or {})
         h_mae_keys |= set(h_mae.keys())
-        h_r2 = r.get("per_horizon_r2") or {}
+        h_mse = _fix_horizon_keys(r.get("per_horizon_mse") or {})
+        h_mse_keys |= set(h_mse.keys())
+        h_rmse = _fix_horizon_keys(r.get("per_horizon_rmse") or {})
+        h_rmse_keys |= set(h_rmse.keys())
+        h_r2 = _fix_horizon_keys(r.get("per_horizon_r2") or {})
         h_r2_keys |= set(h_r2.keys())
 
     h_mae_keys = _sorted_hkeys(h_mae_keys)
+    h_mse_keys = _sorted_hkeys(h_mse_keys)
+    h_rmse_keys = _sorted_hkeys(h_rmse_keys)
     h_r2_keys = _sorted_hkeys(h_r2_keys)
 
     cols = (
         base_cols
         + [f"per_horizon_mae.{k}" for k in h_mae_keys]
+        + [f"per_horizon_mse.{k}" for k in h_mse_keys]
+        + [f"per_horizon_rmse.{k}" for k in h_rmse_keys]
         + [f"per_horizon_r2.{k}" for k in h_r2_keys]
     )
 
@@ -2880,6 +3111,7 @@ def main() -> None:
                 r.get("calibration"),
                 r.get("overall_mae"),
                 r.get("overall_mse"),
+                r.get("overall_rmse"),
                 r.get("overall_r2"),
                 r.get("coverage80"),
                 r.get("sharpness80"),
@@ -2897,11 +3129,19 @@ def main() -> None:
                 schema.get("static_extra_n"),
             ]
 
-            ph_mae = r.get("per_horizon_mae") or {}
-            ph_r2 = r.get("per_horizon_r2") or {}
+            ph_mae = _fix_horizon_keys(r.get("per_horizon_mae") or {})
+            ph_mse = _fix_horizon_keys(r.get("per_horizon_mse") or {})
+            ph_rmse = _fix_horizon_keys(r.get("per_horizon_rmse") or {})
+            ph_r2 = _fix_horizon_keys(r.get("per_horizon_r2") or {})
 
             row.extend(
                 [ph_mae.get(k, "NA") for k in h_mae_keys]
+            )
+            row.extend(
+                [ph_mse.get(k, "NA") for k in h_mse_keys]
+            )
+            row.extend(
+                [ph_rmse.get(k, "NA") for k in h_rmse_keys]
             )
             row.extend(
                 [ph_r2.get(k, "NA") for k in h_r2_keys]

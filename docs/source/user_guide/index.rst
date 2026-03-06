@@ -63,3 +63,9 @@ Explore the sections below to learn how to effectively use
 
    tools
    pinn_gui_guide
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Applications
+
+   apps/index 

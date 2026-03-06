@@ -975,6 +975,8 @@ def train_one_pixel(
     tau_max_year: float = 10.0,
     lambda_offset: float = 0,
     identify: str = "tau",
+    patience: int = 10,
+    disable_freeze: bool = False,
 ) -> Tuple[GeoPriorSubsNet, tf.data.Dataset]:
 
 
@@ -1249,7 +1251,7 @@ def train_one_pixel(
     cbs= [
         tf.keras.callbacks.EarlyStopping(
             "val_loss",
-            patience=10,
+            patience=int(patience),
             restore_best_weights=True,
             verbose=1,
         ),
@@ -1259,26 +1261,45 @@ def train_one_pixel(
             save_best_only=True,
             verbose=1,
         ),
-        FrozenValQuantileMonitor(
-            ds_va,
-            outputs=("subs_pred",),
-            quantiles=(0.1, 0.5, 0.9),
-            alpha=0.8,
-            prefix="[sm3-freeze]",
-        ),
+    #     FrozenValQuantileMonitor(
+    #         ds_va,
+    #         outputs=("subs_pred",),
+    #         quantiles=(0.1, 0.5, 0.9),
+    #         alpha=0.8,
+    #         prefix="[sm3-freeze]",
+    #     ),
     ]
-    diag_cb = FrozenValQuantileLogger(
-        val_data=ds_va,
-        log_prefix="diag/",
-        also_print=True,
-    )
+    # diag_cb = FrozenValQuantileLogger(
+    #     val_data=ds_va,
+    #     log_prefix="diag/",
+    #     also_print=True,
+    # )
 
+    extra_cbs = []
+    if not bool(disable_freeze):
+        cbs.append(
+            FrozenValQuantileMonitor(
+                ds_va,
+                outputs=("subs_pred",),
+                quantiles=(0.1, 0.5, 0.9),
+                alpha=0.8,
+                prefix="[sm3-freeze]",
+            )
+        )
+        extra_cbs.append(
+            FrozenValQuantileLogger(
+                val_data=ds_va,
+                log_prefix="diag/",
+                also_print=True,
+            )
+        )
+ 
     model.fit(
         ds_tr,
         validation_data=ds_va,
         epochs=int(epochs),
         verbose=1,
-        callbacks=cbs + [diag_cb],
+        callbacks=cbs + extra_cbs,
     )
 
     audit = ident_audit_dict(model)
@@ -1635,6 +1656,8 @@ def run_one_realisation(
         z_surf_static_index=z_surf_static_index,
         lambda_offset=float(args.lambda_offset),
         identify=str(args.identify),
+        patience=int(getattr(args, "patience", 10)),
+        disable_freeze=bool(getattr(args, "disable_freeze", False)),
         ident_regime=ident_regime,
     )
 
@@ -2018,6 +2041,17 @@ def main() -> None:
     ap.add_argument("--epochs", type=int, default=50)
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--lr", type=float, default=1e-3)
+
+    ap.add_argument("--patience", type=int, default=10)
+
+    ap.add_argument(
+        "--disable-freeze",
+        action="store_true",
+        help=(
+            "Disable FrozenValQuantile callbacks (faster sweeps)."
+        ),
+    )
+
 
     ap.add_argument("--noise-std", type=float, default=None)
     ap.add_argument("--noise-frac", type=float, default=0.10)

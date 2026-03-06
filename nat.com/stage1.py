@@ -67,6 +67,7 @@ from fusionlab.utils import (
     compute_group_masks,
     split_groups_holdout,
     filter_df_by_groups,
+    default_results_dir
 )
 
 # --- Suppress common warnings/tf chatter ---
@@ -291,7 +292,11 @@ if MV_SCHEDULE_UNIT == "step" and MV_DELAY_STEPS is None:
     MV_DELAY_STEPS = 0
 
 # --- Output directories (optionally overridable from cfg) ---
-BASE_OUTPUT_DIR = cfg.get("BASE_OUTPUT_DIR", os.path.join(os.getcwd(), "results"))
+# BASE_OUTPUT_DIR = cfg.get("BASE_OUTPUT_DIR", os.path.join(os.getcwd(), "results"))
+BASE_OUTPUT_DIR = cfg.get("BASE_OUTPUT_DIR")
+if not BASE_OUTPUT_DIR:
+    BASE_OUTPUT_DIR = default_results_dir(create=True)
+    
 ensure_directory_exists(BASE_OUTPUT_DIR)
 
 RUN_OUTPUT_PATH = os.path.join(

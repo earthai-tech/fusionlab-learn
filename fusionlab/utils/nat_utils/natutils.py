@@ -87,7 +87,8 @@ def save_ablation_record(
     if log_fn is None: 
         log_fn =print 
         
-    eval_dict = eval_dict or {}
+    # eval_dict = eval_dict or {}
+    metrics = dict(eval_dict or {})
 
     rec = {
         "timestamp": dt.datetime.now().strftime("%Y%m%d-%H%M%S"),
@@ -103,17 +104,34 @@ def save_ablation_record(
         "lambda_prior": cfg.get("LAMBDA_PRIOR"),
         "lambda_smooth": cfg.get("LAMBDA_SMOOTH"),
         "lambda_mv": cfg.get("LAMBDA_MV"),
+        "lambda_bounds": cfg.get("LAMBDA_BOUNDS"),
+        "lambda_q": cfg.get("LAMBDA_Q"),
         # Key metrics
-        "r2": eval_dict.get("r2"),
-        "mse": eval_dict.get("mse"),
-        "mae": eval_dict.get("mae"),
-        "coverage80": eval_dict.get("coverage80"),
-        "sharpness80": eval_dict.get("sharpness80"),
+        # "r2": eval_dict.get("r2"),
+        # "mse": eval_dict.get("mse"),
+        # "mae": eval_dict.get("mae"),
+        # "coverage80": eval_dict.get("coverage80"),
+        # "sharpness80": eval_dict.get("sharpness80"),
+        "r2": metrics.get("r2"),
+        "mse": metrics.get("mse"),
+        "mae": metrics.get("mae"),
+        "rmse": metrics.get("rmse"),
+        "coverage80": metrics.get("coverage80"),
+        "sharpness80": metrics.get("sharpness80"),
+
     }
+    # Keep the full metrics payload (post-hoc vs evaluate(), units, etc.)
+    rec["metrics"] = metrics
+
+    # Convenience: surface units at top-level if provided.
+    if isinstance(metrics.get("units"), dict):
+        rec["units"] = metrics.get("units")
 
     if phys_diag:
         rec["epsilon_prior"] = phys_diag.get("epsilon_prior")
         rec["epsilon_cons"] = phys_diag.get("epsilon_cons")
+        if "epsilon_gw" in phys_diag:
+            rec["epsilon_gw"] = phys_diag.get("epsilon_gw")
 
     if per_h_mae is not None:
         rec["per_horizon_mae"] = per_h_mae
