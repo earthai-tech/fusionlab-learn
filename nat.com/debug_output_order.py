@@ -1,4 +1,8 @@
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: Apache-2.0
+# GeoPrior-v3 — https://github.com/earthai-tech/geoprior-v3
+# Copyright (c) 2026-present
+# Author: LKouadio <https://lkouadio.com>
 """
 Debug output ordering between:
   (A) in-memory model (same process)
@@ -36,7 +40,7 @@ import tensorflow as tf
 def _import_compat_loader():
     tried = []
     for mod in (
-        "fusionlab.compat.keras",
+        "geoprior.compat.keras",
         "compat.keras",
         "geoprior.compat.keras",
     ):

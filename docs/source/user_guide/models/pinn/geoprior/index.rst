@@ -1,38 +1,16 @@
-GeoPrior (PINN) User Guide
-==========================
+GeoPrior has moved
+==================
 
-GeoPrior is a physics-informed forecasting module for subsidence/head dynamics.
-It combines a data-driven backbone with PDE/ODE residual regularization and
-learned effective physical fields.
+.. warning::
 
-.. toctree::
-   :maxdepth: 2
-   :caption: Getting started
+   The GeoPrior user guide is no longer maintained inside FusionLab.
+   It now lives in the standalone GeoPrior documentation.
 
-   overview
-   quickstart
-   data_and_units
-   scaling
-   pipeline
+.. button-link:: https://geoprior-v3.readthedocs.io/en/latest/
+   :color: primary
+   :shadow:
 
-.. toctree::
-   :maxdepth: 2
-   :caption: Core concepts
+   Go to the official GeoPrior documentation
 
-   model
-   poroelastic
-   core
-   losses
-   maths
-   tuning
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Usage & operations
-
-   training
-   inference_and_export
-   diagnostics
-   identifiability
-   faq
-   references
+This legacy page remains available only to preserve older references
+from papers, bookmarks, and external links.
